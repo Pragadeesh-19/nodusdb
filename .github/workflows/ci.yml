@@ -16,10 +16,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up GraalVM CE 22
-        uses: actions/setup-java@v4
+        uses: graalvm/setup-graalvm@v1
         with:
+          java-version: "22.0.2"
           distribution: graalvm-community
-          java-version: "22"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Expose GRAALVM_HOME
         shell: bash
