@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodusdb"
+version = "0.1.0"
+description = "Embedded high-churn dynamic graph kernel with a GraalVM native C-ABI"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Database",
+]
+
+[tool.setuptools.packages.find]
+include = ["nodusdb*"]
+
+[tool.setuptools.package-data]
+nodusdb = ["bin/*/*"]
