@@ -1,0 +1,32 @@
+# Maven build output
+target/
+bench/dependency-reduced-pom.xml
+
+# Native image build products and the packaged shared libraries
+python/nodusdb/bin/
+*.dll
+*.so
+*.dylib
+*.lib
+*.exp
+*.pdb
+
+# Python build and cache artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Local assistant configuration and notes
+.claude/
+CLAUDE.md
+
+# Editors and operating system files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.log
