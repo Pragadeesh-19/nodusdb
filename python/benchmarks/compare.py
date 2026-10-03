@@ -4,6 +4,8 @@ import sqlite3
 import statistics
 import sys
 import time
+from array import array
+from itertools import chain
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -14,7 +16,9 @@ from nodusdb import Graph  # noqa: E402
 
 SINGLE = "single"
 BATCH = "batch"
-MODES = (SINGLE, BATCH)
+FLAT = "flat"
+MODES = (SINGLE, BATCH, FLAT)
+FLAT_CAPABLE = {"nodusdb"}
 
 
 def generate_unique_edges(count, nodes, rng):
@@ -27,6 +31,10 @@ def generate_unique_edges(count, nodes, rng):
     edge_list = list(edges)
     rng.shuffle(edge_list)
     return edge_list
+
+
+def flatten(edges):
+    return array("q", chain.from_iterable(edges))
 
 
 class NodusBackend:
@@ -152,6 +160,14 @@ class SqliteBackend:
 BACKENDS = {"nodusdb": NodusBackend, "networkx": NetworkxBackend, "sqlite3": SqliteBackend}
 
 
+def select_operations(backend, mode, edges, removed, flat_edges, flat_removed):
+    if mode == FLAT:
+        return backend.insert_batch, flat_edges, backend.delete_batch, flat_removed
+    if mode == BATCH:
+        return backend.insert_batch, edges, backend.delete_batch, removed
+    return backend.insert_single, edges, backend.delete_single, removed
+
+
 def timed(function, *args):
     start = time.perf_counter()
     result = function(*args)
@@ -162,13 +178,14 @@ def latency_summary(samples):
     return statistics.median(samples) * 1e6, statistics.mean(samples) * 1e6
 
 
-def run_configuration(backend_class, mode, inserts, deletes, starts, pairs, depths):
+def run_configuration(backend_class, mode, inserts, deletes, flat_inserts, flat_deletes, starts, pairs, depths):
     backend = backend_class()
     try:
-        insert = backend.insert_batch if mode == BATCH else backend.insert_single
-        delete = backend.delete_batch if mode == BATCH else backend.delete_single
-        insert_seconds, _ = timed(insert, inserts)
-        delete_seconds, _ = timed(delete, deletes)
+        insert, insert_input, delete, delete_input = select_operations(
+            backend, mode, inserts, deletes, flat_inserts, flat_deletes
+        )
+        insert_seconds, _ = timed(insert, insert_input)
+        delete_seconds, _ = timed(delete, delete_input)
         metrics = {
             "insert_per_second": len(inserts) / insert_seconds,
             "delete_per_second": len(deletes) / delete_seconds,
@@ -186,14 +203,18 @@ def run_configuration(backend_class, mode, inserts, deletes, starts, pairs, dept
 def verify_agreement(rng, nodes=2_000, edge_count=8_000, queries=50):
     edges = generate_unique_edges(edge_count, nodes, rng)
     removed = rng.sample(edges, len(edges) // 4)
+    flat_edges, flat_removed = flatten(edges), flatten(removed)
     configurations = {}
     for name, backend_class in BACKENDS.items():
         for mode in MODES:
+            if mode == FLAT and name not in FLAT_CAPABLE:
+                continue
             backend = backend_class()
-            insert = backend.insert_batch if mode == BATCH else backend.insert_single
-            delete = backend.delete_batch if mode == BATCH else backend.delete_single
-            insert(edges)
-            delete(removed)
+            insert, insert_input, delete, delete_input = select_operations(
+                backend, mode, edges, removed, flat_edges, flat_removed
+            )
+            insert(insert_input)
+            delete(delete_input)
             configurations[f"{name}/{mode}"] = backend
     try:
         for _ in range(queries):
@@ -238,7 +259,7 @@ def main():
     parser.add_argument("--queries", type=int, default=200)
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--backends", default="nodusdb,networkx,sqlite3")
-    parser.add_argument("--modes", default="single,batch")
+    parser.add_argument("--modes", default="single,batch,flat")
     parser.add_argument("--skip-verify", action="store_true")
     arguments = parser.parse_args()
 
@@ -251,15 +272,21 @@ def main():
 
     inserts = generate_unique_edges(arguments.edges, arguments.nodes, rng)
     deletes = rng.sample(inserts, min(arguments.deletes, len(inserts)))
+    flat_inserts, flat_deletes = flatten(inserts), flatten(deletes)
     starts = [rng.randrange(arguments.nodes) for _ in range(arguments.queries)]
     pairs = [(rng.randrange(arguments.nodes), rng.randrange(arguments.nodes)) for _ in range(arguments.queries)]
 
     results = []
     for name in selected:
         for mode in modes:
+            if mode == FLAT and name not in FLAT_CAPABLE:
+                continue
             label = f"{name}/{mode}"
             print(f"running {label} ...", flush=True)
-            metrics = run_configuration(BACKENDS[name], mode, inserts, deletes, starts, pairs, depths=(2, 3))
+            metrics = run_configuration(
+                BACKENDS[name], mode, inserts, deletes, flat_inserts, flat_deletes,
+                starts, pairs, depths=(2, 3),
+            )
             results.append((label, metrics))
 
     print()
