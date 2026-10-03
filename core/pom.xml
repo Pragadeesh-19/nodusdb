@@ -12,7 +12,90 @@
 
   <artifactId>nodusdb-core</artifactId>
 
+  <properties>
+    <native.skip.windows>false</native.skip.windows>
+    <native.skip.unix>false</native.skip.unix>
+  </properties>
+
+  <profiles>
+    <profile>
+      <id>os-windows</id>
+      <activation>
+        <os>
+          <family>windows</family>
+        </os>
+      </activation>
+      <properties>
+        <native.skip.unix>true</native.skip.unix>
+      </properties>
+    </profile>
+    <profile>
+      <id>os-unix</id>
+      <activation>
+        <os>
+          <family>unix</family>
+        </os>
+      </activation>
+      <properties>
+        <native.skip.windows>true</native.skip.windows>
+      </properties>
+    </profile>
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>exec-maven-plugin</artifactId>
+            <version>3.5.0</version>
+            <executions>
+              <execution>
+                <id>build-native-windows</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>exec</goal>
+                </goals>
+                <configuration>
+                  <skip>${native.skip.windows}</skip>
+                  <executable>cmd</executable>
+                  <arguments>
+                    <argument>/c</argument>
+                    <argument>${maven.multiModuleProjectDirectory}\native\build-native.cmd</argument>
+                    <argument>${project.build.outputDirectory}</argument>
+                    <argument>${maven.multiModuleProjectDirectory}\target\native</argument>
+                  </arguments>
+                </configuration>
+              </execution>
+              <execution>
+                <id>build-native-unix</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>exec</goal>
+                </goals>
+                <configuration>
+                  <skip>${native.skip.unix}</skip>
+                  <executable>sh</executable>
+                  <arguments>
+                    <argument>${maven.multiModuleProjectDirectory}/native/build-native.sh</argument>
+                    <argument>${project.build.outputDirectory}</argument>
+                    <argument>${maven.multiModuleProjectDirectory}/target/native</argument>
+                  </arguments>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+
   <dependencies>
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>nativeimage</artifactId>
+      <version>23.1.12</version>
+      <scope>provided</scope>
+    </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

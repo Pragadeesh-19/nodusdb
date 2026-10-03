@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: build-native.sh CLASSES_DIR OUTPUT_DIR" >&2
+    exit 2
+fi
+if [ -z "${GRAALVM_HOME:-}" ]; then
+    echo "GRAALVM_HOME must point to a GraalVM JDK 22 installation" >&2
+    exit 2
+fi
+
+classes_dir=$(cd "$1" && pwd)
+mkdir -p "$2"
+output_dir=$(cd "$2" && pwd)
+
+cd "$output_dir"
+"$GRAALVM_HOME/bin/native-image" --shared -O3 --no-fallback -o libnodusdb -cp "$classes_dir"
+cp libnodusdb.h nodusdb.h
