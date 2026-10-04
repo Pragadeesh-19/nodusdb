@@ -82,6 +82,110 @@ The Parquet output matched PyArrow bit for bit on 100,000 mixed rows. The CI ima
 
 Not built yet: Iceberg table metadata and Avro manifests (the manifest is Iceberg-shaped, but it is local), compaction, the Arrow C Data export, and reads that do not decode a whole file. [`docs/lake.md`](docs/lake.md) has the design and the open items.
 
+## Against other engines
+
+Two suites compare NodusDB with other engines on real data. The graph suite runs on the SNAP soc-Pokec social network, 30,622,564 directed edges. The lakehouse suite runs on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024. Each engine and workload runs in its own process. The answers are cross-checked: the permission digests, the Pokec hub degrees, and the taxi revenue total agree across every engine that finished. Each number is a single run on the same laptop as the rest of this file. The raw output is in `bench/baseline/`. The graph suite takes about 2.5 hours and the lake suite about 16 minutes.
+
+### Graph suite
+
+- **A, load and traverse.** Load all 30.6 million Pokec edges. Then time 2-hop and 3-hop queries from 100 median-degree nodes and from 50 hub nodes.
+- **B, churn.** Preload 200,000 edges among the top 50,000 Pokec nodes. Run 100,000 operations: 60% inserts, 30% deletes, and 5% each of 2-hop and 3-hop queries. Each engine gets a 1,200-second budget.
+- **C, permissions.** A synthetic relationship-based access graph with 10,000 users, 2,000 groups, 50,000 resources, and 81,500 membership edges. Then 9,936 membership updates and 10,000 reachability checks. About half the checks succeed. This workload is generated, not real data.
+
+Times are medians unless noted.
+
+**Workload A, Pokec, 30.6 million edges**
+
+| Engine | Ingest, edges/s | 2-hop | 3-hop | Hub 2-hop | Hub 3-hop | Peak RSS, MB |
+|---|---:|---:|---:|---:|---:|---:|
+| NodusDB, in memory | 181,345 | 56.8 µs | 1.21 ms | 6.8 ms | 96.6 ms | 4,404 |
+| NodusDB, durable (async) | 163,841 | 129.8 µs | 1.25 ms | 8.9 ms | 101.6 ms | 4,240 |
+| igraph | 92,916 | 0.84 ms | 7.50 ms | 12.0 ms | 106.4 ms | 2,464 |
+| DuckDB | 158,027 | 13.5 ms | 68.0 ms | 58.0 ms | 766.6 ms | 3,420 |
+| SQLite | 19,052 | 0.95 ms | 49.8 ms | 174 ms | 12.9 s | 917 |
+
+On disk after ingest, the durable graph takes 258 MB, SQLite 822 MB, and DuckDB 1,458 MB. Kùzu did not finish its bulk load, and NetworkX is skipped above 3 million edges.
+
+**Workload B, churn, 100,000 operations**
+
+| Engine | Operations/s | Insert | Delete | 2-hop | 3-hop | Operations done |
+|---|---:|---:|---:|---:|---:|---:|
+| NodusDB, in memory | 81,525 | 4.7 µs | 5.3 µs | 12.4 µs | 26.3 µs | 100,000 |
+| NodusDB, durable (async) | 73,773 | 6.0 µs | 6.7 µs | 12.6 µs | 27.1 µs | 100,000 |
+| NetworkX | 55,451 | 4.6 µs | 4.6 µs | 31.1 µs | 106.5 µs | 100,000 |
+| SQLite | 3,617 | 86.5 µs | 89.3 µs | 141 µs | 448 µs | 100,000 |
+| DuckDB | 164 | 4.70 ms | 6.27 ms | 11.5 ms | 16.3 ms | 100,000 |
+| Kùzu | 60 | 9.85 ms | 21.4 ms | 24.3 ms | 29.4 ms | 71,758 |
+| igraph | 11 | 99.2 ms | 102.2 ms | 303 µs | 458 µs | 12,898 |
+
+**Workload C, permission checks**
+
+| Engine | Check | Update | Wall time, with load |
+|---|---:|---:|---:|
+| NodusDB, in memory | 38.0 µs | 9.5 µs | 2.0 s |
+| NodusDB, durable (async) | 38.8 µs | 12.1 µs | 2.2 s |
+| NetworkX | 171 µs | 7.4 µs | 5.0 s |
+| SQLite | 400 µs | 98.9 µs | 7.4 s |
+| Kùzu | 10.8 ms | 27.9 ms | 401 s |
+| DuckDB | 11.9 ms | 9.56 ms | 221 s |
+| igraph | 571 µs | 68.5 ms | 726 s |
+
+#### Where NodusDB wins
+
+- **High-churn mutation.** Workload B runs at 81,525 operations per second. The next fastest engines are NetworkX at 55,451 and SQLite at 3,617. An in-memory edit takes about 5 µs, and an igraph edit takes about 100 ms.
+- **Traversal on a graph held in memory.** On Pokec, the median 2-hop query takes 57 µs and the median 3-hop query takes 1.2 ms. Every other engine that finished workload A is slower on both: igraph takes 0.84 ms and 7.5 ms, SQLite 0.95 ms and 49.8 ms, DuckDB 13.5 ms and 68.0 ms. On hub 3-hop queries, NodusDB and igraph are close, at 96.6 ms and 106.4 ms.
+- **Permission checks.** The median check takes 38 µs. NetworkX takes 171 µs and SQLite 400 µs.
+- **Ingest and footprint.** The in-memory graph loads faster than DuckDB or igraph. The durable graph loads about 10% slower than in memory and uses less disk than either SQLite or DuckDB.
+
+#### Where the other engines win
+
+- **Single updates in workload C.** NetworkX applies a membership update in 7.4 µs, against 9.5 µs for NodusDB. In workload B the median insert is a tie, 4.6 µs against 4.7 µs.
+- **Whole-graph analytics.** No workload here reads every node and edge, as PageRank or connected components do. Columnar engines such as Kùzu and DuckDB are built for that work, and this suite does not measure it.
+
+#### Caveats
+
+- Kùzu's bulk load failed in workload A with `Buffer manager exception: ... The buffer pool is full`. It ran at default settings everywhere. I have not tuned the buffer pool, so its numbers may change with configuration.
+- Kùzu and igraph hit the 1,200-second budget in workload B. Their rates count only the operations they completed.
+- Peak RSS in workload A includes the Pokec data that each worker loads. Use the on-disk figures to compare footprint.
+- Traversal on Pokec is not sub-microsecond. The design targets sub-microsecond k-hop queries, and this suite does not reach that target. The smaller benchmarks above (10 to 15 µs) do not reach it either.
+
+### Lakehouse suite
+
+The lake suite writes the taxi rows through each engine, keyed by row index. Four workloads:
+
+- **W1, ingest.** Load all 1,000,000 rows.
+- **W2, mutations.** 500,000 upserts and 100,000 deletes.
+- **W3, flush.** Write a 250,000-row buffer to Parquet.
+- **W4, read.** A DuckDB query totals revenue and trips over the files each engine wrote. Every source gives the same total, 27,486,629.10.
+
+| Measure | NodusDB lake | DuckDB | PyArrow | SQLite |
+|---|---:|---:|---:|---:|
+| W1 ingest, rows/s | 47,210 | 167,364 | 112,510 | 94,969 |
+| W2 upserts/s | 37,253 | 857 | 398,114 | 259,463 |
+| W2 deletes/s | 334,790 | 1,031 | 790,855 | 276,078 |
+| W3 flush, 250,000 rows | 0.37 s | 1.13 s | 0.19 s | 0.12 s, not Parquet |
+| W4 aggregate, median | 42.3 ms | 13.6 ms | 17.0 ms | n/a |
+
+The lake's full tables, with memory use, file sizes, and the W4 file counts, are in [`docs/lake.md`](docs/lake.md).
+
+#### Where NodusDB wins
+
+- **Keyed deletes.** NodusDB deletes 334,790 rows per second. That is about 325 times DuckDB and 1.2 times SQLite. A delete updates an in-memory index and writes a tombstone at flush time.
+- **Flush.** NodusDB writes 250,000 rows in 0.37 s, faster than DuckDB's 1.13 s. Its 3.35 MB file is the smallest of the Parquet outputs.
+
+#### Where the analytical engines win
+
+- **Bulk ingest.** DuckDB loads 3.5 times faster than NodusDB.
+- **Upserts.** SQLite and PyArrow run 7 to 11 times faster than NodusDB.
+- **Scans.** DuckDB reads its own files in 13.6 ms and NodusDB's in 35 to 42 ms. I have not isolated the cause.
+- **Flush of a large buffer.** PyArrow writes the same 250,000 rows in 0.19 s.
+
+#### Caveats
+
+- W1 and W2 pass each row from Python into the native library, so they include that binding cost.
+- The PyArrow W2 figures come from a Python dict with no storage behind it. They show a ceiling for an in-memory map, not a storage engine.
+- The 5,000-row NodusDB configuration produced 108 files, not the 200 that the setting implies. I have not checked why.
+
 ## Quickstart
 
 Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building).
@@ -165,7 +269,7 @@ A frame is 24 bytes. It holds the operation (add or remove), one reserved byte, 
 | The process is killed | Everything the OS has accepted survives. A write still in the buffer is lost | Every acknowledged write survives |
 | The machine loses power | Up to the last 10 ms of writes can be lost | Every acknowledged write survives |
 
-Call `sync()` on the graph, or `checkpoint()`, to force a point where everything is on disk. The Python wrapper currently exposes `checkpoint()`.
+Call `sync()` or `checkpoint()` to force a point where everything is on disk.
 
 ## How it works
 
@@ -254,6 +358,13 @@ python -m unittest discover -s python/tests -v
 # Comparison against NetworkX and SQLite (several minutes)
 python python/benchmarks/compare.py
 
+# Multi-engine suites on real data. Install the competitors first.
+# The first run downloads the Pokec archive (132 MB) and the taxi file into
+# the system temp directory, or into NODUS_BENCH_CACHE if it is set.
+pip install -r python/benchmarks/requirements.txt
+python python/benchmarks/benchmark_graph_heavyweights.py run --out bench/baseline/graph-heavyweights-windows-dev.json
+python python/benchmarks/benchmark_lake_heavyweights.py run --out bench/baseline/lake-heavyweights-windows-dev.json
+
 # JMH microbenchmarks
 mvn -pl bench -am package -DskipTests
 java -jar bench/target/benchmarks.jar -prof gc
@@ -265,7 +376,7 @@ The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arc
 
 - **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
-- **One writer at a time.** Use a graph handle or a lake table from one thread at a time. Lake writes are serialized by a lock. The graph kernel is not synchronized, so concurrent readers are not supported yet.
+- **One writer at a time.** The graph kernel allows reads to run alongside its single writer. Reads take no lock and retry when a write overlaps them. The Python wrapper still uses one thread per graph. Lake writes are serialized by a lock.
 - **Integer node IDs.** Node IDs are `long` values from 0 to `Integer.MAX_VALUE - 9`. Map external identifiers to integers first.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
@@ -277,4 +388,4 @@ The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arc
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. Ring 4's concurrency work, a seqlock for lock-free reads, has not started. Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. A seqlock for lock-free graph reads is built. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
