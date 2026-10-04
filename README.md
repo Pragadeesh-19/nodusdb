@@ -1,71 +1,77 @@
 # NodusDB
 
-An embedded, in-process dynamic relationship engine built for high-churn working memory.
+[![CI](https://github.com/Pragadeesh-19/nodusdb/actions/workflows/ci.yml/badge.svg)](https://github.com/Pragadeesh-19/nodusdb/actions/workflows/ci.yml)
 
-NodusDB holds a directed graph inside the process that uses it. It targets workloads where edges are inserted and deleted all the time: agent working memory, live permission graphs, session state. Traversals and edge edits run in local memory, with no server, no disk round trip, and no garbage collector work in steady state.
+NodusDB is an engine that runs inside your process. It has two parts, built from the same low-level pieces:
 
-## Why another graph store
+- A **graph engine** that holds a directed graph in memory and answers traversal queries in microseconds.
+- A **lakehouse delta engine**, called Spillway, that absorbs streaming writes and commits them as Parquet files that Apache Iceberg and DuckLake can read.
 
-Start with three questions. Can you find an edge quickly? Can you add or remove one without rewriting much? Can you walk outward from a node without stalling on memory? Most embedded graph stores favor one of these and pay for the others.
+Neither part starts a server or makes a network call. Both keep their hot paths free of garbage collector work.
 
-**Compressed Sparse Row (CSR).** CSR packs every edge into one array, grouped by source node, with an offsets array that says where each group starts. Walking one node's neighbors reads one contiguous range, which is very fast. Writes are the problem. Inserting an edge in the middle shifts every later entry and rewrites the offsets, so the worst case is O(E). Kùzu and its forks use this layout. It suits bulk-loaded analytical data, and it suffers under constant mutation.
+CI passes on Ubuntu, macOS (arm64), and Windows. Each run builds the GraalVM native library, runs the 232 Java tests, and then runs the Python suite against that library.
 
-**Disk-backed B-trees.** SQLite with recursive common table expressions stores edges as rows in an index. Each hop of a traversal is an index lookup: walk pages, decode rows, follow pointers. Page splits and serialization add cost to every write, and every hop can land on memory the CPU has not touched recently.
+## The graph engine
 
-**NodusDB.** Every structure lives in memory as flat primitive arrays. The layout is chosen per node by its degree, so a node with three neighbors and a node with three thousand each get a structure that fits. Edge edits are O(1) in expectation, and a traversal reads neighbors from packed arrays instead of chasing pointers.
+Use it for state that changes all the time: agent working memory, live permission graphs, session graphs. Edges come in and go out constantly, and a query has to finish before the next event arrives.
 
-## Benchmarks
+These results come from `python/benchmarks/compare.py`. The run loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000 of them, and then runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
 
-Measured with `python/benchmarks/compare.py` on one machine. The workload is 1,000,000 unique random directed edges over 200,000 nodes, then 500,000 random existing edges deleted, then 200 random start nodes per traversal query. Every configuration is cross-checked for identical answers before timing starts.
+| Configuration | Insert edges/s | Delete edges/s | 3-hop median | Common neighbors median |
+|---|---:|---:|---:|---:|
+| NodusDB, flat `array('q')` | 1,246,720 | 1,331,386 | 10.5 µs | 7.1 µs |
+| NodusDB, batch of tuples | 462,169 | 522,139 | 11.0 µs | 7.3 µs |
+| NodusDB, single-edge calls | 203,442 | 202,660 | 11.7 µs | 7.2 µs |
+| NetworkX, batch | 149,633 | 299,071 | 36.0 µs | 6.6 µs |
+| SQLite, `executemany` | 124,846 | 123,609 | 113.7 µs | 22.5 µs |
+| SQLite, one statement per row | 100,403 | 96,992 | 152.0 µs | 22.3 µs |
 
-Hardware: AMD Ryzen 7 5700U (8 cores, 16 threads), 7.3 GB RAM, Windows 11 Home, CPython 3.12, GraalVM CE 22.0.2, NetworkX 3.6.1, SQLite 3 from the Python standard library.
+From the same run:
 
-| Configuration | Insert edges/s | Delete edges/s | 2-hop median | 3-hop median | Common neighbors median |
-|---|---:|---:|---:|---:|---:|
-| NodusDB, single-edge calls | 203,442 | 202,660 | 8.9 µs | 11.7 µs | 7.2 µs |
-| NodusDB, batch of tuples | 462,169 | 522,139 | 8.7 µs | 11.0 µs | 7.3 µs |
-| NodusDB, flat `array('q')` | 1,246,720 | 1,331,386 | 8.7 µs | 10.5 µs | 7.1 µs |
-| NetworkX, single-edge calls | 116,057 | 272,182 | 16.7 µs | 36.1 µs | 6.7 µs |
-| NetworkX, batch | 149,633 | 299,071 | 17.0 µs | 36.0 µs | 6.6 µs |
-| SQLite, single-row statements | 100,403 | 96,992 | 70.3 µs | 152.0 µs | 22.3 µs |
-| SQLite, `executemany` | 124,846 | 123,609 | 58.0 µs | 113.7 µs | 22.5 µs |
+- Loading through the flat buffer is about 8 times faster than NetworkX's batch insert. Tuple batches are about 3 times faster.
+- The 3-hop median is about 11 times faster than SQLite's batched form, and about 14 times faster than SQLite with one statement per row.
+- NetworkX was slightly faster on common neighbors (6.6 µs against 7.3 µs). Treat that query as a tie.
 
-Traversal and common-neighbor columns are medians over 200 queries per configuration.
+The in-process JMH run measures a different graph and gives a 3-hop median of 15.2 µs. The raw data is in [`bench/baseline/windows-dev.json`](bench/baseline/windows-dev.json). The machine and the exact command are in [`bench/baseline/MACHINE.md`](bench/baseline/MACHINE.md).
 
-Batch against batch, from the same run:
+These are single runs on a laptop CPU that boosts and throttles, so absolute throughput moved by a wide margin between runs during development. The ordering held in every run except the common-neighbors tie.
 
-- Ingestion: NodusDB is 3.1 times faster than NetworkX and 3.7 times faster than SQLite.
-- Deletion: NodusDB is 1.7 times faster than NetworkX and 4.2 times faster than SQLite.
-- 3-hop traversal: NodusDB is 3.3 times faster than NetworkX and 10.3 times faster than SQLite.
-- Common neighbors: NetworkX is slightly faster in this run (6.6 µs against 7.3 µs).
+## The lakehouse delta engine
 
-The flat-buffer row is the fastest way to load data. Passing the same edges as a flat buffer instead of tuples is 2.7 times faster on NodusDB, and it is 8.3 times faster than NetworkX's batch insert.
+Open table formats such as Apache Iceberg and DuckLake store data as immutable Parquet files, and every commit adds more of them. A writer that commits every few seconds produces thousands of small files a day, and each query then has to open all of them.
 
-### In-process microbenchmarks (JMH)
+Spillway sits in front of the table. It takes one upsert or delete at a time, keeps the rows in columns in memory, and commits them in batches sized for the lake. Reads see every accepted write right away, whether the row is still in memory or already committed.
 
-Recorded on the same machine. The raw results are in [`bench/baseline/windows-dev.json`](bench/baseline/windows-dev.json), and the hardware and command are in [`bench/baseline/MACHINE.md`](bench/baseline/MACHINE.md).
+What it does today:
 
-| Benchmark | Parameter | Time per operation |
-|---|---|---:|
-| Sparse set intersection | smaller set of 16 | 124 ns |
-| Sparse set intersection | smaller set of 256 | 2.37 µs |
-| Sparse set intersection | smaller set of 4,096 | 51.0 µs |
-| Sparse set intersection | smaller set of 65,536 | 2.26 ms |
-| Remove then add (churn on 1,024 elements) | | 94 ns |
-| Common neighbors (100k nodes, average out-degree 8) | | 304 ns |
-| 3-hop traversal (same graph) | | 15.2 µs |
+- Upserts and deletes by key. A delete writes a tombstone, so an older committed row stays hidden after a flush.
+- Two buffers. Writers keep going while the previous buffer is written to Parquet in the background.
+- A Parquet v1 writer that depends on nothing beyond the JDK. Doubles are stored as raw bits, so NaN payloads and negative zero survive the round trip.
 
-The in-process traversal figure is higher than the 10 to 11 µs the Python benchmark reports for the same query shape. The two use different graphs, and the JMH run is a 1-fork, 5-iteration run. Treat the JMH figures as the reference for the kernel and the Python figures as the reference for what a caller sees.
+Numbers from `LakeTableBench` and `DeltaMemTableBench` on the same laptop:
 
-Read these numbers as indicative. They come from one run on a laptop CPU that boosts and throttles. The first development run measured single-edge ingestion at about 309,000 edges per second, against 203,000 in this run, so absolute throughput can move by a large margin between runs. The orderings held across the runs taken during development, except for common neighbors, which is a close call and went NetworkX's way in this run.
+| Case | Result |
+|---|---|
+| Upsert into memory, no flush running | 227 ns per upsert, about 4.4 million per second |
+| Upsert while buffers flush continuously (65,536-row buffers) | 998 ns per upsert, about 1.0 million per second |
+| Allocation on the ingestion thread during flush cycles | 0.0014 bytes per upsert after warm-up |
+| Flush of one 65,536-row buffer to Parquet | about 70 ms |
+
+The second row is the realistic figure under sustained load. Once two buffers are full and the previous flush is still running, the writer waits. The flush rate then sets the ingestion rate.
+
+The Parquet output matched PyArrow bit for bit on 100,000 mixed rows. That check runs on a developer machine. The CI image does not install `pyarrow`, so the test skips there.
+
+Not built yet: Iceberg table metadata and Avro manifests (the manifest is Iceberg-shaped, but it is local), compaction, the Arrow C Data export, and reads that do not decode a whole file. [`docs/lake.md`](docs/lake.md) has the design and the open items.
 
 ## Quickstart
 
-Install the Python package from a checkout (a native library must be present, see [Building and testing](#building-and-testing)):
+Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building).
 
 ```sh
 pip install -e python/
 ```
+
+Graph:
 
 ```python
 import nodusdb
@@ -79,114 +85,106 @@ print("Common neighbors:", g.common_neighbors(3, 5))
 g.close()
 ```
 
-Output:
-
 ```
 Reachable nodes: [2, 5, 3, 4]
 Common neighbors: [4]
 ```
 
-`add_edges_from` also accepts a flat buffer such as `array('q', [1, 2, 2, 3])`, which skips the per-tuple conversion and is the fastest input form.
+Lakehouse writes:
 
-## Architecture from first principles
+```python
+import nodusdb
 
-This section builds the design from the smallest pieces up. Each part answers a question the previous part left open.
+schema = {"amount": "int64", "score": "float64", "status": "int32", "label": "utf8"}
 
-### 1. A graph is a set of pairs
+with nodusdb.LakeTable("/data/orders", schema, flush_rows=100_000) as table:
+    table.upsert("order-101", {"amount": 5000, "score": 0.95, "status": 1, "label": "cleared"})
+    table.delete("order-099")
+    print(table.get("order-101"))
+    table.flush()  # writes data-*.parquet and delete-*.parquet into /data/orders
+```
 
-A directed edge is a pair `(u, v)`: an arrow from `u` to `v`. A graph is a set of such pairs. The simplest correct structure is therefore a set of pairs, and the work is making that set cheap to query and cheap to change.
+`flush_rows` sets how many rows a buffer holds before it is written out. `flush_interval`, in seconds, commits on a timer. Both triggers run inside the native library. `add_edges_from` also takes a flat buffer such as `array('q', [1, 2, 2, 3])`, which is the fastest input form.
 
-The queries NodusDB answers all reduce to two operations on per-node neighbor sets:
+## How it works
 
-- Does `(u, v)` exist? That is membership of `v` in the neighbor set of `u`.
-- Which nodes are reachable from `u` within `k` hops? That is repeated expansion of neighbor sets, with a visited check.
+Both engines rest on the same few ideas. Each section answers a question the previous one leaves open.
 
-So the core problem is a fast set of integers per node, many of them, with frequent inserts and deletes.
+### A set as a packed array and an index
 
-### 2. A set as a packed array plus an index: the sparse set
+Store a set of integers as two arrays. The dense array holds the members back to back. The index maps each member to its position. A lookup takes two reads. An insert appends. A removal moves the last member into the gap and updates that member's index entry, so the dense array never has a hole.
 
-Here is a set of integers stored as two arrays. The **dense array** holds the members packed at the front, in no particular order. The **sparse index** maps each member value to its position in the dense array.
+Every operation takes constant time, and a scan reads memory in order, which the CPU prefetcher handles well. Briggs and Torczon described this structure in 1993. The weak point is the index. Indexed directly by value, it needs a slot for every possible value, which wastes space when a node's neighbors are spread across a large ID range.
 
-- Membership of `v`: look up `pos = index[v]`, then check that `pos < size` and `dense[pos] == v`. Two reads.
-- Insertion: append `v` to the dense array and record its position.
-- Removal: move the last dense element into the freed slot, then update the moved element's index entry. The hole is closed by the move, so nothing is left behind.
+### A hash table with backward-shift deletion
 
-Every operation is constant time, and the dense array is always a contiguous block. Briggs and Torczon described this structure in 1993, and the EnTT entity library uses the same idea for component storage. Scanning the members means reading the dense array front to back, which the CPU prefetcher handles well.
+So the index is an open-addressing hash table. A key hashes to a starting slot, and a lookup scans forward until it finds the key or an empty slot. Three choices keep it fast:
 
-The catch is the sparse index. Indexed by value, it needs one slot per possible value. If node 7 has neighbors 4 and 9,999,998, the index must span ten million entries, and every high-degree node pays that cost. Memory grows with the size of the ID space, not with the number of edges.
+- The hash is the 64-bit finalizer from MurmurHash3. Consecutive IDs spread across the table, so sequential loads do not form long runs.
+- The table doubles once it is half full. Runs stay short, and a lookup usually reads one or two slots.
+- Deletion uses backward shift (Knuth, *The Art of Computer Programming*, volume 3, Algorithm R) instead of tombstones. Tombstones pile up under churn and slow every later probe. After a removal, the entries that follow move back into the gap whenever their probe path crosses it.
 
-### 3. Replace the array index with a hash table
+The shift test must use cyclic distance. The table wraps, so a run can cross the last slot and continue at slot 0. A plain comparison of slot numbers loses keys in that case, with no error raised. The test suite covers this case.
 
-NodusDB keeps the dense array and replaces the value-indexed array with an **open-addressing hash table** that maps value to position. Memory is now proportional to the degree of the node, whatever the spread of its neighbor IDs.
+### Small nodes and large nodes
 
-Open addressing stores entries in one flat array. A key hashes to a starting slot. Lookup scans forward until it finds the key or an empty slot. Three details matter:
+Most nodes in a real graph have a few neighbors, and a few hubs have thousands. A hash table per node wastes memory on the small ones.
 
-- **Hash function.** NodusDB uses the 64-bit finalizer from MurmurHash3. It spreads consecutive IDs across the table, so the sequential IDs a loader produces do not form one long run.
-- **Load factor.** The table grows once it is half full. Probe runs stay short, so a lookup usually touches one or two slots.
-- **Deletion.** Clearing a slot in the middle of a probe run breaks every lookup that passed through it. Two standard fixes exist. Tombstones mark deleted slots, but they pile up under churn and make every probe slower. NodusDB uses **backward-shift deletion** (Knuth, *The Art of Computer Programming*, vol. 3, Algorithm R). After a removal, later entries in the same run move back into the gap whenever their probe path crosses it. The table stays clean, with no tombstones.
+- A node with fewer than 16 neighbors keeps them in a fixed block inside one shared `long[]` slab. Because the slab is a single array, the garbage collector does not track per-node objects.
+- A node with 16 or more neighbors switches to the packed array and hash table described above.
 
-Backward-shift needs one careful rule. The table is circular, so a run can wrap past the last slot back to slot 0. The test that decides whether an entry may move into a gap must use cyclic distance, measured from the entry's home slot. A naive comparison of slot numbers gets wrapped runs wrong, and it makes keys disappear from lookups without any error. The test suite pins this case.
+A node switches back only when its degree falls to 8. A node whose degree hovers near 16 does not reallocate on every change.
 
-### 4. Most nodes are small: two tiers per node
+Each graph keeps an outgoing table and an incoming table, and every edge edit updates both. Both use the same tiers, so in-degree costs the same as out-degree.
 
-Real graphs are skewed. Most nodes have a few neighbors, and a few hubs have very many. Giving every node a hash table would waste memory on the many small nodes, and a hash table costs more than a few values in a list.
+### Columns for the lake
 
-So each node has one of two states:
+The lake buffer applies the same idea in a different shape. Each column is its own primitive array, and row *n* is the *n*th entry in every array. Text goes into one shared byte slab, with an offset and a length for each row. A Parquet column is a sequential copy, because the buffer already holds its values in that order.
 
-- **Low degree (fewer than 16 neighbors).** The neighbors sit in a fixed block of 16 `long` values inside one shared slab, a single large `long[]`. The node stores only an integer block number. Blocks are handed out and returned through a free-list stack, so allocation is O(1). The slab holds no per-node objects, so the garbage collector never tracks them.
-- **High degree (16 or more neighbors).** The node holds an indexed sparse set (sections 2 and 3): one packed `long[]` of neighbors and one open-addressing table.
+A delete swaps the last row into the gap across every column, updates the index entry for the moved key, and then removes the deleted key. A delete that must survive a flush writes a tombstone instead.
 
-A block is 128 bytes, two 64-byte CPU cache lines. A low-degree lookup scans at most 15 contiguous values, so it costs one or two cache-line fetches. Java does not guarantee array alignment, so the cache-line count is an expectation, not a promise.
+### No allocation on the hot path
 
-**Hysteresis.** A node promotes to high degree when its 16th neighbor arrives. It demotes back to a block only when its degree falls to 8. A node that oscillates around 16 therefore does not reallocate its set on every crossing. Between 9 and 15 neighbors, the node keeps whichever state it already has.
+Queries and in-tier edits allocate nothing once their structures exist. Allocation happens in three places: a node changes tier, an array grows, or a buffer is replaced. The lake reuses its buffers. After a flush, the frozen buffer is cleared and reused, so its arrays keep their grown size and the ingestion thread stops allocating.
 
-### 5. Two directions, kept in step
+The graph allocation test reads the thread's allocated-bytes counter. Across the JMH baseline, the allocation rate stayed near 0.001 MB/s in every iteration. The first measured window after warm-up allocates a fixed 72 to 96 bytes, which the test records as a known exception (decision D12).
 
-Each graph keeps an outgoing table (`u -> v`) and an incoming table (`v <- u`). Both use the same tiered structure. An edge edit updates both, and the test suite checks that the two always agree. The incoming table makes in-degree a constant-time query and lets a reverse traversal run without scanning every node.
+### Crossing into Python
 
-### 6. The queries
+The Java code compiles to a native shared library with GraalVM Native Image, so Python does not need a JVM. Each exported function takes a GraalVM isolate thread, which GraalVM requires. Functions return sentinel values such as `false` or `-1` instead of throwing, so an exception cannot escape into the host process.
 
-- **`has_edge(u, v)`.** A hash probe for a high-degree node, or a scan of at most 15 values for a low-degree node.
-- **`common_neighbors(u, v)`.** Sweep the smaller neighbor set, and test each member against the larger set. The cost follows the smaller degree, so a hub paired with a leaf is cheap.
-- **`khop(start, depth)`.** A breadth-first search. The visited marks are an integer array stamped with a query generation number. Starting a new query increments the generation instead of clearing the array, so each query is O(visited nodes), not O(all nodes). When the generation counter wraps, the array is cleared once.
+Results are written into caller-supplied buffers, and the call returns the full count. A caller that guessed too small can grow the buffer and retry. Batch calls validate the whole batch before they change anything, so one bad ID leaves the graph as it was.
 
-### 7. Allocation and the garbage collector
+## Verification
 
-Java's garbage collector is the usual cost in latency-sensitive code. NodusDB avoids it on the hot path. Queries and in-tier edits allocate nothing once the structures are warm. Allocation happens only when a node is promoted or demoted, or when a slab or array grows.
+The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. The latest run on `main` passed on all three:
 
-The allocation test checks this with the thread's allocated-bytes counter. Across the JMH baseline, the allocation rate stayed at about 0.001 MB/s in every iteration, although the operations ranged from roughly 10 million per second to about 440 per second. A real per-operation allocation would scale with throughput, so the per-operation figures that JMH prints only look non-zero for the slowest operations, where the constant background is divided by a small count. The first measured window after warm-up allocates a fixed 72 to 96 bytes, which the test records as a known exception (decision D12).
+- The Java suite ran 232 tests with assertions enabled.
+- The GraalVM native library built on each system and was packaged into the Python package.
+- The Python suite ran 38 tests against the native library. Four of them exercise the lake: open, upsert, get, delete, flush, the timed flush, and close. The fifth lake test, which reads the output with PyArrow and compares it, skips in CI because `pyarrow` is not installed there.
 
-### 8. Crossing into other languages
+The CI build targets JDK 22 with GraalVM CE 22. JDK 25 has not been tested.
 
-The Java kernel compiles to a native shared library with GraalVM Native Image, so it runs without a JVM. The C interface uses an isolate thread, which GraalVM requires, and it returns sentinel values (`false`, `-1`) instead of throwing, so an exception never reaches the host process. Result buffers are filled up to the caller's capacity, and the call returns the full count, so a caller that guessed too small can grow its buffer and retry.
+## Building
 
-The Python wrapper calls that interface with `ctypes`. Batch calls send two `int64` columns in one call, and the kernel validates the whole batch before it changes anything. A single bad node ID leaves the graph as it was.
+Prerequisites:
 
-## Building and testing
-
-### Prerequisites
-
-- JDK 22. The build compiles with `--release 22`.
-- Maven 3.9 or newer.
-- Python 3.9 or newer. The test suite was run on 3.12.
-- GraalVM CE 22.0.2 with `native-image`, only for building the native library.
-- On Windows, Visual Studio 2022 with the C++ build tools, for `native-image`.
-
-### Commands
+- JDK 22 and Maven 3.9 or newer.
+- Python 3.9 or newer. The tests ran on 3.12.
+- GraalVM CE 22.0.2 with `native-image`, for the native library only.
+- On Windows, Visual Studio 2022 with the C++ build tools.
 
 ```sh
-# Java unit, property, and oracle tests
+# Java tests
 mvn test
 
-# Native shared library (writes target/native/)
+# Native library, written to target/native/
 GRAALVM_HOME=/path/to/graalvm-community-openjdk-22.0.2 mvn -Pnative -pl core package -DskipTests
 
-# Python tests (they load the native library)
+# Python tests, which load the native library
 python -m unittest discover -s python/tests -v
-# or
-pytest python/tests
 
-# Comparative benchmark against NetworkX and SQLite (several minutes)
+# Comparison against NetworkX and SQLite (several minutes)
 python python/benchmarks/compare.py
 
 # JMH microbenchmarks
@@ -194,22 +192,20 @@ mvn -pl bench -am package -DskipTests
 java -jar bench/target/benchmarks.jar -prof gc
 ```
 
-The Python loader searches `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arch>/`, then `target/native/`. CI packages the library into `bin/` for Linux, macOS, and Windows.
+The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arch>/`, then `target/native/`.
 
-### Continuous integration
+## Limits
 
-`.github/workflows/ci.yml` runs on Ubuntu, macOS, and Windows. Each job runs the Java tests, builds the native library with GraalVM CE, packages it into the Python package, installs the package with `pip install -e`, runs the Python tests, and uploads the library as an artifact.
-
-## Limitations
-
-- **In memory only.** There is no persistence and no write-ahead log yet. A process that exits loses its graph.
-- **Single writer.** One graph handle must be used from one thread at a time. The handle registry is synchronized, but the kernel is not.
-- **Dense integer node IDs.** Node IDs are non-negative `long` values up to `Integer.MAX_VALUE - 9`. Map external identifiers to integers before they enter the graph.
-- **Python call overhead.** Each `ctypes` call costs a few microseconds. Use the batch methods and flat buffers for bulk work.
-- **Measured on one laptop.** The numbers above come from one machine. The GitHub Actions runs check that the build and tests pass on all three operating systems. They do not measure performance.
+- **Graph state is in memory.** There is no persistence and no write-ahead log. Ring 4 covers both, and it has not started.
+- **One writer at a time.** Use a graph handle or a lake table from one thread at a time. Lake writes are serialized by a lock. The graph kernel is not synchronized.
+- **Integer node IDs.** Node IDs are `long` values from 0 to `Integer.MAX_VALUE - 9`. Map external identifiers to integers first.
+- **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
+- **No compaction.** Superseded rows and tombstones stay in the files until something removes them.
+- **Python call cost.** Each `ctypes` call takes a few microseconds. Use batch calls for bulk work.
+- **One laptop.** The benchmark numbers come from one machine. CI checks that the code builds and passes on three systems. It does not measure speed.
 
 ## License and status
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: Rings 1 to 3 are complete. Ring 1 is the core data structures, Ring 2 is the graph kernel and traversal, and Ring 3 is the native C interface and Python package. Ring 4 (concurrency and a write-ahead log) has not started.
+Status: the graph engine (Rings 1 to 3) and the lake write path are built, and they pass in CI on three systems. Ring 4 (concurrency and a write-ahead log) has not started. Iceberg metadata, compaction, and the Arrow export are still open.
