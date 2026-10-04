@@ -135,9 +135,7 @@ public final class DeltaMemTable {
     }
 
     public void clear() {
-        for (int row = 0; row < rowCount; row++) {
-            index.remove(keyHashes[row]);
-        }
+        index.clear();
         rowCount = 0;
         slabUsed = 0;
         liveVarCharBytes = 0;
@@ -193,6 +191,34 @@ public final class DeltaMemTable {
 
     int slabCapacity() {
         return varCharSlab.length;
+    }
+
+    long[] keyHashColumn() {
+        return keyHashes;
+    }
+
+    byte[] kindColumn() {
+        return rowKinds;
+    }
+
+    long[] longColumn(int column) {
+        return longColumns[column];
+    }
+
+    int[] intColumn(int column) {
+        return intColumns[column];
+    }
+
+    int[] varCharOffsetColumn(int column) {
+        return varCharOffsets[column];
+    }
+
+    int[] varCharLengthColumn(int column) {
+        return varCharLengths[column];
+    }
+
+    byte[] varCharSlab() {
+        return varCharSlab;
     }
 
     public void assertInvariant() {

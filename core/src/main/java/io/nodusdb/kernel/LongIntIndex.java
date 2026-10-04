@@ -74,6 +74,11 @@ public final class LongIntIndex {
         return size;
     }
 
+    public void clear() {
+        Arrays.fill(values, ABSENT);
+        size = 0;
+    }
+
     public int capacity() {
         return mask + 1;
     }
