@@ -1,10 +1,12 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.wal.SyncMode;
 import io.nodusdb.kernel.wal.WalConfig;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.WordFactory;
@@ -16,6 +18,8 @@ import java.nio.file.Path;
 public final class NodusCApi {
 
     private static final int ERROR = -1;
+    private static final int LOOKUP_ERROR = -2;
+    private static final long MAX_STRING_BYTES = Integer.MAX_VALUE - 8;
     private static final int MAX_PATH_BYTES = 32_768;
     private static final GraphSessions SESSIONS = new GraphSessions();
 
@@ -177,6 +181,99 @@ public final class NodusCApi {
         } catch (RuntimeException e) {
             return ERROR;
         }
+    }
+
+    @CEntryPoint(name = "nodus_key_kind")
+    public static int keyKind(IsolateThread thread, VoidPointer handle) {
+        try {
+            return session(handle).keyKind().code();
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_claim_key_kind")
+    public static int claimKeyKind(IsolateThread thread, VoidPointer handle, int kind) {
+        try {
+            return session(handle).claimKeys(KeyKind.fromCode(kind)).code();
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_intern")
+    public static long intern(IsolateThread thread, VoidPointer handle, CCharPointer utf8, int length) {
+        try {
+            byte[] bytes = readBytes(utf8, length);
+            return session(handle).intern(bytes, 0, bytes.length);
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_lookup")
+    public static long lookup(IsolateThread thread, VoidPointer handle, CCharPointer utf8, int length) {
+        try {
+            byte[] bytes = readBytes(utf8, length);
+            return session(handle).lookup(bytes, 0, bytes.length);
+        } catch (RuntimeException e) {
+            return LOOKUP_ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_resolve")
+    public static int resolve(IsolateThread thread, VoidPointer handle, long id, CCharPointer outBuf, int outCap) {
+        try {
+            byte[] bytes = session(handle).resolve(id);
+            int count = Math.min(bytes.length, Math.max(outCap, 0));
+            for (int i = 0; i < count; i++) {
+                outBuf.write(i, bytes[i]);
+            }
+            return bytes.length;
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_add_string_edges_batch")
+    public static int addStringEdgesBatch(IsolateThread thread, VoidPointer handle, CCharPointer utf8,
+                                          CIntPointer lengths, int pairCount) {
+        try {
+            if (pairCount < 0) {
+                return ERROR;
+            }
+            int[] lengthValues = intArray(lengths, 2 * pairCount);
+            long total = 0;
+            for (int length : lengthValues) {
+                if (length < 0) {
+                    return ERROR;
+                }
+                total += length;
+            }
+            byte[] bytes = readBytes(utf8, total);
+            return session(handle).addStringEdges(bytes, lengthValues, pairCount);
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    private static byte[] readBytes(CCharPointer pointer, long length) {
+        if (length < 0 || length > MAX_STRING_BYTES) {
+            throw new IllegalArgumentException("string length out of range: " + length);
+        }
+        byte[] bytes = new byte[(int) length];
+        for (int i = 0; i < bytes.length; i++) {
+            bytes[i] = pointer.read(i);
+        }
+        return bytes;
+    }
+
+    private static int[] intArray(CIntPointer pointer, int count) {
+        int[] values = new int[count];
+        for (int i = 0; i < count; i++) {
+            values[i] = pointer.read(i);
+        }
+        return values;
     }
 
     private static GraphSession session(VoidPointer handle) {

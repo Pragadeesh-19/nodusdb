@@ -197,6 +197,16 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
+    public boolean hasEdges() {
+        int capacity = nodeCapacity();
+        for (int u = 0; u < capacity; u++) {
+            if (getDegree(u) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public int nodeCapacity() {
         while (true) {
             long started = beginRead();
