@@ -23,7 +23,7 @@ class LakeTableTest {
             new LakeSchema.Field("score", LakeSchema.Type.DOUBLE),
             new LakeSchema.Field("status", LakeSchema.Type.INT32),
             new LakeSchema.Field("name", LakeSchema.Type.UTF8)));
-    private static final LakeTable.Config SMALL = new LakeTable.Config(2, 1 << 20, 4, 16, 0L);
+    private static final LakeTable.Config SMALL = new LakeTable.Config(2, 1 << 20, 4, 16, 0L, ParquetCodec.SNAPPY);
 
     @TempDir
     Path directory;
@@ -178,7 +178,7 @@ class LakeTableTest {
 
     @Test
     void periodicFlushCommitsDirtyBufferWithoutExplicitCall() throws Exception {
-        LakeTable.Config periodic = new LakeTable.Config(1 << 20, 1 << 26, 16, 64, 20L);
+        LakeTable.Config periodic = new LakeTable.Config(1 << 20, 1 << 26, 16, 64, 20L, ParquetCodec.SNAPPY);
         try (LakeTable table = LakeTable.open(directory, SCHEMA, periodic)) {
             put(table, 3L, 30L, 3.0, 3, "tick");
             long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
@@ -192,7 +192,7 @@ class LakeTableTest {
 
     @Test
     void negativeFlushIntervalIsRejected() {
-        assertThrows(IllegalArgumentException.class, () -> new LakeTable.Config(1, 1, 1, 1, -1L));
+        assertThrows(IllegalArgumentException.class, () -> new LakeTable.Config(1, 1, 1, 1, -1L, ParquetCodec.SNAPPY));
     }
 
     private static void put(LakeTable table, long key, long amount, double score, int status, String name) {

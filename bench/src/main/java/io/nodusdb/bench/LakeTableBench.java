@@ -2,6 +2,7 @@ package io.nodusdb.bench;
 
 import io.nodusdb.lake.LakeSchema;
 import io.nodusdb.lake.LakeTable;
+import io.nodusdb.lake.ParquetCodec;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
@@ -28,7 +29,8 @@ import java.util.stream.Stream;
 public class LakeTableBench {
 
     private static final LakeSchema SCHEMA = LakeSchema.parse("amount:INT64,score:DOUBLE,status:INT32,label:UTF8");
-    private static final LakeTable.Config CONFIG = new LakeTable.Config(1 << 16, 1 << 26, 1 << 16, 1 << 20, 0L);
+    private static final LakeTable.Config CONFIG = new LakeTable.Config(1 << 16, 1 << 26, 1 << 16, 1 << 20, 0L,
+            ParquetCodec.SNAPPY);
     private static final int KEYSPACE = 1 << 20;
     private static final long KEY_STRIDE = 0x9E3779B97F4A7C15L;
     private static final byte[] LABEL = "payload-000016B".getBytes(StandardCharsets.UTF_8);

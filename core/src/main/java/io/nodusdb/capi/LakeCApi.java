@@ -1,12 +1,15 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.lake.Aggregate;
 import io.nodusdb.lake.DeltaMemTable;
 import io.nodusdb.lake.LakeRow;
 import io.nodusdb.lake.LakeSchema;
 import io.nodusdb.lake.LakeTable;
+import io.nodusdb.lake.ParquetCodec;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;
+import org.graalvm.nativeimage.c.type.CDoublePointer;
 import org.graalvm.nativeimage.c.type.CIntPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.nativeimage.c.type.VoidPointer;
@@ -24,6 +27,10 @@ public final class LakeCApi {
     private static final int GET_ABSENT = 0;
     private static final int GET_FOUND = 1;
     private static final int GET_BUFFER_TOO_SMALL = 2;
+    private static final int AGGREGATE_EMPTY = 0;
+    private static final int AGGREGATE_VALUE = 1;
+    private static final int CODEC_UNCOMPRESSED = 0;
+    private static final int CODEC_SNAPPY = 1;
     private static final HandleTable<LakeTable> TABLES = new HandleTable<>();
 
     private LakeCApi() {
@@ -32,12 +39,12 @@ public final class LakeCApi {
     @CEntryPoint(name = "nodus_lake_open")
     public static VoidPointer open(IsolateThread thread, CCharPointer schema, int schemaLength,
                                    CCharPointer path, int pathLength, int maxRows, int maxSlabBytes,
-                                   long flushIntervalMillis) {
+                                   long flushIntervalMillis, int codec) {
         try {
             LakeSchema parsed = LakeSchema.parse(text(schema, schemaLength));
             LakeTable.Config defaults = LakeTable.Config.DEFAULT;
             LakeTable.Config config = new LakeTable.Config(maxRows, maxSlabBytes, defaults.initialCapacity(),
-                    defaults.initialSlabBytes(), flushIntervalMillis);
+                    defaults.initialSlabBytes(), flushIntervalMillis, codecOf(codec));
             LakeTable table = LakeTable.open(Path.of(text(path, pathLength)), parsed, config);
             return WordFactory.pointer(TABLES.open(table));
         } catch (IOException | RuntimeException e) {
@@ -164,6 +171,53 @@ public final class LakeCApi {
         } catch (RuntimeException e) {
             return ERROR;
         }
+    }
+
+    @CEntryPoint(name = "nodus_lake_upsert_columns")
+    public static long upsertColumns(IsolateThread thread, VoidPointer handle, long rows, CLongPointer keys,
+                                     int longCount, CLongPointer longAddresses,
+                                     int intCount, CLongPointer intAddresses,
+                                     int varCharCount, CLongPointer offsetAddresses, CLongPointer dataAddresses) {
+        try {
+            LakeTable table = TABLES.get(handle.rawValue());
+            return table.upsertColumns(new NativeColumns(Math.toIntExact(rows), keys,
+                    longCount, longAddresses, intCount, intAddresses,
+                    varCharCount, offsetAddresses, dataAddresses));
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_lake_sum")
+    public static int sum(IsolateThread thread, VoidPointer handle, int field, CDoublePointer out) {
+        try {
+            out.write(TABLES.get(handle.rawValue()).aggregate(field).sum());
+            return AGGREGATE_VALUE;
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    @CEntryPoint(name = "nodus_lake_avg")
+    public static int average(IsolateThread thread, VoidPointer handle, int field, CDoublePointer out) {
+        try {
+            Aggregate aggregate = TABLES.get(handle.rawValue()).aggregate(field);
+            if (aggregate.count() == 0) {
+                return AGGREGATE_EMPTY;
+            }
+            out.write(aggregate.sum() / aggregate.count());
+            return AGGREGATE_VALUE;
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    private static ParquetCodec codecOf(int id) {
+        return switch (id) {
+            case CODEC_UNCOMPRESSED -> ParquetCodec.UNCOMPRESSED;
+            case CODEC_SNAPPY -> ParquetCodec.SNAPPY;
+            default -> throw new IllegalArgumentException("unknown parquet codec " + id);
+        };
     }
 
     private static void requireLengthsFit(int[] lengths, int available) {

@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -21,9 +22,9 @@ import java.util.function.IntUnaryOperator;
 public final class LakeTable implements AutoCloseable {
 
     public record Config(int maxRows, int maxSlabBytes, int initialCapacity, int initialSlabBytes,
-                         long flushIntervalMillis) {
+                         long flushIntervalMillis, ParquetCodec codec) {
 
-        public static final Config DEFAULT = new Config(1 << 20, 1 << 26, 1 << 16, 1 << 20, 0L);
+        public static final Config DEFAULT = new Config(1 << 20, 1 << 26, 1 << 16, 1 << 20, 0L, ParquetCodec.SNAPPY);
 
         public Config {
             if (maxRows < 1 || maxRows > DeltaMemTable.MAX_ROWS) {
@@ -35,6 +36,7 @@ public final class LakeTable implements AutoCloseable {
             if (flushIntervalMillis < 0) {
                 throw new IllegalArgumentException("flushIntervalMillis must be non-negative: " + flushIntervalMillis);
             }
+            Objects.requireNonNull(codec, "codec");
         }
     }
 
@@ -108,6 +110,51 @@ public final class LakeTable implements AutoCloseable {
             awaitCapacityLocked();
             active.upsert(keyHash, longValues, intValues, varCharValues, varCharLengths);
             freezeIfFullLocked();
+        }
+    }
+
+    public int upsertColumns(ColumnarRows rows) {
+        requireShape(rows);
+        int count = rows.rowCount();
+        if (count == 0) {
+            return 0;
+        }
+        validateVarChars(rows, count);
+        long[] longValues = new long[shape.longColumns()];
+        int[] intValues = new int[shape.intColumns()];
+        int[] starts = new int[shape.varCharColumns()];
+        int[] lengths = new int[shape.varCharColumns()];
+        byte[] bytes = new byte[0];
+        for (int row = 0; row < count; row++) {
+            for (int c = 0; c < longValues.length; c++) {
+                longValues[c] = rows.longValue(c, row);
+            }
+            for (int c = 0; c < intValues.length; c++) {
+                intValues[c] = rows.intValue(c, row);
+            }
+            int total = 0;
+            for (int c = 0; c < starts.length; c++) {
+                starts[c] = rows.varCharStart(c, row);
+                lengths[c] = rows.varCharStart(c, row + 1) - starts[c];
+                total = Math.addExact(total, lengths[c]);
+            }
+            if (total > bytes.length) {
+                bytes = new byte[Math.max(total, bytes.length * 2)];
+            }
+            int cursor = 0;
+            for (int c = 0; c < starts.length; c++) {
+                rows.copyVarChar(c, starts[c], lengths[c], bytes, cursor);
+                cursor += lengths[c];
+            }
+            upsert(rows.key(row), longValues, intValues, bytes, lengths);
+        }
+        return count;
+    }
+
+    public Aggregate aggregate(int field) {
+        LakeSchema.Field column = schema.fields().get(field);
+        synchronized (lock) {
+            return LakeAggregates.of(active, column.type(), slots[field]);
         }
     }
 
@@ -266,6 +313,30 @@ public final class LakeTable implements AutoCloseable {
         return -1;
     }
 
+    private void requireShape(ColumnarRows rows) {
+        if (rows.longColumnCount() != shape.longColumns() || rows.intColumnCount() != shape.intColumns()
+                || rows.varCharColumnCount() != shape.varCharColumns()) {
+            throw new IllegalArgumentException("column layout does not match the table schema");
+        }
+    }
+
+    private static void validateVarChars(ColumnarRows rows, int count) {
+        for (int column = 0; column < rows.varCharColumnCount(); column++) {
+            int previous = rows.varCharStart(column, 0);
+            if (previous < 0) {
+                throw new IllegalArgumentException("negative var-char offset in column " + column);
+            }
+            for (int row = 1; row <= count; row++) {
+                int next = rows.varCharStart(column, row);
+                if (next < previous) {
+                    throw new IllegalArgumentException(
+                            "var-char offsets decrease in column " + column + " at row " + row);
+                }
+                previous = next;
+            }
+        }
+    }
+
     private void awaitCapacityLocked() {
         while ((frozen != null || spare == null) && isOverCapacity()) {
             if (lastFlushFailure != null) {
@@ -346,12 +417,12 @@ public final class LakeTable implements AutoCloseable {
         int[] inserts = rowsOfKind(table, DeltaMemTable.INSERT);
         if (inserts.length > 0) {
             dataFile = fileName(DATA_PREFIX, sequence);
-            ParquetWriter.write(directory.resolve(dataFile), schema, table, inserts);
+            ParquetWriter.write(directory.resolve(dataFile), schema, table, inserts, config.codec());
         }
         int[] tombstones = rowsOfKind(table, DeltaMemTable.TOMBSTONE);
         if (tombstones.length > 0) {
             deleteFile = fileName(DELETE_PREFIX, sequence);
-            ParquetWriter.write(directory.resolve(deleteFile), LakeSchema.KEYS_ONLY, table, tombstones);
+            ParquetWriter.write(directory.resolve(deleteFile), LakeSchema.KEYS_ONLY, table, tombstones, config.codec());
         }
         return new Manifest.Entry(sequence, dataFile, deleteFile);
     }
