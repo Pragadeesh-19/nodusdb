@@ -65,7 +65,7 @@ What it does today:
 
 - Upserts and deletes by key. A delete writes a tombstone, so an older committed row stays hidden after a flush.
 - Two buffers. Writers keep going while the previous buffer is written to Parquet in the background.
-- A Parquet v1 writer that depends on nothing beyond the JDK. Doubles are stored as raw bits, so NaN payloads and negative zero survive the round trip.
+- A Parquet v1 writer and reader that depend on nothing beyond the JDK. Pages are Snappy-compressed or uncompressed, low-cardinality columns are dictionary-encoded, and every column carries min and max statistics. Doubles are stored as raw bits, so NaN payloads and negative zero survive the round trip.
 
 Numbers from `LakeTableBench` and `DeltaMemTableBench` on the same laptop:
 
@@ -84,7 +84,7 @@ Not built yet: Iceberg table metadata and Avro manifests (the manifest is Iceber
 
 ## Against other engines
 
-Two suites compare NodusDB with other engines on real data. The graph suite runs on the SNAP soc-Pokec social network, 30,622,564 directed edges. The lakehouse suite runs on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024. Each engine and workload runs in its own process. The answers are cross-checked: the permission digests, the Pokec hub degrees, and the taxi revenue total agree across every engine that finished. Each number is a single run on the same laptop as the rest of this file. The raw output is in `bench/baseline/`. The graph suite takes about 2.5 hours and the lake suite about 16 minutes.
+Two suites compare NodusDB with other engines on real data. The graph suite runs on the SNAP soc-Pokec social network, 30,622,564 directed edges. The lakehouse suite runs on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024. Each engine and workload runs in its own process. The answers are cross-checked: the permission digests, the Pokec hub degrees, and the taxi revenue total agree across every engine that finished. Each number is a single run on the same laptop as the rest of this file. The raw output is in `bench/baseline/`. The graph suite takes about 2.5 hours and the lake suite about 20 minutes.
 
 ### Graph suite
 
@@ -154,37 +154,44 @@ On disk after ingest, the durable graph takes 258 MB, SQLite 822 MB, and DuckDB 
 The lake suite writes the taxi rows through each engine, keyed by row index. Four workloads:
 
 - **W1, ingest.** Load all 1,000,000 rows.
-- **W2, mutations.** 500,000 upserts and 100,000 deletes.
+- **W2, mutations.** 500,000 upserts and 100,000 deletes. NodusDB runs the upserts two ways: one call per row, and one columnar batch.
 - **W3, flush.** Write a 250,000-row buffer to Parquet.
-- **W4, read.** A DuckDB query totals revenue and trips over the files each engine wrote. Every source gives the same total, 27,486,629.10.
+- **W4, read.** A DuckDB query totals revenue and trips over the files each engine wrote. Every source gives the same revenue total, 27,486,629.10.
 
-| Measure | NodusDB lake | DuckDB | PyArrow | SQLite |
+| Measure | NodusDB | DuckDB | PyArrow | SQLite |
 |---|---:|---:|---:|---:|
-| W1 ingest, rows/s | 47,210 | 167,364 | 112,510 | 94,969 |
-| W2 upserts/s | 37,253 | 857 | 398,114 | 259,463 |
-| W2 deletes/s | 334,790 | 1,031 | 790,855 | 276,078 |
-| W3 flush, 250,000 rows | 0.37 s | 1.13 s | 0.19 s | 0.12 s, not Parquet |
-| W4 aggregate, median | 42.3 ms | 13.6 ms | 17.0 ms | n/a |
+| W1 ingest, rows/s | 846,137 | 164,793 | 114,582 | 95,113 |
+| W2 upserts/s, one call per row | 39,335 | 960 | 393,661 | 253,594 |
+| W2 upserts/s, columnar batch | 1,763,882 | | | |
+| W2 deletes/s | 467,542 | 930 | 755,709 | 269,022 |
+| W3 flush of 250,000 rows, Snappy | 0.265 s | 1.143 s | 0.187 s | 0.123 s, database file |
+| W3 flush of 250,000 rows, no compression | 0.187 s | | | |
+| W4 grouped scan, median | 12.8 ms | 14.0 ms | 17.7 ms | n/a |
 
-The lake's full tables, with memory use, file sizes, and the W4 file counts, are in [`docs/lake.md`](docs/lake.md).
+Each engine's W4 row is DuckDB reading that engine's own files. The W4 layout of NodusDB wrote three files. The full tables, with memory, file sizes, and the 5,000-row streaming layout, are in [`docs/lake.md`](docs/lake.md). The raw output is in [`bench/baseline/lake-heavyweights-windows-dev-v2.json`](bench/baseline/lake-heavyweights-windows-dev-v2.json).
 
 #### Where NodusDB wins
 
-- **Keyed deletes.** NodusDB deletes 334,790 rows per second. That is about 325 times DuckDB and 1.2 times SQLite. A delete updates an in-memory index and writes a tombstone at flush time.
-- **Flush.** NodusDB writes 250,000 rows in 0.37 s, faster than DuckDB's 1.13 s. Its 3.35 MB file is the smallest of the Parquet outputs.
+- **Bulk ingest.** 5.1 times DuckDB and 7.4 times PyArrow.
+- **Batch upserts.** 1.8 million rows per second. That is about 4.5 times PyArrow's Python dict, about 7 times SQLite, and about 1,800 times DuckDB's per-row updates.
+- **Keyed deletes.** 1.7 times SQLite and about 500 times DuckDB.
+- **Scans of its own output.** The grouped scan has a 12.8 ms median, against 14.0 ms for DuckDB's own files and 17.7 ms for PyArrow's.
+- **Native aggregates.** A sum and an average over 1,000,000 rows held in memory take 4.0 ms. DuckDB takes 7.7 ms for the same ungrouped query over its own files. The two are not the same workload, because the native call does not read files.
 
 #### Where the analytical engines win
 
-- **Bulk ingest.** DuckDB loads 3.5 times faster than NodusDB.
-- **Upserts.** SQLite and PyArrow run 7 to 11 times faster than NodusDB.
-- **Scans.** DuckDB reads its own files in 13.6 ms and NodusDB's in 35 to 42 ms. I have not isolated the cause.
-- **Flush of a large buffer.** PyArrow writes the same 250,000 rows in 0.19 s.
+- **Single-call upserts.** PyArrow runs about 10 times faster, and SQLite about 6 times faster. Each call pays Python overhead that I have not profiled.
+- **Flush with Snappy.** PyArrow takes 0.187 s, and NodusDB takes 0.265 s. With compression off, NodusDB ties PyArrow at 0.187 s, but its files are 36% larger.
+- **Deletes into a Python dict.** PyArrow is 1.6 times faster, but it has no storage behind it, so this is not a comparable engine.
+- **Many small files.** The 5,000-row streaming layout scans at 25.5 ms, about twice the clean layout. Each file is a separate scan task, and compaction is not built.
 
 #### Caveats
 
-- W1 and W2 pass each row from Python into the native library, so they include that binding cost.
-- The PyArrow W2 figures come from a Python dict with no storage behind it. They show a ceiling for an in-memory map, not a storage engine.
-- The 5,000-row NodusDB configuration produced 108 files, not the 200 that the setting implies. I have not checked why.
+- W1 and the single-call W2 path pass each row from Python into the native library, so they include that cost. The columnar batch path does not.
+- The native aggregate covers only the rows in the active buffer. It does not read committed files.
+- The clean W4 layout wrote three files, not four. Ingest now outruns the flush, so the buffer grows past its freeze threshold before it freezes.
+- The W4 p99 for the clean layout is 35.9 ms, against 15.3 ms for DuckDB's own files. The median is faster, but the tail is worse.
+- Each engine ran once, on one laptop.
 
 ## Quickstart
 
@@ -244,7 +251,20 @@ with nodusdb.LakeTable("/data/orders", schema, flush_rows=100_000) as table:
     table.flush()  # writes data-*.parquet and delete-*.parquet into /data/orders
 ```
 
-`flush_rows` sets how many rows a buffer holds before it is written out. `flush_interval`, in seconds, commits on a timer. Both triggers run inside the native library. `add_edges_from` also takes a flat buffer such as `array('q', [1, 2, 2, 3])`, which is the fastest input form.
+`flush_rows` sets how many rows a buffer holds before it is written out. `flush_interval`, in seconds, commits on a timer. Both triggers run inside the native library. `compression` is `"snappy"` by default, or `"none"`.
+
+Arrow batches go in without a Python object per row. Pass a `pyarrow` table or record batch with an `int64` key column, and read sums or averages over the rows still in memory:
+
+```python
+import pyarrow as pa
+
+with nodusdb.LakeTable("/data/orders", schema) as table:
+    table.upsert_table(pa.table({"id": ids, "amount": amounts, "score": scores,
+                                 "status": statuses, "label": labels}), key="id")
+    print(table.sum("amount"), table.average("score"))
+```
+
+`add_edges_from` also takes a flat buffer such as `array('q', [1, 2, 2, 3])`, which is the fastest input form.
 
 ## Durability
 
@@ -363,7 +383,7 @@ python python/benchmarks/compare.py
 # the system temp directory, or into NODUS_BENCH_CACHE if it is set.
 pip install -r python/benchmarks/requirements.txt
 python python/benchmarks/benchmark_graph_heavyweights.py run --out bench/baseline/graph-heavyweights-windows-dev.json
-python python/benchmarks/benchmark_lake_heavyweights.py run --out bench/baseline/lake-heavyweights-windows-dev.json
+python python/benchmarks/benchmark_lake_heavyweights.py run --out bench/baseline/lake-heavyweights-windows-dev-v2.json
 
 # JMH microbenchmarks
 mvn -pl bench -am package -DskipTests
