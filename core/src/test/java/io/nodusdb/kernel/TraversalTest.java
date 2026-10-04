@@ -153,10 +153,11 @@ class TraversalTest {
         }
     }
 
+    @SuppressWarnings("unchecked")
     private static KHopTraversal traversalOf(GraphKernel kernel) throws ReflectiveOperationException {
-        Field field = GraphKernel.class.getDeclaredField("traversal");
+        Field field = GraphKernel.class.getDeclaredField("traversals");
         field.setAccessible(true);
-        return (KHopTraversal) field.get(kernel);
+        return ((ThreadLocal<KHopTraversal>) field.get(kernel)).get();
     }
 
     private static Field generationField(KHopTraversal traversal) throws ReflectiveOperationException {
