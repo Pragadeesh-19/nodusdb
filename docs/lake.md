@@ -1,83 +1,187 @@
-# Lake write path: DeltaMemTable
+# Lake write path
 
-`io.nodusdb.lake` holds the in-memory write absorber for open lakehouse tables. It takes keyed upserts and deletes, keeps every column densely packed, and answers point lookups without allocating on the heap.
+`io.nodusdb.lake` absorbs keyed upserts and deletes in memory, then commits them to an
+Iceberg-shaped directory of Parquet files. Reads see every accepted write immediately, whether
+the row is still in memory or already committed.
 
-## Layout
-
-Each column is a separate primitive array. Rows `0 .. rowCount-1` are always dense: no holes, no tombstones.
-
-```
-keyHashes          [k0 k1 k2 ... k(n-1) | free ]
-longColumns[c]     [v0 v1 v2 ... v(n-1) | free ]   doubles are stored as raw bits
-intColumns[c]      [i0 i1 i2 ... i(n-1) | free ]
-varCharOffsets[c]  [o0 o1 o2 ... o(n-1) | free ]   position in varCharSlab
-varCharLengths[c]  [l0 l1 l2 ... l(n-1) | free ]
-varCharSlab        [ live bytes ... | dead bytes | free ]
-index              keyHash -> row
-```
-
-- Key resolution is one `LongIntIndex` lookup. The index is the only structure that maps keys to rows.
-- Doubles travel as `Double.doubleToRawLongBits`, so NaN payloads and `-0.0` round-trip exactly. Read them with `doubleAt`.
-- All row arrays share one capacity and double together.
-- Variable-width values are UTF-8 bytes supplied by the caller. The kernel never sees a `String`.
-
-## Operations
-
-`upsert(keyHash, longs, ints, varCharBytes, varCharLengths)` returns `true` for an insert and `false` for an overwrite. Arguments are validated before anything mutates, so a rejected call leaves the table unchanged.
-
-- Overwrite: the new variable-width bytes are appended to the slab, the row's offsets and lengths are repointed, and the old bytes are left as dead space.
-- Insert: the row is appended at `rowCount`, and the key is registered in the index.
-
-`delete(keyHash)` uses swap-and-pop across every column:
+## Components
 
 ```
-if the key is absent:           return false
-R      = index.get(keyHash)
-last   = rowCount - 1
-if R < last:
-    move keyHashes[last] to keyHashes[R]
-    copy every long, int, offset, and length column from last to R
-    index.put(movedKey, R)            // update the moved key in place
-index.remove(keyHash)                 // backward-shift deletion, no tombstone
-rowCount = last
-return true
+            upsert / delete                      get
+                  |                               |
+                  v                               v
+   +-----------------------------------------------------------+
+   | LakeTable (one lock guards the three buffer references)   |
+   |                                                           |
+   |  active  --freeze-->  frozen  --flusher-->  committed     |
+   |    ^                    |                     |           |
+   |    |                    |                     v           |
+   |  spare <----clear-------+              manifest.txt       |
+   |                                        data-N.parquet     |
+   |                                        delete-N.parquet   |
+   +-----------------------------------------------------------+
 ```
 
-The index update comes before the removal. That keeps the only structural index change inside `remove`.
+- `DeltaMemTable` is the columnar buffer. Each buffer holds a key-hash column, a row-kind
+  column (`INSERT` or `TOMBSTONE`), one array per numeric column, and a shared byte slab for
+  UTF-8 values. Keys resolve through `LongIntIndex`.
+- `LakeTable` owns three buffer references: `active` takes writes, `frozen` is being flushed,
+  and `spare` is the buffer that will become the next `active`.
+- `ParquetWriter` and `ParquetReader` read and write Parquet directly. They depend only on the
+  JDK, so the native image needs no Hadoop.
+- `Manifest` records the committed files in order and is replaced atomically.
 
-Row indices are valid only until the next mutation. A delete can move the last row into the vacated slot, so callers must not keep row numbers across writes.
+## Lifecycle
 
-## Slab reclamation
+1. A write goes into `active`. When `active` reaches `maxRows` or `maxSlabBytes`, and no buffer
+   is pending, `active` becomes `frozen`, `spare` becomes `active`, and a flush job is queued.
+   Writers continue into the new `active` without waiting.
+2. The flusher writes the `INSERT` rows to `data-N.parquet` and the `TOMBSTONE` keys to
+   `delete-N.parquet`. It then appends an entry to the manifest and replaces `manifest.txt`
+   atomically.
+3. The flusher clears the frozen buffer, keeping its grown arrays, and returns it as `spare`.
+   Steady state therefore reuses the same arrays and allocates nothing on the ingestion thread.
 
-Overwrites and deletes leave dead bytes in the slab. When an append does not fit, the slab is rebuilt:
+`flush()` drains both buffers synchronously. `LakeTable.Config.flushIntervalMillis` runs the
+same drain on a timer, so a time-based commit needs no caller thread.
 
-- The live bytes of every row are copied into a buffer of at least `2 * required` bytes, rounded up to a power of two. This keeps the rebuild cost amortized over the appends that follow it.
-- The buffer is reused from a spare slot when it is large enough. Once the slab reaches its working size, rebuilds allocate nothing.
-- Memory is at most about four times the live variable-width bytes, plus the spare buffer.
+### Backpressure
 
-## Invariants
+Writers never wait while a flush is pending, unless `active` has reached twice its threshold.
+At that point the flush is at least two buffers behind, and writers wait for it. Memory
+therefore stays bounded at roughly three buffers plus the slab spares. Under sustained overload,
+throughput is set by the flush rate, not the ingestion rate. On `windows-dev`, a 65,536-row
+flush takes about 70 ms.
 
-`assertInvariant()` runs after every mutation in the tests and checks:
+If a flush fails, the frozen buffer is kept and `lastFlushFailure()` reports the cause. Writers
+blocked behind it fail with the same cause. The next `flush()` or timer tick retries the same
+buffer, so no rows are lost.
 
-- `index.size() == rowCount`
-- `index.get(keyHashes[i]) == i` for every row
-- every variable-width span lies inside `[0, slabUsed)`
-- the tracked live-byte count equals the sum of all variable-width lengths
+## Deletes and tombstones
 
-Duplicate keys are excluded by the second check. If every row maps to its own index, no two rows can share a key.
+`delete(key)` never removes a row from `active`. It marks the row `TOMBSTONE` in place, or
+appends a tombstone if the key is not present. The tombstone is written to a delete file on the
+next flush.
+
+The reason is correctness. A key can exist in an earlier committed file, and a removed
+in-memory row would bring that older version back. The cost is that a delete of a key that was
+never committed still writes a tombstone. Compaction can drop those later.
+
+A later upsert of the same key turns the tombstone back into an `INSERT`.
+
+## Reads
+
+`get(key)` checks the buffers under the lock, then the committed files without it:
+
+1. `active`: an `INSERT` returns the row; a `TOMBSTONE` returns absent.
+2. `frozen`, if a flush is pending: same rule.
+3. Committed files, newest first. Within each entry the data file is checked first, then the
+   delete file. A key found in a delete file is absent, and older files are not consulted.
+
+Only the in-memory checks are O(1). Each committed lookup reads and decodes the whole file that
+it checks, so cost grows with the number of files and their size. Caching decoded key columns
+is the next step. The sub-microsecond target applies to in-memory hits only, and it has not been
+measured.
+
+## Parquet output
+
+Files use the standard layout: `PAR1`, one row group, one data page per column, and a Thrift
+compact footer. Each column is PLAIN-encoded and GZIP-compressed at level 1 (`BEST_SPEED`).
+
+| Schema type | Parquet type | Notes |
+|---|---|---|
+| `INT64` | INT64 | |
+| `DOUBLE` | DOUBLE | stored as raw IEEE 754 bits, so NaN payloads and `-0.0` survive |
+| `INT32` | INT32 | |
+| `UTF8` | BYTE_ARRAY, converted type UTF8 | |
+
+Every column is `REQUIRED`, so no definition levels are written. The key column is always
+`key_hash` (INT64).
+
+The `data-N` and `delete-N` files are verified against PyArrow: a 100,000-row fixture, mixed
+integers, doubles including NaN payloads, and UTF-8 strings, reads back bit for bit. DuckDB has
+not been checked.
 
 ## Identity and limits
 
-- The 64-bit key hash is the row identity. Two distinct primary keys with the same hash would merge into one row. The collision probability is about `n^2 / 2^65`, roughly `3e-8` at one million keys. The caller is responsible for supplying a well-mixed 64-bit hash.
-- Row count is capped at `2^29`, and the slab at `2^30` bytes.
-- Single writer. Concurrent reads during a write are not supported.
+- The 64-bit key hash is the row identity. Two keys with the same hash merge into one row. The
+  collision probability is about `n^2 / 2^65`, roughly `3e-8` at one million keys.
+- Row count is capped at `2^29` per buffer and the slab at `2^30` bytes.
+- Writes and reads are serialized by one lock. Writers do not run concurrently with each other.
+- Committed lookups decode whole files; there is no compaction yet.
+- Iceberg metadata (table JSON and Avro manifests) is not written. The manifest is local and
+  Iceberg-shaped only.
 
-## Benchmark
+## C ABI
 
-`DeltaMemTableBench.sustainedUpsert` pre-sizes the table to one million rows and then streams in-place upserts. Growth never runs inside the timed window, so the steady-state allocation claim can be checked directly with `-prof gc`. Run:
+`LakeCApi` exports these functions. Each catches runtime exceptions and returns a sentinel.
+
+| Export | Behaviour |
+|---|---|
+| `nodus_lake_open(schema, path, maxRows, maxSlabBytes, flushIntervalMillis)` | Returns a handle, or null |
+| `nodus_lake_close(handle)` | Flushes, then releases the table. Returns false and keeps the handle on failure |
+| `nodus_lake_upsert(handle, key, longs, ints, varBytes, varByteCount, varLengths)` | |
+| `nodus_lake_upsert_batch(handle, keys, rows, longs, ints, varBytes, varByteCount, varLengths)` | Returns the rows applied, or -1 with nothing applied. Rejects a batch whose lengths exceed the supplied bytes. Capacity errors mid-batch can leave a prefix applied |
+| `nodus_lake_delete(handle, key)` | |
+| `nodus_lake_flush(handle)` | |
+| `nodus_lake_get(handle, key, outLongs, outInts, outVarBytes, outVarCapacity, outVarLengths)` | 0 absent, 1 found, 2 buffer too small (retry larger), -1 error |
+
+Schema specs are `name:TYPE` pairs separated by commas, with `TYPE` one of `INT64`, `DOUBLE`,
+`INT32`, `UTF8`. Writers pass longs in the order of `INT64` and `DOUBLE` fields, ints in the
+order of `INT32` fields, and UTF-8 bytes and lengths in the order of `UTF8` fields.
+
+The `table_flush(handle, target_parquet_path)` signature in the design sketch became
+`nodus_lake_flush(handle)`. Files are written into the table directory, and the directory is
+passed at open time.
+
+Not built: the Arrow C Data Interface exporter. The columns live on the Java heap, so the GC can
+move them under native code. Zero-copy export needs off-heap storage first, so the flush path
+copies at the boundary instead.
+
+## Python
+
+```python
+from nodusdb import LakeTable
+
+schema = {"amount": "int64", "score": "float64", "status": "int32", "label": "utf8"}
+
+with LakeTable("/data/orders", schema, flush_rows=1 << 18, flush_interval=5.0) as table:
+    table.upsert("order-1042", {"amount": 9900, "score": 0.5, "status": 1, "label": "paid"})
+    table.upsert_from((i, {"amount": i, "score": 1.0, "status": 0, "label": ""}) for i in range(100_000))
+    table.delete("order-1041")
+    print(table.get("order-1042"))
+    table.flush()
+```
+
+- `key_hash(key)` maps `int` keys to themselves and hashes `str` and `bytes` keys with BLAKE2b
+  to 64 bits.
+- `flush_rows` sets the freeze threshold. `flush_interval` sets the timer, in seconds.
+- Both triggers run inside Java. A Python thread would call into the native isolate from a
+  second OS thread, which GraalVM does not allow for the isolate thread the caller created.
+
+The native tests in `python/tests/test_lake.py` skip when `libnodusdb` lacks the `nodus_lake_*`
+exports. They run after a native rebuild.
+
+## Known gaps
+
+- The native library has not been rebuilt, so the C ABI and Python layer have not been run.
+  That needs GraalVM CE 22 with `native-image` on the path.
+- `get` on committed data is O(file). A key-column cache would fix it.
+- The ingestion thread is not allocation-free on every cycle. It allocates about 100 bytes at
+  each freeze, which measures out to about 0.0014 B/op.
+- Writes block once two buffers are full and the flush is still pending, so sustained
+  overload shows up as latency.
+- No compaction. Tombstones and superseded rows accumulate in the committed files.
+
+## Benchmarks
+
+`LakeTableBench.upsertWhileFlushing` runs with `maxRows = 65536`, so flushes are continuous
+during the timed window. Results are recorded in `bench/baseline/lake-flush-windows-dev.json`.
+They are specific to that machine.
 
 ```
-java -jar bench/target/benchmarks.jar DeltaMemTableBench -wi 3 -i 5 -f 1 -prof gc
+java -jar bench/target/benchmarks.jar LakeTableBench -wi 3 -i 5 -f 1 -prof gc
 ```
 
-Results are machine-specific. Record them in `bench/baseline/` alongside the graph baselines before comparing across runs.
+The ingestion thread allocates 0.0014 B/op after warm-up, measured with its own allocation
+counter. The `-prof gc` figures count the flusher too, so they are not the ingestion number.
