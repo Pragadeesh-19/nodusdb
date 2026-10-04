@@ -43,7 +43,16 @@ FLUSH_ROWS = 250_000
 STREAMING_FLUSH_ROWS = 5_000
 FRESHNESS_REPEATS = 7
 WORKLOADS = ["W1", "W2", "W3", "W4"]
-ENGINES = ["nodus-lake", "duckdb", "pyarrow", "sqlite"]
+ENGINES = ["nodus-lake", "nodus-lake-batch", "nodus-lake-uncompressed", "duckdb", "pyarrow", "sqlite"]
+BASE_ENGINES = ["nodus-lake", "duckdb", "pyarrow", "sqlite"]
+ENGINES_BY_WORKLOAD = {
+    "W1": BASE_ENGINES,
+    "W2": ["nodus-lake", "nodus-lake-batch", "duckdb", "pyarrow", "sqlite"],
+    "W3": ["nodus-lake", "nodus-lake-uncompressed", "duckdb", "pyarrow", "sqlite"],
+    "W4": BASE_ENGINES,
+}
+UNGROUPED_QUERY = ("SELECT count(*) AS trips, sum(total_amount) AS revenue, avg(trip_distance) AS distance "
+                   "FROM read_parquet('{pattern}')")
 
 SOURCE_COLUMNS = ["VendorID", "tpep_pickup_datetime", "trip_distance", "fare_amount", "total_amount",
                   "payment_type", "store_and_fwd_flag"]
@@ -55,7 +64,7 @@ def load_taxi():
     path = ensure_download(TAXI_URL, CACHE_DIRECTORY / "taxi" / "yellow_tripdata_2024-01.parquet", TAXI_SHA256)
     table = pq.read_table(path, columns=SOURCE_COLUMNS).slice(0, ROWS)
     pickup = table.column("tpep_pickup_datetime").cast(pa.timestamp("us")).cast(pa.int64())
-    flag = table.column("store_and_fwd_flag").fill_null("N")
+    flag = table.column("store_and_fwd_flag").fill_null("N").cast(pa.string())
     columns = {
         "id": pa.array(range(table.num_rows), pa.int64()),
         "vendor_id": table.column("VendorID").cast(pa.int32()),
@@ -72,15 +81,14 @@ def load_taxi():
 class NodusLake:
     name = "nodus-lake"
 
-    def __init__(self, directory, flush_rows):
+    def __init__(self, directory, flush_rows, compression="snappy"):
         from nodusdb import LakeTable
 
         self.directory = Path(directory)
-        self.table = LakeTable(str(self.directory), SCHEMA, flush_rows=flush_rows)
+        self.table = LakeTable(str(self.directory), SCHEMA, flush_rows=flush_rows, compression=compression)
 
     def ingest(self, data):
-        self.table.upsert_from((int(key), row) for key, row in zip(
-            data.column("id").to_pylist(), _rows_as_dicts(data)))
+        self.table.upsert_table(data, "id")
 
     def update(self, key, row):
         self.table.upsert(key, row)
@@ -98,11 +106,21 @@ class NodusLake:
         self.table.close()
 
 
-def _rows_as_dicts(data):
-    names = list(SCHEMA)
-    columns = [data.column(name).to_pylist() for name in names]
-    for values in zip(*columns):
-        yield dict(zip(names, values))
+def _update_table(data, keys):
+    import pyarrow.compute as pc
+
+    rows = data.take(pa.array(keys, pa.int64()))
+    payment = rows.column("payment_type")
+    return pa.table({
+        "id": rows.column("id"),
+        "vendor_id": rows.column("vendor_id"),
+        "pickup_us": rows.column("pickup_us"),
+        "trip_distance": rows.column("trip_distance"),
+        "fare_amount": pc.round(pc.multiply(rows.column("fare_amount"), 1.05), 2),
+        "total_amount": rows.column("total_amount"),
+        "payment_type": pc.add(pc.subtract(payment, pc.multiply(pc.divide(payment, 6), 6)), 1).cast(pa.int32()),
+        "flag": rows.column("flag"),
+    })
 
 
 class DuckDBLake:
@@ -270,7 +288,7 @@ def workload_w1(engine_name, workdir, data):
         engine = PyArrowLake(workdir / "out")
         with Stopwatch() as timer:
             engine.ingest(data)
-    else:
+    elif engine_name == "sqlite":
         engine = SQLiteLake(workdir / "out")
         with Stopwatch() as timer:
             engine.ingest(data)
@@ -305,6 +323,16 @@ def workload_w2(engine_name, workdir, data):
             for key in delete_keys:
                 engine.delete(key)
         engine.close()
+    elif engine_name == "nodus-lake-batch":
+        engine = NodusLake(Path(workdir) / "out", FLUSH_ROWS)
+        engine.ingest(data)
+        updates = _update_table(data, update_keys)
+        with Stopwatch() as updating:
+            engine.table.upsert_table(updates, "id")
+        with Stopwatch() as deleting:
+            for key in delete_keys:
+                engine.delete(key)
+        engine.close()
     elif engine_name == "duckdb":
         engine = DuckDBLake(Path(workdir) / "out")
         engine.load_resident(data)
@@ -331,7 +359,7 @@ def workload_w2(engine_name, workdir, data):
         with Stopwatch() as deleting:
             for key in delete_keys:
                 engine.delete(key)
-    else:
+    elif engine_name == "sqlite":
         engine = SQLiteLake(Path(workdir) / "out")
         engine.ingest(data)
         values = [(round(f * 1.05, 2), (p % 6) + 1, k) for k, f, p in zip(
@@ -358,8 +386,9 @@ def workload_w3(engine_name, workdir, data):
     workdir = Path(workdir)
     buffer = data.slice(0, FLUSH_ROWS)
     metrics = {"buffer_rows": buffer.num_rows}
-    if engine_name == "nodus-lake":
-        engine = NodusLake(workdir / "flush", 1 << 20)
+    if engine_name.startswith("nodus-lake"):
+        codec = "none" if engine_name == "nodus-lake-uncompressed" else "snappy"
+        engine = NodusLake(workdir / "flush", 1 << 20, compression=codec)
         engine.ingest(buffer)
         with Stopwatch() as flushing:
             engine.flush()
@@ -378,7 +407,7 @@ def workload_w3(engine_name, workdir, data):
             table = pa.table({"id": buffer.column("id"), **{name: buffer.column(name) for name in SCHEMA}})
             engine.write_part(table)
         output = engine.output_files()
-    else:
+    elif engine_name == "sqlite":
         engine = SQLiteLake(workdir / "flush")
         engine.ingest(buffer)
         with Stopwatch() as flushing:
@@ -398,6 +427,7 @@ def workload_w4(engine_name, workdir, data):
 
     workdir = Path(workdir)
     sources = {}
+    native_table = None
     if engine_name == "nodus-lake":
         clean = NodusLake(workdir / "clean", FLUSH_ROWS)
         clean.ingest(data)
@@ -409,6 +439,8 @@ def workload_w4(engine_name, workdir, data):
         streaming.flush()
         streaming.close()
         sources["nodus streaming (5k-row files)"] = workdir / "streaming" / "data-*.parquet"
+        native_table = NodusLake(workdir / "memory", 1 << 20)
+        native_table.ingest(data)
     elif engine_name == "duckdb":
         engine = DuckDBLake(workdir / "parts")
         engine.ingest(data)
@@ -418,7 +450,7 @@ def workload_w4(engine_name, workdir, data):
         engine = PyArrowLake(workdir / "parts")
         engine.ingest(data)
         sources["pyarrow parts"] = workdir / "parts" / "part-*.parquet"
-    else:
+    elif engine_name == "sqlite":
         return {"n/a": "SQLite writes a database file, not Parquet, so DuckDB cannot read its output as Parquet"}
     query = ("SELECT vendor_id, count(*) AS trips, sum(total_amount) AS revenue, avg(trip_distance) AS distance "
              "FROM read_parquet('{pattern}') GROUP BY 1 ORDER BY 1")
@@ -442,7 +474,44 @@ def workload_w4(engine_name, workdir, data):
             "revenue_total": round(sum(row[2] for row in answer), 2),
             "trips_total": sum(row[1] for row in answer),
         }
+    if native_table is not None:
+        results["nodus in-memory native, ungrouped (no files)"] = _time_native(native_table.table)
+        native_table.close()
+    if engine_name == "duckdb":
+        results["duckdb COPY parts, ungrouped"] = _time_ungrouped(sources["duckdb COPY parts"])
     return {"sources": results, "peak_rss_mb": peak_rss_mb()}
+
+
+def _time_native(table):
+    latencies = []
+    revenue = None
+    for _ in range(FRESHNESS_REPEATS):
+        started = time.perf_counter()
+        revenue = table.sum("total_amount")
+        table.average("trip_distance")
+        latencies.append((time.perf_counter() - started) * 1e3)
+    summary = latency_summary(latencies)
+    return {"files": 0, "bytes": 0, "median_ms": summary["median_us"], "p99_ms": summary["p99_us"],
+            "revenue_total": round(revenue, 2), "trips_total": None}
+
+
+def _time_ungrouped(pattern):
+    import duckdb
+
+    files = sorted(pattern.parent.glob(pattern.name))
+    connection = duckdb.connect(":memory:")
+    latencies = []
+    answer = None
+    for _ in range(FRESHNESS_REPEATS):
+        started = time.perf_counter()
+        answer = connection.execute(UNGROUPED_QUERY.format(pattern=pattern.as_posix())).fetchall()
+        latencies.append((time.perf_counter() - started) * 1e3)
+    connection.close()
+    summary = latency_summary(latencies)
+    trips, revenue, _ = answer[0]
+    return {"files": len(files), "bytes": sum(path.stat().st_size for path in files),
+            "median_ms": summary["median_us"], "p99_ms": summary["p99_us"],
+            "revenue_total": round(revenue, 2), "trips_total": trips}
 
 
 WORKLOAD_FUNCTIONS = {"W1": workload_w1, "W2": workload_w2, "W3": workload_w3, "W4": workload_w4}
@@ -472,7 +541,8 @@ def orchestrate(arguments):
     combined = {"dataset": "NYC TLC Yellow Taxi, January 2024, first 1,000,000 rows", "runs": []}
     scratch = Path(arguments.scratch)
     for workload in arguments.workloads.split(","):
-        for engine in arguments.engines.split(","):
+        engines = arguments.engines.split(",") if arguments.engines else ENGINES_BY_WORKLOAD[workload]
+        for engine in engines:
             result_file = scratch / f"{workload}-{engine}.json"
             if result_file.exists():
                 result_file.unlink()
@@ -532,7 +602,7 @@ def build_parser():
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run")
     run.add_argument("--workloads", default=",".join(WORKLOADS))
-    run.add_argument("--engines", default=",".join(ENGINES))
+    run.add_argument("--engines", default=None)
     run.add_argument("--out", required=True)
     run.add_argument("--scratch", default=str(CACHE_DIRECTORY / "lake-runs"))
     run.add_argument("--timeout-seconds", type=int, default=5400)

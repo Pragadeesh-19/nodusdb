@@ -1,0 +1,425 @@
+{
+  "dataset": "NYC TLC Yellow Taxi, January 2024, first 1,000,000 rows",
+  "runs": [
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "ingest_seconds": 1.1818418999901041,
+        "peak_rss_mb": 442.46875,
+        "rows": 1000000,
+        "rows_per_second": 846136.8648449283
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 2.2937931999913417,
+      "workload": "W1"
+    },
+    {
+      "engine": "duckdb",
+      "metrics": {
+        "ingest_seconds": 6.068202499998733,
+        "peak_rss_mb": 448.41015625,
+        "rows": 1000000,
+        "rows_per_second": 164793.44583510666
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 7.27768699999433,
+      "workload": "W1"
+    },
+    {
+      "engine": "pyarrow",
+      "metrics": {
+        "ingest_seconds": 8.727346500032581,
+        "peak_rss_mb": 363.51171875,
+        "rows": 1000000,
+        "rows_per_second": 114582.3647538535
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 9.779044500028249,
+      "workload": "W1"
+    },
+    {
+      "engine": "sqlite",
+      "metrics": {
+        "ingest_seconds": 10.513777200016193,
+        "peak_rss_mb": 590.96484375,
+        "rows": 1000000,
+        "rows_per_second": 95113.2957238679
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 11.63126380002359,
+      "workload": "W1"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "delete_seconds": 0.21388440002920106,
+        "deletes": 100000,
+        "deletes_per_second": 467542.2797845344,
+        "peak_rss_mb": 683.55078125,
+        "rss_mb_max": 664.55078125,
+        "rss_mb_min": 367.12890625,
+        "rss_mb_samples": [
+          367.1,
+          661.7,
+          664.6,
+          633.4,
+          633.4,
+          634.9,
+          644.1,
+          649.7,
+          649.7,
+          649.7,
+          655.6
+        ],
+        "update_seconds": 12.711377899977379,
+        "updates": 500000,
+        "upserts_per_second": 39334.83875110737
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 22.16190969996387,
+      "workload": "W2"
+    },
+    {
+      "engine": "nodus-lake-batch",
+      "metrics": {
+        "delete_seconds": 0.21955939999315888,
+        "deletes": 100000,
+        "deletes_per_second": 455457.61194062216,
+        "peak_rss_mb": 496.515625,
+        "rss_mb_max": 365.66015625,
+        "rss_mb_min": 365.66015625,
+        "rss_mb_samples": [
+          365.7
+        ],
+        "update_seconds": 0.28346559999044985,
+        "updates": 500000,
+        "upserts_per_second": 1763882.4605766814
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 3.510507900035009,
+      "workload": "W2"
+    },
+    {
+      "engine": "duckdb",
+      "metrics": {
+        "delete_seconds": 107.48533990001306,
+        "deletes": 100000,
+        "deletes_per_second": 930.3594340681603,
+        "peak_rss_mb": 511.96484375,
+        "rss_mb_max": 387.44921875,
+        "rss_mb_min": 352.9140625,
+        "rss_mb_samples": [
+          387.4,
+          352.9
+        ],
+        "update_seconds": 520.5625812999788,
+        "updates": 500000,
+        "upserts_per_second": 960.4993097109887
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 633.3292817000183,
+      "workload": "W2"
+    },
+    {
+      "engine": "pyarrow",
+      "metrics": {
+        "delete_seconds": 0.13232609996339306,
+        "deletes": 100000,
+        "deletes_per_second": 755708.813511954,
+        "peak_rss_mb": 730.09765625,
+        "rss_mb_max": 668.828125,
+        "rss_mb_min": 381.9453125,
+        "rss_mb_samples": [
+          381.9,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8,
+          668.8
+        ],
+        "update_seconds": 1.2701293000136502,
+        "updates": 500000,
+        "upserts_per_second": 393660.7083976619
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 12.095050000003539,
+      "workload": "W2"
+    },
+    {
+      "engine": "sqlite",
+      "metrics": {
+        "delete_seconds": 0.37171689997194335,
+        "deletes": 100000,
+        "deletes_per_second": 269021.9357999269,
+        "peak_rss_mb": 661.35546875,
+        "rss_mb_max": 379.38671875,
+        "rss_mb_min": 352.0703125,
+        "rss_mb_samples": [
+          379.4,
+          352.1
+        ],
+        "update_seconds": 1.9716556000057608,
+        "updates": 500000,
+        "upserts_per_second": 253593.9846687926
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 16.435384100012016,
+      "workload": "W2"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 941657.5356761721,
+        "flush_seconds": 0.26548930001445115,
+        "output_bytes": 3949322,
+        "output_files": 1,
+        "peak_rss_mb": 408.0625
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.4970392999821343,
+      "workload": "W3"
+    },
+    {
+      "engine": "nodus-lake-uncompressed",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 1339509.364129982,
+        "flush_seconds": 0.18663550005294383,
+        "output_bytes": 5398189,
+        "output_files": 1,
+        "peak_rss_mb": 403.80078125
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.3699862000066787,
+      "workload": "W3"
+    },
+    {
+      "engine": "duckdb",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 218807.02384508515,
+        "flush_seconds": 1.1425593000021763,
+        "output_bytes": 3656327,
+        "output_files": 1,
+        "peak_rss_mb": 390.6953125
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 2.702820000005886,
+      "workload": "W3"
+    },
+    {
+      "engine": "pyarrow",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 1335887.5502869887,
+        "flush_seconds": 0.1871415000059642,
+        "output_bytes": 3958003,
+        "output_files": 1,
+        "peak_rss_mb": 327.3828125
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.2701488000457175,
+      "workload": "W3"
+    },
+    {
+      "engine": "sqlite",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 2026186.4337846579,
+        "flush_seconds": 0.12338449998060241,
+        "output_bytes": 11849728,
+        "output_files": 1,
+        "peak_rss_mb": 405.59765625
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 3.7472408000030555,
+      "workload": "W3"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "peak_rss_mb": 529.9921875,
+        "sources": {
+          "nodus clean (250k-row files)": {
+            "bytes": 15708315,
+            "files": 3,
+            "median_ms": 12.772199988830835,
+            "p99_ms": 35.94979998888448,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          },
+          "nodus in-memory native, ungrouped (no files)": {
+            "bytes": 0,
+            "files": 0,
+            "median_ms": 4.009600030258298,
+            "p99_ms": 6.634299992583692,
+            "revenue_total": 27486629.1,
+            "trips_total": null
+          },
+          "nodus streaming (5k-row files)": {
+            "bytes": 16968000,
+            "files": 101,
+            "median_ms": 25.455900002270937,
+            "p99_ms": 27.028400043491274,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          }
+        }
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 5.651140299974941,
+      "workload": "W4"
+    },
+    {
+      "engine": "duckdb",
+      "metrics": {
+        "peak_rss_mb": 461.93359375,
+        "sources": {
+          "duckdb COPY parts": {
+            "bytes": 14467948,
+            "files": 4,
+            "median_ms": 13.989600003696978,
+            "p99_ms": 15.279400045983493,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          },
+          "duckdb COPY parts, ungrouped": {
+            "bytes": 14467948,
+            "files": 4,
+            "median_ms": 7.682900002691895,
+            "p99_ms": 8.420499972999096,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          }
+        }
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 7.395549899956677,
+      "workload": "W4"
+    },
+    {
+      "engine": "pyarrow",
+      "metrics": {
+        "peak_rss_mb": 374.45703125,
+        "sources": {
+          "pyarrow parts": {
+            "bytes": 15507581,
+            "files": 4,
+            "median_ms": 17.7156999707222,
+            "p99_ms": 20.955300016794354,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          }
+        }
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 10.237888099974953,
+      "workload": "W4"
+    },
+    {
+      "engine": "sqlite",
+      "metrics": {
+        "n/a": "SQLite writes a database file, not Parquet, so DuckDB cannot read its output as Parquet"
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.10046919999877,
+      "workload": "W4"
+    }
+  ]
+}
