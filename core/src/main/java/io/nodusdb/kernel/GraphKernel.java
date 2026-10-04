@@ -1,14 +1,62 @@
 package io.nodusdb.kernel;
 
-public final class GraphKernel {
+import io.nodusdb.kernel.wal.RecoveryManager;
+import io.nodusdb.kernel.wal.WalConfig;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.util.Objects;
+
+public final class GraphKernel implements AutoCloseable {
 
     private final AdjacencyTable outgoing = new AdjacencyTable();
     private final AdjacencyTable incoming = new AdjacencyTable();
     private final KHopTraversal traversal = new KHopTraversal();
+    private Persistence persistence = Persistence.NONE;
+
+    public GraphKernel() {
+    }
+
+    public static GraphKernel openInMemory() {
+        return new GraphKernel();
+    }
+
+    public static GraphKernel open(Path directory, WalConfig config) throws IOException {
+        return RecoveryManager.recover(directory, config).kernel();
+    }
+
+    public void attachPersistence(Persistence persistence) {
+        Objects.requireNonNull(persistence, "persistence");
+        if (this.persistence != Persistence.NONE) {
+            throw new IllegalStateException("a persistence store is already attached");
+        }
+        this.persistence = persistence;
+    }
+
+    public boolean isDurable() {
+        return persistence != Persistence.NONE;
+    }
+
+    public void checkpoint() {
+        persistence.checkpoint();
+    }
+
+    public void sync() {
+        persistence.sync();
+    }
+
+    @Override
+    public void close() {
+        persistence.close();
+    }
 
     public boolean addEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
+        if (outgoing.contains(u, v)) {
+            return false;
+        }
+        persistence.recordAdd(u, v);
         ensureCapacity(Math.max(u, v) + 1);
         return insert(u, v);
     }
@@ -16,6 +64,10 @@ public final class GraphKernel {
     public boolean removeEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
+        if (!outgoing.contains(u, v)) {
+            return false;
+        }
+        persistence.recordRemove(u, v);
         return delete(u, v);
     }
 
@@ -23,10 +75,19 @@ public final class GraphKernel {
         long largest = validatePairs(pairs, pairCount);
         ensureCapacity(largest + 1);
         int added = 0;
-        for (int i = 0; i < pairCount; i++) {
-            if (insert(pairs[2 * i], pairs[2 * i + 1])) {
-                added++;
+        persistence.beginBatch();
+        try {
+            for (int i = 0; i < pairCount; i++) {
+                long u = pairs[2 * i];
+                long v = pairs[2 * i + 1];
+                if (!outgoing.contains(u, v)) {
+                    persistence.recordAdd(u, v);
+                    insert(u, v);
+                    added++;
+                }
             }
+        } finally {
+            persistence.endBatch();
         }
         return added;
     }
@@ -34,10 +95,19 @@ public final class GraphKernel {
     public int removeEdges(long[] pairs, int pairCount) {
         validatePairs(pairs, pairCount);
         int removed = 0;
-        for (int i = 0; i < pairCount; i++) {
-            if (delete(pairs[2 * i], pairs[2 * i + 1])) {
-                removed++;
+        persistence.beginBatch();
+        try {
+            for (int i = 0; i < pairCount; i++) {
+                long u = pairs[2 * i];
+                long v = pairs[2 * i + 1];
+                if (outgoing.contains(u, v)) {
+                    persistence.recordRemove(u, v);
+                    delete(u, v);
+                    removed++;
+                }
             }
+        } finally {
+            persistence.endBatch();
         }
         return removed;
     }
@@ -56,6 +126,16 @@ public final class GraphKernel {
     public int getInDegree(long v) {
         NodeIds.checkValid(v);
         return incoming.degreeOf(v);
+    }
+
+    public int nodeCapacity() {
+        return outgoing.capacity();
+    }
+
+    public long outgoingNeighbor(long u, int index) {
+        NodeIds.checkValid(u);
+        Objects.checkIndex(index, outgoing.degreeOf(u));
+        return outgoing.neighborAt(u, index);
     }
 
     public int commonNeighbors(long u, long v, long[] out) {
