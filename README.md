@@ -9,7 +9,7 @@ NodusDB is an engine that runs inside your process. It has two parts, built from
 
 Neither part starts a server or makes a network call. Both keep their hot paths free of garbage collector work.
 
-The last CI run on `main` passed on Ubuntu, macOS (arm64), and Windows. That run covers the lake write path and the graph engine before durability was added. The durability work is verified locally, and its CI run is pending until it is pushed.
+The last CI run on `main` passed on Ubuntu, macOS (arm64), and Windows. It built the GraalVM native library, ran 254 Java tests and 43 Python tests against that library, and included the durability tests.
 
 ## The graph engine
 
@@ -224,7 +224,7 @@ The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. The
 - The GraalVM native library built on each system and was packaged into the Python package.
 - The Python suite ran 38 tests against the native library. Four of them exercise the lake. The fifth lake test, which reads the output with PyArrow, skipped in CI because `pyarrow` is not installed there.
 
-The durability work was verified locally on Windows:
+The durability work passed the same CI run, and it was also checked locally on Windows:
 
 - The Java suite ran 254 tests, including 22 durability tests. Those cover clean restarts, crashes in both sync modes, torn and corrupted log tails, snapshot rolls, a crash between the snapshot rename and the log reset, corrupted and truncated snapshots, the directory lock, and the no-op rules.
 - The native library built with GraalVM CE 22.0.2 and the Python suite ran 43 tests against it.
