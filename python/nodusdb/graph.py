@@ -1,6 +1,7 @@
 import array
 import ctypes
 import os
+import uuid
 
 from . import _native
 from ._native import NodusError
@@ -8,12 +9,18 @@ from ._native import NodusError
 MAX_NODE_ID = 2**31 - 10
 DEFAULT_RESULT_CAPACITY = 1 << 16
 ERROR = -1
+LOOKUP_ABSENT = -1
+LOOKUP_ERROR = -2
 SYNC_MODES = {"async": 0, "sync": 1}
+KIND_UNSET = 0
+KIND_INTEGER = 1
+KIND_STRING = 2
+KIND_NAMES = {KIND_UNSET: "no keys yet", KIND_INTEGER: "integer keys", KIND_STRING: "string keys"}
 
 
 def _check_node(node):
     if not isinstance(node, int) or isinstance(node, bool):
-        raise TypeError(f"node id must be an int, got {type(node).__name__}")
+        raise TypeError(f"node key must be an int, str, or UUID, got {type(node).__name__}")
     if node < 0 or node > MAX_NODE_ID:
         raise ValueError(f"node id out of range [0, {MAX_NODE_ID}]: {node}")
     return node
@@ -25,6 +32,14 @@ def _check_depth(depth):
     if depth < 0 or depth > 2**31 - 1:
         raise ValueError(f"max_depth out of range: {depth}")
     return depth
+
+
+def _encode(key):
+    if isinstance(key, uuid.UUID):
+        key = str(key)
+    if isinstance(key, str):
+        return KIND_STRING, key.encode("utf-8")
+    return KIND_INTEGER, _check_node(key)
 
 
 def _column(values):
@@ -55,6 +70,10 @@ def _int64_pointer(column):
     return (ctypes.c_int64 * len(column)).from_buffer(column)
 
 
+def _int32_pointer(column):
+    return (ctypes.c_int32 * len(column)).from_buffer(column)
+
+
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async"):
         self._lib, self._thread = _native.load(library_path)
@@ -62,6 +81,9 @@ class Graph:
         self._handle = self._open(path, sync_mode)
         if not self._handle:
             raise NodusError("failed to create graph handle")
+        self._kind = self._lib.nodus_key_kind(self._thread, self._handle)
+        if self._kind < 0:
+            raise NodusError("could not read the graph's key kind")
         self._buffer = (ctypes.c_int64 * result_capacity)()
 
     def _open(self, path, sync_mode):
@@ -84,6 +106,20 @@ class Graph:
         lib.nodus_checkpoint.argtypes = [thread, handle]
         lib.nodus_sync.restype = ctypes.c_int
         lib.nodus_sync.argtypes = [thread, handle]
+        lib.nodus_key_kind.restype = ctypes.c_int
+        lib.nodus_key_kind.argtypes = [thread, handle]
+        lib.nodus_claim_key_kind.restype = ctypes.c_int
+        lib.nodus_claim_key_kind.argtypes = [thread, handle, ctypes.c_int]
+        lib.nodus_intern.restype = ctypes.c_int64
+        lib.nodus_intern.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int]
+        lib.nodus_lookup.restype = ctypes.c_int64
+        lib.nodus_lookup.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int]
+        lib.nodus_resolve.restype = ctypes.c_int
+        lib.nodus_resolve.argtypes = [thread, handle, node, ctypes.c_void_p, ctypes.c_int]
+        lib.nodus_add_string_edges_batch.restype = ctypes.c_int
+        lib.nodus_add_string_edges_batch.argtypes = [
+            thread, handle, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_int,
+        ]
         for name in ("nodus_add_edge", "nodus_remove_edge", "nodus_has_edge"):
             function = getattr(lib, name)
             function.restype = ctypes.c_int
@@ -129,45 +165,160 @@ class Graph:
         return self._handle
 
     def add_edge(self, u, v):
-        return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), _check_node(u), _check_node(v)))
+        if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
+            return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), u, v))
+        first, second = self._write_ids((u, v))
+        return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), first, second))
 
     def remove_edge(self, u, v):
-        return bool(self._lib.nodus_remove_edge(self._thread, self._require_open(), _check_node(u), _check_node(v)))
+        if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
+            return bool(self._lib.nodus_remove_edge(self._thread, self._require_open(), u, v))
+        ids = self._read_ids((u, v))
+        if ids is None:
+            return False
+        return bool(self._lib.nodus_remove_edge(self._thread, self._require_open(), ids[0], ids[1]))
 
     def add_edges_from(self, edges):
-        return self._batch(self._lib.nodus_add_edges_batch, edges, "add_edges_from")
+        items = edges if isinstance(edges, (list, tuple, array.array)) else list(edges)
+        if len(items) and _is_string_pair(items[0]):
+            return self._add_string_edges(items)
+        if len(items):
+            self._claim(KIND_INTEGER)
+        return self._batch(self._lib.nodus_add_edges_batch, items, "add_edges_from")
 
     def remove_edges_from(self, edges):
-        return self._batch(self._lib.nodus_remove_edges_batch, edges, "remove_edges_from")
+        items = edges if isinstance(edges, (list, tuple, array.array)) else list(edges)
+        if len(items) and _is_string_pair(items[0]):
+            ids = [self._read_ids(pair) for pair in items]
+            items = [pair for pair in ids if pair is not None]
+        return self._batch(self._lib.nodus_remove_edges_batch, items, "remove_edges_from")
 
     def has_edge(self, u, v):
-        return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), _check_node(u), _check_node(v)))
+        if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
+            return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), u, v))
+        ids = self._read_ids((u, v))
+        if ids is None:
+            return False
+        return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), ids[0], ids[1]))
 
     def degree(self, u):
-        result = self._lib.nodus_degree(self._thread, self._require_open(), _check_node(u))
+        ids = self._read_ids((u,))
+        if ids is None:
+            return 0
+        result = self._lib.nodus_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "degree")
 
     def in_degree(self, v):
-        result = self._lib.nodus_in_degree(self._thread, self._require_open(), _check_node(v))
+        ids = self._read_ids((v,))
+        if ids is None:
+            return 0
+        result = self._lib.nodus_in_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "in_degree")
 
     def common_neighbors(self, u, v):
-        _check_node(u)
-        _check_node(v)
-        return self._collect(
+        ids = self._read_ids((u, v))
+        if ids is None:
+            return []
+        found = self._collect(
             lambda buffer, capacity: self._lib.nodus_common_neighbors(
-                self._thread, self._require_open(), u, v, buffer, capacity),
+                self._thread, self._require_open(), ids[0], ids[1], buffer, capacity),
             "common_neighbors",
         )
+        return self._to_keys(found)
 
     def khop(self, start, max_depth):
-        _check_node(start)
         _check_depth(max_depth)
-        return self._collect(
+        ids = self._read_ids((start,))
+        if ids is None:
+            return []
+        found = self._collect(
             lambda buffer, capacity: self._lib.nodus_khop(
-                self._thread, self._require_open(), start, max_depth, buffer, capacity),
+                self._thread, self._require_open(), ids[0], max_depth, buffer, capacity),
             "khop",
         )
+        return self._to_keys(found)
+
+    def _write_ids(self, keys):
+        encoded = [_encode(key) for key in keys]
+        kinds = {kind for kind, _ in encoded}
+        if len(kinds) > 1:
+            raise TypeError("an edge must use one kind of node key, not a mix of integers and strings")
+        kind = kinds.pop()
+        self._claim(kind)
+        if kind == KIND_INTEGER:
+            return [value for _, value in encoded]
+        return [self._intern(value) for _, value in encoded]
+
+    def _read_ids(self, keys):
+        encoded = [_encode(key) for key in keys]
+        kinds = {kind for kind, _ in encoded}
+        if len(kinds) > 1:
+            raise TypeError("an edge must use one kind of node key, not a mix of integers and strings")
+        kind = kinds.pop()
+        if self._kind not in (KIND_UNSET, kind):
+            raise TypeError(f"this graph uses {KIND_NAMES[self._kind]}; got {KIND_NAMES[kind]}")
+        if kind == KIND_INTEGER:
+            return [value for _, value in encoded]
+        if self._kind == KIND_UNSET:
+            return None
+        ids = [self._lookup(value) for _, value in encoded]
+        if any(identifier == LOOKUP_ABSENT for identifier in ids):
+            return None
+        return ids
+
+    def _claim(self, kind):
+        if self._kind == kind:
+            return
+        current = self._lib.nodus_claim_key_kind(self._thread, self._require_open(), kind)
+        if current < 0:
+            raise NodusError("could not record the graph's key kind")
+        self._kind = current
+        if current != kind:
+            raise TypeError(f"this graph uses {KIND_NAMES[current]}; got {KIND_NAMES[kind]}")
+
+    def _intern(self, value):
+        identifier = self._lib.nodus_intern(self._thread, self._require_open(), value, len(value))
+        if identifier < 0:
+            raise NodusError("string interning failed")
+        return identifier
+
+    def _lookup(self, value):
+        identifier = self._lib.nodus_lookup(self._thread, self._require_open(), value, len(value))
+        if identifier == LOOKUP_ERROR:
+            raise NodusError("string lookup failed")
+        return identifier
+
+    def _to_keys(self, identifiers):
+        if self._kind != KIND_STRING:
+            return identifiers
+        return [self._resolve(identifier) for identifier in identifiers]
+
+    def _resolve(self, identifier):
+        buffer = ctypes.create_string_buffer(64)
+        length = self._lib.nodus_resolve(self._thread, self._require_open(), identifier, buffer, len(buffer))
+        if length < 0:
+            raise NodusError(f"no string is stored for id {identifier}")
+        if length > len(buffer):
+            buffer = ctypes.create_string_buffer(length)
+            length = self._lib.nodus_resolve(self._thread, self._require_open(), identifier, buffer, len(buffer))
+        return buffer.raw[:length].decode("utf-8")
+
+    def _add_string_edges(self, pairs):
+        encoded = []
+        for pair in pairs:
+            if not _is_string_pair(pair):
+                raise TypeError("edges must not mix integer and string node keys")
+            encoded.extend(_encode(key) for key in pair)
+        if any(kind != KIND_STRING for kind, _ in encoded):
+            raise TypeError("edges must not mix integer and string node keys")
+        self._claim(KIND_STRING)
+        values = [value for _, value in encoded]
+        lengths = array.array("i", [len(value) for value in values])
+        blob = b"".join(values)
+        result = self._lib.nodus_add_string_edges_batch(
+            self._thread, self._require_open(), blob, _int32_pointer(lengths), len(pairs),
+        )
+        return self._checked(result, "add_edges_from")
 
     def _batch(self, function, edges, operation):
         sources, targets = _edge_columns(edges)
@@ -190,3 +341,12 @@ class Graph:
         if result == ERROR:
             raise NodusError(f"{operation} failed inside the native kernel")
         return result
+
+
+def _is_node(value):
+    return type(value) is int and 0 <= value <= MAX_NODE_ID
+
+
+def _is_string_pair(item):
+    return isinstance(item, (tuple, list)) and len(item) == 2 and all(
+        isinstance(key, (str, uuid.UUID)) for key in item)

@@ -86,6 +86,7 @@ class GraphTest(unittest.TestCase):
             self.graph.add_edge(-1, 2)
         with self.assertRaises(ValueError):
             self.graph.has_edge(2**31, 0)
+        self.graph.add_edge(1, 2)
         with self.assertRaises(TypeError):
             self.graph.degree("7")
         with self.assertRaises(TypeError):
