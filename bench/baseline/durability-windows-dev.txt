@@ -1,0 +1,51 @@
+# Durability baseline: windows-dev
+
+Dataset: SNAP soc-Pokec, 30,622,564 directed edges (https://snap.stanford.edu/data/soc-pokec-relationships.txt.gz).
+Machine: see bench/baseline/MACHINE.md (AMD Ryzen 7 5700U, Windows 11, 7.3 GB RAM).
+Heap: -Xmx6g for every phase. Each phase runs in its own JVM.
+
+Commands, in order:
+
+    java -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark prepare <work> soc-pokec-relationships.txt.gz
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark memory <work>
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark durable-async <work>
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark recover <work>
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark durable-sync-batch <work>
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark recover <work> durable-sync-batch
+    java -Xmx6g -cp bench/benchmarks.jar io.nodusdb.kernel.wal.DurabilityBenchmark single-call <work>
+
+Digests are FNV-style hashes of every node's out-degree and in-degree, plus the sorted 3-hop reach of 300
+sampled start nodes. The recovered digests must match the pre-crash digests.
+
+## memory
+RESULT phase=memory metric=ingest edges=30622564 seconds=24.453 edges-per-second=1252289
+RESULT phase=memory removed=1500000
+DIGEST phase=memory value=730f6e469d5f6560
+
+## durable-async
+RESULT phase=durable-async metric=ingest edges=30622564 seconds=27.518 edges-per-second=1112830
+RESULT phase=durable-async metric=remove-head edges=1000000 seconds=1.359 edges-per-second=735853
+RESULT phase=durable-async metric=checkpoint seconds=5.592 snapshot-bytes=250041176
+RESULT phase=durable-async metric=remove-tail edges=500000 seconds=0.719 edges-per-second=695459
+DIGEST phase=durable-async-before-crash value=730f6e469d5f6560
+
+## recover (directory durable-async, fresh process)
+RESULT phase=recover metric=recovery seconds=21.998 frames-replayed=500000 truncated-bytes=0
+DIGEST phase=recover value=730f6e469d5f6560
+
+## durable-sync-batch
+
+The in-process cold open is not recorded here. It shared a heap with the live graph, so its timing reflects
+garbage collection, not recovery. The recover section below measures it in a fresh process.
+RESULT phase=durable-sync-batch metric=ingest edges=30622564 seconds=26.234 edges-per-second=1167272
+RESULT phase=durable-sync-batch metric=checkpoint seconds=3.657
+DIGEST phase=durable-sync-batch-before-close value=c7719033e4ce8e0f
+
+## recover (directory durable-sync-batch, fresh process)
+RESULT phase=recover metric=recovery seconds=22.345 frames-replayed=0 truncated-bytes=0
+DIGEST phase=recover value=c7719033e4ce8e0f
+
+## single-call
+RESULT phase=single-call metric=sync-per-call edges=5000 edges-per-second=203 median-us=3631.9 p99-us=34225.8
+RESULT phase=single-call metric=async-per-call edges=1000000 seconds=0.687 edges-per-second=1454562
+
