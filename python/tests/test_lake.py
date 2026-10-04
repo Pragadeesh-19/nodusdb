@@ -16,8 +16,10 @@ from nodusdb import LakeTable, NodusError, find_library, key_hash  # noqa: E402
 from nodusdb import lake as lake_module  # noqa: E402
 
 try:
+    import pyarrow as pa
     import pyarrow.parquet as pq
 except ImportError:
+    pa = None
     pq = None
 
 def _native_has_lake_exports():
@@ -134,9 +136,124 @@ class LakeNativeTest(unittest.TestCase):
             self.assertEqual(statuses[index], want["status"])
             self.assertEqual(labels[index], want["label"])
 
+    @unittest.skipIf(pq is None, "pyarrow is required for the independent Parquet read")
+    def test_uncompressed_files_read_back_with_pyarrow(self):
+        with LakeTable(self.directory, SCHEMA, flush_rows=1 << 20, compression="none") as table:
+            table.upsert_table(_arrow_table(1_000), "id")
+            table.flush()
+
+        data_file = glob.glob(os.path.join(self.directory, "data-*.parquet"))[0]
+        self.assertEqual(pq.ParquetFile(data_file).metadata.row_group(0).column(0).compression, "UNCOMPRESSED")
+        read_back = pq.read_table(data_file)
+        self.assertEqual(read_back.column("amount").to_pylist()[10], 10 * 3 - 7)
+        self.assertEqual(read_back.column("label").to_pylist()[1], "alpha")
+
+    def test_unknown_compression_is_rejected_before_opening(self):
+        with self.assertRaises(ValueError):
+            LakeTable(self.directory, SCHEMA, compression="zstd")
+
     def test_invalid_schema_is_rejected_by_native_open(self):
         with self.assertRaises(NodusError):
             LakeTable(self.directory, {"bad name": "int64"})
+
+    @unittest.skipIf(pa is None, "pyarrow is required for columnar batches")
+    def test_columnar_batch_matches_row_upserts(self):
+        count = 20_000
+        table = _arrow_table(count)
+        rows = table.to_pylist()
+        by_row = os.path.join(self.directory, "by-row")
+        by_column = os.path.join(self.directory, "by-column")
+        with LakeTable(by_row, SCHEMA) as row_table, LakeTable(by_column, SCHEMA) as column_table:
+            self.assertEqual(row_table.upsert_from((row["id"], _row_values(row)) for row in rows), count)
+            self.assertEqual(column_table.upsert_table(table, "id"), count)
+            for key in (1, 2, 500, 19_999, count):
+                self.assertEqual(column_table.get(key), row_table.get(key))
+            self.assertEqual(column_table.sum("amount"), row_table.sum("amount"))
+            self.assertAlmostEqual(column_table.average("score"), row_table.average("score"))
+
+    @unittest.skipIf(pa is None, "pyarrow is required for columnar batches")
+    def test_columnar_batch_rejects_nulls_and_wrong_types_without_writing(self):
+        batch = _arrow_table(3).to_batches()[0]
+        with LakeTable(self.directory, SCHEMA) as lake:
+            with self.assertRaises(ValueError):
+                lake.upsert_columns(pa.array([1, None, 3], pa.int64()), _columns(batch))
+            with self.assertRaises(TypeError):
+                lake.upsert_columns(batch.column("id"), {**_columns(batch), "amount": batch.column("status")})
+            self.assertIsNone(lake.get(1))
+
+    @unittest.skipIf(pa is None, "pyarrow is required for columnar batches")
+    def test_sliced_arrays_respect_their_offsets(self):
+        window = _arrow_table(10).slice(4, 3)
+        with LakeTable(self.directory, SCHEMA) as lake:
+            self.assertEqual(lake.upsert_table(window, "id"), 3)
+            self.assertEqual(lake.get(5)["label"], "alpha")
+            self.assertEqual(lake.get(6)["amount"], 5 * 3 - 7)
+            self.assertIsNone(lake.get(4))
+            self.assertIsNone(lake.get(8))
+
+    def test_sum_and_average_cover_rows_in_the_active_buffer(self):
+        with LakeTable(self.directory, SCHEMA, flush_rows=1 << 20) as table:
+            self.assertIsNone(table.average("score"))
+            for key in range(1, 101):
+                table.upsert(key, {"amount": key, "score": float(key), "status": 1, "label": "x"})
+            table.delete(5)
+            self.assertEqual(table.sum("amount"), sum(range(1, 101)) - 5)
+            self.assertAlmostEqual(table.average("score"), (sum(range(1, 101)) - 5) / 99)
+            with self.assertRaises(TypeError):
+                table.sum("label")
+
+    @unittest.skipIf(pq is None, "pyarrow is required for the independent Parquet read")
+    def test_pyarrow_reads_dictionary_snappy_files_with_statistics_and_row_groups(self):
+        count = 300_000
+        source = _arrow_table(count)
+        with LakeTable(self.directory, SCHEMA, flush_rows=1 << 20) as table:
+            table.upsert_table(source, "id")
+            table.flush()
+
+        data_file = glob.glob(os.path.join(self.directory, "data-*.parquet"))[0]
+        parquet = pq.ParquetFile(data_file)
+        self.assertEqual(parquet.metadata.num_row_groups, 3)
+        first_group = parquet.metadata.row_group(0)
+        label_column = first_group.column(4)
+        self.assertEqual(label_column.compression, "SNAPPY")
+        self.assertIn("RLE_DICTIONARY", label_column.encodings)
+        labels = source.column("label").to_pylist()
+        self.assertTrue(label_column.statistics.has_min_max)
+        self.assertEqual(label_column.statistics.min, min(labels[:122_880]))
+        self.assertEqual(label_column.statistics.max, max(labels[:122_880]))
+        amount_column = first_group.column(1)
+        self.assertTrue(amount_column.statistics.has_min_max)
+        self.assertEqual(amount_column.statistics.min, -7)
+
+        read_back = pq.read_table(data_file)
+        self.assertEqual(read_back.num_rows, count)
+        keys = read_back.column("key_hash").to_pylist()
+        amounts = read_back.column("amount").to_pylist()
+        read_labels = read_back.column("label").to_pylist()
+        for index in (0, 1, 122_879, 122_880, count - 1):
+            key = keys[index]
+            self.assertEqual(amounts[index], (key - 1) * 3 - 7)
+            self.assertEqual(read_labels[index], labels[key - 1])
+
+
+def _arrow_table(count):
+    ids = range(1, count + 1)
+    return pa.table({
+        "id": pa.array(ids, pa.int64()),
+        "amount": pa.array([i * 3 - 7 for i in range(count)], pa.int64()),
+        "score": pa.array([i * 0.5 for i in range(count)], pa.float64()),
+        "status": pa.array([i % 9 for i in range(count)], pa.int32()),
+        "label": pa.array([f"label-{i}" if i % 3 == 0 else ("alpha" if i % 3 == 1 else "gamma")
+                           for i in range(count)], pa.string()),
+    })
+
+
+def _columns(batch):
+    return {name: batch.column(name) for name in SCHEMA}
+
+
+def _row_values(row):
+    return {name: row[name] for name in SCHEMA}
 
 
 if __name__ == "__main__":

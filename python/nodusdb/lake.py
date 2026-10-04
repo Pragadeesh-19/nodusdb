@@ -13,9 +13,13 @@ INITIAL_VAR_BYTES = 1 << 12
 BATCH_ROWS = 1 << 16
 
 _JAVA_TYPES = {"int64": "INT64", "float64": "DOUBLE", "int32": "INT32", "utf8": "UTF8"}
+_ARROW_TYPES = {"int64": "int64", "float64": "double", "int32": "int32"}
 _GET_ABSENT = 0
 _GET_FOUND = 1
 _GET_BUFFER_TOO_SMALL = 2
+_AGGREGATE_EMPTY = 0
+_AGGREGATE_VALUE = 1
+_CODEC_IDS = {"none": 0, "snappy": 1}
 
 _bound = set()
 
@@ -45,7 +49,7 @@ def _bind(library):
     library.nodus_lake_open.restype = handle
     library.nodus_lake_open.argtypes = [
         thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int,
-        ctypes.c_int, ctypes.c_int, ctypes.c_int64,
+        ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int,
     ]
     library.nodus_lake_close.restype = ctypes.c_bool
     library.nodus_lake_close.argtypes = [thread, handle]
@@ -68,6 +72,15 @@ def _bind(library):
         thread, handle, ctypes.c_int64, int64_pointer, int32_pointer,
         ctypes.c_char_p, ctypes.c_int64, int32_pointer,
     ]
+    library.nodus_lake_upsert_columns.restype = ctypes.c_int64
+    library.nodus_lake_upsert_columns.argtypes = [
+        thread, handle, ctypes.c_int64, ctypes.c_void_p,
+        ctypes.c_int32, ctypes.c_void_p, ctypes.c_int32, ctypes.c_void_p,
+        ctypes.c_int32, ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    for aggregate in (library.nodus_lake_sum, library.nodus_lake_avg):
+        aggregate.restype = ctypes.c_int
+        aggregate.argtypes = [thread, handle, ctypes.c_int32, ctypes.c_void_p]
     _bound.add(id(library))
 
 
@@ -103,9 +116,40 @@ def _float_from_bits(bits):
     return struct.unpack("<d", struct.pack("<q", bits))[0]
 
 
+def _fixed_column(name, array, arrow_type, width):
+    if str(array.type) != arrow_type:
+        raise TypeError(f"column {name} must be Arrow {arrow_type}, not {array.type}")
+    if array.null_count:
+        raise ValueError(f"column {name} has nulls, which the columnar path does not accept")
+    if len(array) == 0:
+        return 0, 0
+    return len(array), array.buffers()[1].address + array.offset * width
+
+
+def _string_column(name, array):
+    if str(array.type) != "string":
+        raise TypeError(f"column {name} must be Arrow string, not {array.type}")
+    if array.null_count:
+        raise ValueError(f"column {name} has nulls, which the columnar path does not accept")
+    if len(array) == 0:
+        return 0, 0, 0
+    offsets, data = array.buffers()[1], array.buffers()[2]
+    return len(array), offsets.address + array.offset * 4, data.address if data is not None else 0
+
+
+def _require_rows(name, length, expected):
+    if length != expected:
+        raise ValueError(f"column {name} has {length} rows, the key column has {expected}")
+
+
+def _address_table(addresses):
+    table = (ctypes.c_int64 * max(1, len(addresses)))(*addresses)
+    return table, ctypes.addressof(table)
+
+
 class LakeTable:
     def __init__(self, path, schema, *, flush_rows=1 << 20, max_slab_bytes=1 << 26,
-                 flush_interval=None, library_path=None):
+                 flush_interval=None, compression="snappy", library_path=None):
         self._fields = _validate_schema(schema)
         self._long_fields = [(n, t) for n, t in self._fields if t in ("int64", "float64")]
         self._int_fields = [(n, t) for n, t in self._fields if t == "int32"]
@@ -115,6 +159,8 @@ class LakeTable:
         if flush_interval is not None and flush_interval <= 0:
             raise ValueError("flush_interval must be positive seconds")
         interval_millis = 0 if flush_interval is None else max(1, round(flush_interval * 1000))
+        if compression not in _CODEC_IDS:
+            raise ValueError(f"compression must be one of {sorted(_CODEC_IDS)}, not {compression!r}")
 
         self._lib, self._thread = _native.load(library_path)
         _bind(self._lib)
@@ -122,7 +168,7 @@ class LakeTable:
         location = os.fsencode(os.fspath(path))
         handle = self._lib.nodus_lake_open(
             self._thread, spec, len(spec), location, len(location),
-            flush_rows, max_slab_bytes, interval_millis,
+            flush_rows, max_slab_bytes, interval_millis, _CODEC_IDS[compression],
         )
         if not handle:
             raise NodusError(f"could not open lake table at {os.fspath(path)}")
@@ -150,9 +196,80 @@ class LakeTable:
             written += self._upsert_chunk(pending)
         return written
 
+    def upsert_columns(self, keys, columns):
+        if set(columns) != {name for name, _ in self._fields}:
+            raise ValueError(f"columns must be exactly {[name for name, _ in self._fields]}")
+        key_rows, key_address = _fixed_column("key", keys, "int64", 8)
+        if key_rows == 0:
+            return 0
+        long_addresses = []
+        for name, kind in self._long_fields:
+            length, address = _fixed_column(name, columns[name], _ARROW_TYPES[kind], 8)
+            _require_rows(name, length, key_rows)
+            long_addresses.append(address)
+        int_addresses = []
+        for name, _ in self._int_fields:
+            length, address = _fixed_column(name, columns[name], _ARROW_TYPES["int32"], 4)
+            _require_rows(name, length, key_rows)
+            int_addresses.append(address)
+        offset_addresses = []
+        data_addresses = []
+        for name, _ in self._var_fields:
+            length, offset_address, data_address = _string_column(name, columns[name])
+            _require_rows(name, length, key_rows)
+            offset_addresses.append(offset_address)
+            data_addresses.append(data_address)
+        long_table, long_ptr = _address_table(long_addresses)
+        int_table, int_ptr = _address_table(int_addresses)
+        offset_table, offset_ptr = _address_table(offset_addresses)
+        data_table, data_ptr = _address_table(data_addresses)
+        applied = self._lib.nodus_lake_upsert_columns(
+            self._thread, self._handle, key_rows, key_address,
+            len(long_addresses), long_ptr, len(int_addresses), int_ptr,
+            len(offset_addresses), offset_ptr, data_ptr,
+        )
+        if applied < 0:
+            raise NodusError("lake columnar upsert failed; no rows were applied")
+        return applied
+
+    def upsert_table(self, table, key="id"):
+        batches = table.to_batches() if hasattr(table, "to_batches") else [table]
+        applied = 0
+        for batch in batches:
+            columns = {name: batch.column(name) for name, _ in self._fields}
+            applied += self.upsert_columns(batch.column(key), columns)
+        return applied
+
+    def sum(self, name):
+        out = ctypes.c_double()
+        status = self._lib.nodus_lake_sum(self._thread, self._handle, self._numeric_index(name),
+                                          ctypes.addressof(out))
+        if status != _AGGREGATE_VALUE:
+            raise NodusError("lake sum failed")
+        return out.value
+
+    def average(self, name):
+        out = ctypes.c_double()
+        status = self._lib.nodus_lake_avg(self._thread, self._handle, self._numeric_index(name),
+                                          ctypes.addressof(out))
+        if status == _AGGREGATE_EMPTY:
+            return None
+        if status != _AGGREGATE_VALUE:
+            raise NodusError("lake average failed")
+        return out.value
+
     def delete(self, key):
         if not self._lib.nodus_lake_delete(self._thread, self._handle, key_hash(key)):
             raise NodusError("lake delete failed")
+
+    def _numeric_index(self, name):
+        names = [field_name for field_name, _ in self._fields]
+        if name not in names:
+            raise KeyError(f"unknown column {name!r}")
+        index = names.index(name)
+        if self._fields[index][1] == "utf8":
+            raise TypeError(f"column {name} is text; sum and average need a number")
+        return index
 
     def get(self, key):
         keyed = key_hash(key)
