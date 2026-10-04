@@ -1,5 +1,6 @@
 import array
 import ctypes
+import os
 
 from . import _native
 from ._native import NodusError
@@ -7,6 +8,7 @@ from ._native import NodusError
 MAX_NODE_ID = 2**31 - 10
 DEFAULT_RESULT_CAPACITY = 1 << 16
 ERROR = -1
+SYNC_MODES = {"async": 0, "sync": 1}
 
 
 def _check_node(node):
@@ -54,21 +56,32 @@ def _int64_pointer(column):
 
 
 class Graph:
-    def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY):
+    def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async"):
         self._lib, self._thread = _native.load(library_path)
         self._bind_signatures()
-        self._handle = self._lib.nodus_create(self._thread)
+        self._handle = self._open(path, sync_mode)
         if not self._handle:
             raise NodusError("failed to create graph handle")
         self._buffer = (ctypes.c_int64 * result_capacity)()
+
+    def _open(self, path, sync_mode):
+        if path is None:
+            return self._lib.nodus_create(self._thread)
+        if sync_mode not in SYNC_MODES:
+            raise ValueError(f"sync_mode must be 'async' or 'sync', got {sync_mode!r}")
+        return self._lib.nodus_open_durable(self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode])
 
     def _bind_signatures(self):
         lib = self._lib
         thread, handle, node = _native.THREAD, _native.HANDLE, _native.NODE
         lib.nodus_create.restype = _native.HANDLE
         lib.nodus_create.argtypes = [thread]
-        lib.nodus_destroy.restype = None
+        lib.nodus_destroy.restype = ctypes.c_int
         lib.nodus_destroy.argtypes = [thread, handle]
+        lib.nodus_open_durable.restype = _native.HANDLE
+        lib.nodus_open_durable.argtypes = [thread, ctypes.c_char_p, ctypes.c_int]
+        lib.nodus_checkpoint.restype = ctypes.c_int
+        lib.nodus_checkpoint.argtypes = [thread, handle]
         for name in ("nodus_add_edge", "nodus_remove_edge", "nodus_has_edge"):
             function = getattr(lib, name)
             function.restype = ctypes.c_int
@@ -86,9 +99,15 @@ class Graph:
         lib.nodus_khop.restype = ctypes.c_int
         lib.nodus_khop.argtypes = [thread, handle, node, ctypes.c_int, _native.RESULT_BUFFER, ctypes.c_int]
 
+    def checkpoint(self):
+        self._require_open()
+        if self._lib.nodus_checkpoint(self._thread, self._handle) != 0:
+            raise NodusError("checkpoint failed; the graph is not durable up to this point")
+
     def close(self):
         if self._handle:
-            self._lib.nodus_destroy(self._thread, self._handle)
+            if self._lib.nodus_destroy(self._thread, self._handle) != 0:
+                raise NodusError("graph close failed; the final checkpoint did not complete")
             self._handle = None
 
     def __enter__(self):

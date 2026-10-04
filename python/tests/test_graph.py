@@ -130,8 +130,9 @@ class CAbiBoundaryTest(unittest.TestCase):
 
     def test_double_destroy_is_contained(self):
         handle = self.graph._handle
-        self.lib.nodus_destroy(self.thread, handle)
-        self.lib.nodus_destroy(self.thread, handle)
+        self.assertEqual(0, self.lib.nodus_destroy(self.thread, handle))
+        self.assertEqual(-1, self.lib.nodus_destroy(self.thread, handle))
+        self.graph._handle = None
 
         self.assertEqual(0, self.lib.nodus_has_edge(self.thread, handle, 1, 2))
 

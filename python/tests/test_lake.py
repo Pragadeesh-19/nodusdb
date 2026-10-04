@@ -109,7 +109,7 @@ class LakeNativeTest(unittest.TestCase):
             rows = []
             for i in range(100_000):
                 label = f"row-{i}-{'é' if i % 3 == 0 else 'x'}"
-                score = struct.unpack("<d", struct.pack("<q", (i * 0x9E3779B97F4A7C15) & (2**64 - 1)))[0] \
+                score = struct.unpack("<d", struct.pack("<Q", (i * 0x9E3779B97F4A7C15) & (2**64 - 1)))[0] \
                     if i % 1000 else float("nan")
                 row = {"amount": i - 50_000, "score": score, "status": i % 7, "label": label}
                 expected[i + 1] = row
