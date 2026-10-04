@@ -1,6 +1,7 @@
 name: wheels
 
 on:
+  push:
   release:
     types: [published]
   workflow_dispatch:
@@ -103,6 +104,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.21.3
         with:
           package-dir: python
+          output-dir: dist
         env:
           CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32 pp*"
@@ -113,13 +115,13 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.tag }}
-          path: wheelhouse/*.whl
+          path: dist/*.whl
           if-no-files-found: error
 
   publish:
     name: publish to PyPI
     needs: wheels
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -132,7 +134,26 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - name: Check for a PyPI API token
+        id: token
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish with API token
+        if: steps.token.outputs.present == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          password: ${{ secrets.PYPI_API_TOKEN }}
+
       - name: Publish with trusted publishing
+        if: steps.token.outputs.present != 'true' && github.event_name == 'release'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
