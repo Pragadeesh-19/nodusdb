@@ -3,14 +3,27 @@ package io.nodusdb.capi;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.OutputBufferTooSmallException;
 
-public final class GraphSession {
+public final class GraphSession implements AutoCloseable {
 
     private static final int INITIAL_RESULT_CAPACITY = 64;
     private static final int MAX_BATCH_PAIRS = Integer.MAX_VALUE / 4;
 
-    private final GraphKernel kernel = new GraphKernel();
+    private final GraphKernel kernel;
     private long[] results = new long[INITIAL_RESULT_CAPACITY];
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
+
+    public GraphSession(GraphKernel kernel) {
+        this.kernel = kernel;
+    }
+
+    public void checkpoint() {
+        kernel.checkpoint();
+    }
+
+    @Override
+    public void close() {
+        kernel.close();
+    }
 
     public boolean addEdge(long u, long v) {
         return kernel.addEdge(u, v);

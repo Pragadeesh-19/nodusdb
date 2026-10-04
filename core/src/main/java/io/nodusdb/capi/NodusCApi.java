@@ -1,14 +1,22 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.kernel.wal.SyncMode;
+import io.nodusdb.kernel.wal.WalConfig;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
+import org.graalvm.nativeimage.c.type.CCharPointer;
 import org.graalvm.nativeimage.c.type.CLongPointer;
 import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.WordFactory;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+
 public final class NodusCApi {
 
     private static final int ERROR = -1;
+    private static final int MAX_PATH_BYTES = 32_768;
     private static final GraphSessions SESSIONS = new GraphSessions();
 
     private NodusCApi() {
@@ -24,12 +32,48 @@ public final class NodusCApi {
     }
 
     @CEntryPoint(name = "nodus_destroy")
-    public static void destroy(IsolateThread thread, VoidPointer handle) {
+    public static int destroy(IsolateThread thread, VoidPointer handle) {
         try {
             SESSIONS.close(handle.rawValue());
+            return 0;
         } catch (RuntimeException e) {
-            return;
+            return ERROR;
         }
+    }
+
+    @CEntryPoint(name = "nodus_open_durable")
+    public static VoidPointer openDurable(IsolateThread thread, CCharPointer directory, int syncMode) {
+        try {
+            WalConfig config = WalConfig.withSyncMode(SyncMode.fromCode(syncMode));
+            return WordFactory.pointer(SESSIONS.openDurable(Path.of(cString(directory)), config));
+        } catch (IOException | RuntimeException e) {
+            return WordFactory.nullPointer();
+        }
+    }
+
+    @CEntryPoint(name = "nodus_checkpoint")
+    public static int checkpoint(IsolateThread thread, VoidPointer handle) {
+        try {
+            session(handle).checkpoint();
+            return 0;
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
+    private static String cString(CCharPointer pointer) {
+        int length = 0;
+        while (pointer.read(length) != 0) {
+            length++;
+            if (length > MAX_PATH_BYTES) {
+                throw new IllegalArgumentException("path longer than " + MAX_PATH_BYTES + " bytes");
+            }
+        }
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) {
+            bytes[i] = pointer.read(i);
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
     }
 
     @CEntryPoint(name = "nodus_add_edge")

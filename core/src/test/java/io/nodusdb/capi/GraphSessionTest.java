@@ -1,5 +1,6 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.kernel.GraphKernel;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashSet;
@@ -13,7 +14,7 @@ class GraphSessionTest {
 
     @Test
     void khopResultsGrowWithoutLimit() {
-        GraphSession session = new GraphSession();
+        GraphSession session = new GraphSession(new GraphKernel());
         int leaves = 5_000;
         for (long v = 1; v <= leaves; v++) {
             session.addEdge(0L, v);
@@ -31,7 +32,7 @@ class GraphSessionTest {
 
     @Test
     void commonNeighborsResultsGrowWithoutLimit() {
-        GraphSession session = new GraphSession();
+        GraphSession session = new GraphSession(new GraphKernel());
         int shared = 1_000;
         for (long v = 0; v < shared; v++) {
             session.addEdge(0L, v);
@@ -50,7 +51,7 @@ class GraphSessionTest {
 
     @Test
     void invalidNodeIdsSurfaceAsExceptionsForTheBoundaryToCatch() {
-        GraphSession session = new GraphSession();
+        GraphSession session = new GraphSession(new GraphKernel());
 
         assertThrows(IllegalArgumentException.class, () -> session.addEdge(-1L, 0L));
         assertThrows(IllegalArgumentException.class, () -> session.khop(-1L, 2));
@@ -59,7 +60,7 @@ class GraphSessionTest {
 
     @Test
     void degreesAndDirectionAreReportedThroughTheSession() {
-        GraphSession session = new GraphSession();
+        GraphSession session = new GraphSession(new GraphKernel());
         session.addEdge(3L, 4L);
         session.addEdge(3L, 5L);
 
