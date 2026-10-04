@@ -19,6 +19,7 @@ class TornWriteRecoveryTest {
 
     private static final int NODES = 20_000;
     private static final int FRAMES = 1_000;
+    private static final int HUNDRED_THOUSAND = 100_000;
     private static final long HEADER = WalFormat.HEADER_BYTES;
     private static final long FRAME = WalFormat.FRAME_BYTES;
 
@@ -43,6 +44,30 @@ class TornWriteRecoveryTest {
             for (int i = 0; i < FRAMES; i++) {
                 assertTrue(kernel.hasEdge(pairs[2 * i], pairs[2 * i + 1]), "edge " + i + " lost");
             }
+        } finally {
+            recovery.kernel().close();
+        }
+    }
+
+    @Test
+    void hundredThousandEdgesSurviveAFourteenByteTornRecord() throws IOException {
+        long[] pairs = writeFramesThenCrash(HUNDRED_THOUSAND);
+        Path log = directory.resolve(DurableStore.LOG);
+        byte[] torn = new byte[14];
+        new Random(14L).nextBytes(torn);
+        Files.write(log, torn, StandardOpenOption.APPEND);
+
+        RecoveryManager.Recovery recovery = RecoveryManager.recover(directory, WalConfig.DEFAULT);
+        try {
+            GraphKernel kernel = recovery.kernel();
+            assertEquals(14, recovery.truncatedBytes());
+            assertEquals(HUNDRED_THOUSAND, recovery.framesApplied());
+            assertEquals(HEADER + HUNDRED_THOUSAND * FRAME, Files.size(log));
+            assertEquals(HUNDRED_THOUSAND, GraphFixtures.edgeCount(kernel, NODES));
+            for (int i = 0; i < HUNDRED_THOUSAND; i++) {
+                assertTrue(kernel.hasEdge(pairs[2 * i], pairs[2 * i + 1]), "edge " + i + " lost");
+            }
+            GraphFixtures.assertInDegreesMatchForward(kernel, NODES);
         } finally {
             recovery.kernel().close();
         }
