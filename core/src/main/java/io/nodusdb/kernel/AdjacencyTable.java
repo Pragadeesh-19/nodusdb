@@ -11,6 +11,7 @@ final class AdjacencyTable {
     private static final int NO_BLOCK = -1;
     private static final int INITIAL_NODES = 16;
     private static final long MAX_NODE_COUNT = NodeIds.MAX_NODE_ID + 1;
+    private static final long[] NO_NEIGHBORS = new long[0];
 
     private final LowDegreeSlab slab = new LowDegreeSlab();
     private int[] degrees = new int[INITIAL_NODES];
@@ -34,46 +35,64 @@ final class AdjacencyTable {
     }
 
     int degreeOf(long node) {
-        return node < degrees.length ? degrees[(int) node] : 0;
+        int[] nodeDegrees = degrees;
+        return node < nodeDegrees.length ? nodeDegrees[(int) node] : 0;
     }
 
     boolean isHighDegree(long node) {
-        return node < sets.length && sets[(int) node] != null;
+        IndexedSparseSet[] nodeSets = sets;
+        return node < nodeSets.length && nodeSets[(int) node] != null;
     }
 
     boolean contains(long node, long neighbor) {
-        if (node >= degrees.length) {
+        int[] nodeDegrees = degrees;
+        if (node >= nodeDegrees.length) {
             return false;
         }
         int n = (int) node;
-        IndexedSparseSet set = sets[n];
+        IndexedSparseSet[] nodeSets = sets;
+        if (n >= nodeSets.length) {
+            return false;
+        }
+        IndexedSparseSet set = nodeSets[n];
         if (set != null) {
             return set.contains(neighbor);
         }
-        int block = blocks[n];
-        for (int i = 0, d = degrees[n]; i < d; i++) {
-            if (slab.get(block, i) == neighbor) {
-                return true;
-            }
-        }
-        return false;
+        int[] nodeBlocks = blocks;
+        return n < nodeBlocks.length && slab.containsValue(nodeBlocks[n], nodeDegrees[n], neighbor);
     }
 
     long neighborAt(long node, int i) {
+        IndexedSparseSet[] nodeSets = sets;
+        if (node >= nodeSets.length) {
+            return NodeIds.NONE;
+        }
         int n = (int) node;
-        IndexedSparseSet set = sets[n];
-        return set != null ? set.get(i) : slab.get(blocks[n], i);
+        IndexedSparseSet set = nodeSets[n];
+        if (set != null) {
+            return set.peek(i);
+        }
+        int[] nodeBlocks = blocks;
+        return n < nodeBlocks.length ? slab.peek(nodeBlocks[n], i) : NodeIds.NONE;
     }
 
     long[] neighborArray(long node) {
-        int n = (int) node;
-        IndexedSparseSet set = sets[n];
+        IndexedSparseSet[] nodeSets = sets;
+        if (node >= nodeSets.length) {
+            return NO_NEIGHBORS;
+        }
+        IndexedSparseSet set = nodeSets[(int) node];
         return set != null ? set.denseArray() : slab.slots();
     }
 
     int neighborBase(long node) {
+        IndexedSparseSet[] nodeSets = sets;
+        int[] nodeBlocks = blocks;
+        if (node >= nodeSets.length || node >= nodeBlocks.length) {
+            return 0;
+        }
         int n = (int) node;
-        return sets[n] == null && blocks[n] != NO_BLOCK ? slab.blockBase(blocks[n]) : 0;
+        return nodeSets[n] == null && nodeBlocks[n] != NO_BLOCK ? slab.blockBase(nodeBlocks[n]) : 0;
     }
 
     boolean add(long node, long neighbor) {

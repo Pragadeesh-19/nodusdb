@@ -26,12 +26,24 @@ public final class LongIntIndex {
     }
 
     public int get(long key) {
-        int slot = slotOf(key);
-        return slot < 0 ? ABSENT : values[slot];
+        int[] table = values;
+        long[] keyTable = keys;
+        int currentMask = mask;
+        int slot = homeOf(key, currentMask);
+        for (int probes = 0; probes <= currentMask; probes++) {
+            if (slot >= table.length || slot >= keyTable.length || table[slot] == ABSENT) {
+                return ABSENT;
+            }
+            if (keyTable[slot] == key) {
+                return table[slot];
+            }
+            slot = (slot + 1) & currentMask;
+        }
+        return ABSENT;
     }
 
     public boolean containsKey(long key) {
-        return slotOf(key) >= 0;
+        return get(key) != ABSENT;
     }
 
     public void put(long key, int value) {

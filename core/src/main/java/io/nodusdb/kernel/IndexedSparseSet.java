@@ -67,7 +67,16 @@ public final class IndexedSparseSet {
 
     public int indexOf(long v) {
         int pos = index.get(v);
-        return pos != LongIntIndex.ABSENT && pos < degree && dense[pos] == v ? pos : LongIntIndex.ABSENT;
+        if (pos == LongIntIndex.ABSENT) {
+            return LongIntIndex.ABSENT;
+        }
+        long[] values = dense;
+        return pos < degree && pos < values.length && values[pos] == v ? pos : LongIntIndex.ABSENT;
+    }
+
+    long peek(int i) {
+        long[] values = dense;
+        return i >= 0 && i < degree && i < values.length ? values[i] : NodeIds.NONE;
     }
 
     public long get(int i) {

@@ -64,6 +64,34 @@ final class LowDegreeSlab {
         return slots;
     }
 
+    boolean containsValue(int block, int count, long value) {
+        if (block < 0) {
+            return false;
+        }
+        long[] table = slots;
+        int base = block << BLOCK_SHIFT;
+        int limit = Math.min(count, BLOCK_SIZE);
+        for (int i = 0; i < limit; i++) {
+            int index = base + i;
+            if (index >= table.length) {
+                return false;
+            }
+            if (table[index] == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    long peek(int block, int offset) {
+        if (block < 0 || offset < 0 || offset >= BLOCK_SIZE) {
+            return NodeIds.NONE;
+        }
+        long[] table = slots;
+        int index = (block << BLOCK_SHIFT) | offset;
+        return index < table.length ? table[index] : NodeIds.NONE;
+    }
+
     int blockBase(int block) {
         return block << BLOCK_SHIFT;
     }
