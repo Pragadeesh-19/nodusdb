@@ -97,8 +97,8 @@ All columns are `REQUIRED`, so no definition levels are written. The key column 
 
 Checked against PyArrow on a 100,000-row file with mixed integers, doubles (including NaN
 payloads), and UTF-8 strings: every value matched bit for bit. That check runs on a developer
-machine. The CI image does not install `pyarrow`, so the test skips there. DuckDB has not been
-tried.
+machine. The CI image does not install `pyarrow`, so the test skips there. DuckDB reads the output and
+returns the same revenue total as the source on the 1,000,000-row taxi run.
 
 ## Identity and limits
 
@@ -175,7 +175,7 @@ with LakeTable("/data/orders", schema, flush_rows=1 << 18, flush_interval=5.0) a
 - Once two buffers are full and a flush is still pending, writers block. Sustained overload
   therefore shows up as latency.
 - No compaction. Tombstones and superseded rows accumulate.
-- DuckDB has not been tested against the output.
+- DuckDB scans this output 2.5 to 3 times slower than its own `COPY` output. See the multi-engine results.
 
 ## Benchmarks
 
@@ -190,3 +190,81 @@ java -jar bench/target/benchmarks.jar LakeTableBench -wi 3 -i 5 -f 1 -prof gc
 The ingestion thread allocates 0.0014 B/op after warm-up, measured with that thread's own
 allocation counter. The `-prof gc` numbers include the flusher, so they are not the ingestion
 figure.
+
+## Multi-engine results
+
+These run on `windows-dev` against the first 1,000,000 rows of the NYC TLC Yellow Taxi file for
+January 2024. The file's SHA-256 is checked before use. Rows are keyed by row index. The raw
+output is in `bench/baseline/lake-heavyweights-windows-dev.json`, and the script is
+`python/benchmarks/benchmark_lake_heavyweights.py`. Each engine and workload runs in its own
+process.
+
+- **NodusDB lake**: this module, with 250,000-row buffers. W4 also uses a 5,000-row configuration.
+- **DuckDB**: an in-memory table, written with `COPY` to Parquet.
+- **PyArrow**: a Python dict of rows, written with `pq.write_table`.
+- **SQLite**: in memory, dumped with the backup API.
+
+### W1, ingest 1,000,000 rows
+
+| Engine | Rows/s | Seconds | Peak RSS (MB) |
+|---|---:|---:|---:|
+| NodusDB lake | 47,210 | 21.2 | 663 |
+| DuckDB | 167,364 | 6.0 | 458 |
+| PyArrow | 112,510 | 8.9 | 375 |
+| SQLite | 94,969 | 10.5 | 590 |
+
+### W2, 500,000 upserts and 100,000 deletes
+
+| Engine | Upserts/s | Deletes/s | Peak RSS (MB) |
+|---|---:|---:|---:|
+| NodusDB lake | 37,253 | 334,790 | 724 |
+| DuckDB | 857 | 1,031 | 500 |
+| PyArrow (Python dict) | 398,114 | 790,855 | 713 |
+| SQLite | 259,463 | 276,078 | 662 |
+
+### W3, flush a 250,000-row buffer
+
+| Engine | Seconds | Rows/s | Output | Files |
+|---|---:|---:|---:|---:|
+| NodusDB lake | 0.367 | 681,443 | 3.35 MB Parquet | 1 |
+| DuckDB | 1.135 | 220,331 | 3.66 MB Parquet | 1 |
+| PyArrow | 0.194 | 1,290,500 | 3.96 MB Parquet | 1 |
+| SQLite | 0.124 | 2,010,307 | 11.85 MB database | 1 |
+
+SQLite writes a database file, not Parquet, so W4 leaves it out.
+
+### W4, DuckDB aggregate over each engine's output
+
+Every source gives the same totals: revenue 27,486,629.10 across 1,000,000 trips.
+
+| Source | Files | Bytes | Median (ms) | p99 (ms) |
+|---|---:|---:|---:|---:|
+| NodusDB, 250,000-row files | 4 | 13.17 MB | 42.3 | 67.5 |
+| NodusDB, 5,000-row files | 108 | 13.51 MB | 34.6 | 37.3 |
+| DuckDB `COPY` | 4 | 14.47 MB | 13.6 | 27.2 |
+| PyArrow | 4 | 15.51 MB | 17.0 | 18.6 |
+
+### What the numbers show
+
+- **Deletes are cheap.** A delete updates an in-memory index entry and records a tombstone, so
+  100,000 deletes take 0.30 s.
+- **Upserts are the weak path.** NodusDB upserts at 37,253 rows/s, about 7 times slower than
+  SQLite's in-memory upsert. I have not profiled it. The native call per row and the shared lock
+  are the first suspects.
+- **Scans are slower on NodusDB's files.** This writer emits PLAIN pages only. DuckDB's own
+  `COPY` output is different, so the encoding is the first suspect. I have not tested that.
+- **File count did not hurt at this size.** The 108 streaming files scanned faster than the four
+  large files, 34.6 ms against 42.3 ms. This is one 13 MB dataset. A table with many more files may
+  behave differently, and this suite did not test that.
+
+### Caveats
+
+- W1 and W2 pass each row from Python into the native library, so their figures include the
+  binding cost.
+- PyArrow's W2 figures come from a Python dict with no storage behind it. They show a ceiling for
+  an in-memory map, not a storage engine.
+- The 5,000-row configuration produced 108 files. The setting implies about 200, and I have not
+  checked why.
+- Peak RSS includes the Python process and the loaded source table, so compare it as a relative
+  figure.
+- Each engine ran once, on one laptop.
