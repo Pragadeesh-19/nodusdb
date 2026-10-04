@@ -1,0 +1,6 @@
+kuzu
+duckdb
+igraph
+pyarrow
+networkx
+psutil
