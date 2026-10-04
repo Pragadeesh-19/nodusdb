@@ -9,6 +9,7 @@ import java.util.Objects;
  * Columnar write absorber keyed by a 64-bit key hash. Rows 0..rowCount-1 are always dense.
  *
  *   keyHashes          [k0 k1 k2 ... k(n-1) | free ]
+ *   rowKinds           [INSERT/TOMBSTONE per row  | free ]
  *   longColumns[c]     [v0 v1 v2 ... v(n-1) | free ]   doubles are stored as raw bits
  *   intColumns[c]      [i0 i1 i2 ... i(n-1) | free ]
  *   varCharOffsets[c]  [o0 o1 o2 ... o(n-1) | free ]  -> position in varCharSlab
@@ -16,14 +17,17 @@ import java.util.Objects;
  *   varCharSlab        [ live bytes ... | dead bytes | free ]
  *   index              keyHash -> row, the only structure that maps keys to rows
  *
- * Delete moves the last row into the vacated slot across every column array, repoints the
- * moved key in the index, then removes the deleted key with backward-shift deletion.
- * Overwritten and deleted variable-width bytes stay in the slab until the next rebuild, which
- * copies live bytes into a spare buffer when the slab runs out of room.
+ * upsert writes an INSERT row. tombstone marks a key as deleted without removing it, so that
+ * the deletion can be written to a delete file if an older committed row exists. delete removes
+ * the row outright, with swap-and-pop across every column.
  */
 public final class DeltaMemTable {
 
     public static final int ABSENT = -1;
+
+    public static final byte INSERT = 0;
+
+    public static final byte TOMBSTONE = 1;
 
     public static final int MAX_ROWS = 1 << 29;
 
@@ -47,6 +51,7 @@ public final class DeltaMemTable {
     private final int[][] varCharOffsets;
     private final int[][] varCharLengths;
     private long[] keyHashes;
+    private byte[] rowKinds;
     private byte[] varCharSlab;
     private byte[] spareSlab = EMPTY_SLAB;
     private int slabUsed;
@@ -64,6 +69,7 @@ public final class DeltaMemTable {
         }
         this.index = new LongIntIndex(initialCapacity << 1);
         this.keyHashes = new long[initialCapacity];
+        this.rowKinds = new byte[initialCapacity];
         this.longColumns = new long[schema.longColumns()][];
         this.intColumns = new int[schema.intColumns()][];
         this.varCharOffsets = new int[schema.varCharColumns()][];
@@ -118,6 +124,25 @@ public final class DeltaMemTable {
         return true;
     }
 
+    public void tombstone(long keyHash) {
+        int row = index.get(keyHash);
+        if (row == ABSENT) {
+            appendTombstone(keyHash);
+        } else if (rowKinds[row] == INSERT) {
+            clearVarChars(row);
+            rowKinds[row] = TOMBSTONE;
+        }
+    }
+
+    public void clear() {
+        for (int row = 0; row < rowCount; row++) {
+            index.remove(keyHashes[row]);
+        }
+        rowCount = 0;
+        slabUsed = 0;
+        liveVarCharBytes = 0;
+    }
+
     public int getRow(long keyHash) {
         return index.get(keyHash);
     }
@@ -126,9 +151,18 @@ public final class DeltaMemTable {
         return rowCount;
     }
 
+    public int slabBytesUsed() {
+        return slabUsed;
+    }
+
     public long keyHashAt(int row) {
         checkRow(row);
         return keyHashes[row];
+    }
+
+    public byte kindAt(int row) {
+        checkRow(row);
+        return rowKinds[row];
     }
 
     public long longAt(int column, int row) {
@@ -174,6 +208,9 @@ public final class DeltaMemTable {
                 throw new IllegalStateException(
                         "keyHashes[" + row + "]=" + keyHashes[row] + " is indexed at " + index.get(keyHashes[row]));
             }
+            if (rowKinds[row] != INSERT && rowKinds[row] != TOMBSTONE) {
+                throw new IllegalStateException("row " + row + " has unknown kind " + rowKinds[row]);
+            }
             for (int c = 0; c < varCharLengths.length; c++) {
                 int offset = varCharOffsets[c][row];
                 int length = varCharLengths[c][row];
@@ -181,6 +218,9 @@ public final class DeltaMemTable {
                     throw new IllegalStateException(
                             "var column " + c + " row " + row + " spans [" + offset + ", +" + length
                                     + ") outside used slab " + slabUsed);
+                }
+                if (rowKinds[row] == TOMBSTONE && length != 0) {
+                    throw new IllegalStateException("tombstone row " + row + " carries " + length + " var-char bytes");
                 }
                 liveBytes += length;
             }
@@ -192,17 +232,32 @@ public final class DeltaMemTable {
 
     private void insert(long keyHash, long[] longValues, int[] intValues,
                         byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
-        if (rowCount == MAX_ROWS) {
-            throw new IllegalStateException("row capacity limit reached: " + MAX_ROWS);
-        }
+        checkRowCapacity();
         ensureSlabRoom(totalBytes);
         if (rowCount == keyHashes.length) {
             growRows();
         }
         int row = rowCount;
         keyHashes[row] = keyHash;
+        rowKinds[row] = INSERT;
         writeFixedWidth(row, longValues, intValues);
         writeVarChars(row, varCharValues, varCharValueLengths);
+        index.put(keyHash, row);
+        rowCount++;
+    }
+
+    private void appendTombstone(long keyHash) {
+        checkRowCapacity();
+        if (rowCount == keyHashes.length) {
+            growRows();
+        }
+        int row = rowCount;
+        keyHashes[row] = keyHash;
+        rowKinds[row] = TOMBSTONE;
+        for (int c = 0; c < varCharLengths.length; c++) {
+            varCharOffsets[c][row] = 0;
+            varCharLengths[c][row] = 0;
+        }
         index.put(keyHash, row);
         rowCount++;
     }
@@ -210,11 +265,18 @@ public final class DeltaMemTable {
     private void overwrite(int row, long[] longValues, int[] intValues,
                            byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
         ensureSlabRoom(totalBytes);
-        for (int c = 0; c < varCharLengths.length; c++) {
-            liveVarCharBytes -= varCharLengths[c][row];
-        }
+        clearVarChars(row);
+        rowKinds[row] = INSERT;
         writeFixedWidth(row, longValues, intValues);
         writeVarChars(row, varCharValues, varCharValueLengths);
+    }
+
+    private void clearVarChars(int row) {
+        for (int c = 0; c < varCharLengths.length; c++) {
+            liveVarCharBytes -= varCharLengths[c][row];
+            varCharLengths[c][row] = 0;
+            varCharOffsets[c][row] = 0;
+        }
     }
 
     private void writeFixedWidth(int row, long[] longValues, int[] intValues) {
@@ -242,6 +304,7 @@ public final class DeltaMemTable {
     private void moveRow(int from, int to) {
         long movedKey = keyHashes[from];
         keyHashes[to] = movedKey;
+        rowKinds[to] = rowKinds[from];
         for (long[] column : longColumns) {
             column[to] = column[from];
         }
@@ -286,9 +349,16 @@ public final class DeltaMemTable {
         slabUsed = cursor;
     }
 
+    private void checkRowCapacity() {
+        if (rowCount == MAX_ROWS) {
+            throw new IllegalStateException("row capacity limit reached: " + MAX_ROWS);
+        }
+    }
+
     private void growRows() {
         int newCapacity = keyHashes.length << 1;
         keyHashes = Arrays.copyOf(keyHashes, newCapacity);
+        rowKinds = Arrays.copyOf(rowKinds, newCapacity);
         for (int c = 0; c < longColumns.length; c++) {
             longColumns[c] = Arrays.copyOf(longColumns[c], newCapacity);
         }

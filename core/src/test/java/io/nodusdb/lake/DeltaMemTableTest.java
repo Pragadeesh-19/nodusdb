@@ -252,6 +252,60 @@ class DeltaMemTableTest {
         assertThrows(IndexOutOfBoundsException.class, () -> table.keyHashAt(-1));
     }
 
+    @Test
+    void tombstoneKeepsRowAndMarksItDeleted() {
+        DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
+        upsert(table, 4L, 1L, 2L, 3, "gone soon");
+
+        table.tombstone(4L);
+        table.assertInvariant();
+
+        assertEquals(1, table.size());
+        assertEquals(0, table.getRow(4L));
+        assertEquals(DeltaMemTable.TOMBSTONE, table.kindAt(0));
+        assertEquals(0, table.varCharLength(NAME, 0));
+    }
+
+    @Test
+    void tombstoneForUnknownKeyAppendsTombstoneRow() {
+        DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
+        upsert(table, 1L, 1L, 1L, 1, "one");
+
+        table.tombstone(9L);
+        table.assertInvariant();
+
+        assertEquals(2, table.size());
+        assertEquals(1, table.getRow(9L));
+        assertEquals(9L, table.keyHashAt(1));
+        assertEquals(DeltaMemTable.TOMBSTONE, table.kindAt(1));
+    }
+
+    @Test
+    void upsertRevivesTombstonedRow() {
+        DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
+        upsert(table, 4L, 1L, 2L, 3, "first");
+        table.tombstone(4L);
+
+        assertFalse(upsert(table, 4L, 5L, 6L, 7, "revived"));
+        table.assertInvariant();
+
+        assertEquals(DeltaMemTable.INSERT, table.kindAt(0));
+        assertEquals("revived", readVarChar(table, NAME, 0));
+    }
+
+    @Test
+    void repeatedTombstoneIsIdempotent() {
+        DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
+        upsert(table, 4L, 1L, 2L, 3, "x");
+
+        table.tombstone(4L);
+        table.tombstone(4L);
+        table.assertInvariant();
+
+        assertEquals(1, table.size());
+        assertEquals(DeltaMemTable.TOMBSTONE, table.kindAt(0));
+    }
+
     private static boolean upsert(DeltaMemTable table, long key, long a, long b, int status, String name) {
         byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
         return table.upsert(key, new long[] {a, b}, new int[] {status}, bytes, new int[] {bytes.length});
