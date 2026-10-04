@@ -78,7 +78,7 @@ class GraphConcurrencyTest {
             assertFalse(reader.isAlive(), reader.getName() + " did not finish: possible deadlock");
         }
         assertNull(failure.get(), () -> "reader failed: " + failure.get());
-        assertEquals(0L, steadyStateBytes.get(), "bytes allocated by readers in a quiescent steady-state window");
+        assertEquals(0L, steadyStateBytes.get(), "bytes allocated by a reader while the writer churns, or after it stops");
         assertTrue(completedQueries.get() > 0L, "readers never ran a query");
         int expectedDegree = 0;
         for (int target = 1; target <= TARGETS; target++) {
@@ -103,16 +103,17 @@ class GraphConcurrencyTest {
                 generation = checkRound(kernel, out, seen, generation);
             }
             warmed.countDown();
+            long churnStart = bean.getThreadAllocatedBytes(threadId);
             while (writing.get()) {
                 generation = checkRound(kernel, out, seen, generation);
                 completedQueries.incrementAndGet();
             }
-            long before = bean.getThreadAllocatedBytes(threadId);
+            steadyStateBytes.accumulateAndGet(bean.getThreadAllocatedBytes(threadId) - churnStart, Math::max);
+            long quietStart = bean.getThreadAllocatedBytes(threadId);
             for (int round = 0; round < MEASURED_ROUNDS; round++) {
                 generation = checkRound(kernel, out, seen, generation);
             }
-            long allocated = bean.getThreadAllocatedBytes(threadId) - before;
-            steadyStateBytes.accumulateAndGet(allocated, Math::max);
+            steadyStateBytes.accumulateAndGet(bean.getThreadAllocatedBytes(threadId) - quietStart, Math::max);
         } catch (Throwable t) {
             failure.compareAndSet(null, t);
             warmed.countDown();
