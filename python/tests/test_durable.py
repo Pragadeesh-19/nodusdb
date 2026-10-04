@@ -48,6 +48,14 @@ class DurableGraphTest(unittest.TestCase):
             self.assertTrue(reopened.has_edge(499, 500))
             self.assertTrue(reopened.has_edge(900, 901))
 
+    def test_sync_flushes_async_writes_and_the_graph_reopens(self):
+        with Graph(path=self.directory) as graph:
+            graph.add_edges_from([(7, 8), (8, 9)])
+            graph.sync()
+
+        with Graph(path=self.directory) as reopened:
+            self.assertTrue(reopened.has_edge(8, 9))
+
     def test_second_handle_on_the_same_directory_is_rejected(self):
         with Graph(path=self.directory):
             with self.assertRaises(NodusError):

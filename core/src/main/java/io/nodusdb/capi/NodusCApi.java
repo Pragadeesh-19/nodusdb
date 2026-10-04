@@ -61,6 +61,16 @@ public final class NodusCApi {
         }
     }
 
+    @CEntryPoint(name = "nodus_sync")
+    public static int sync(IsolateThread thread, VoidPointer handle) {
+        try {
+            session(handle).sync();
+            return 0;
+        } catch (RuntimeException e) {
+            return ERROR;
+        }
+    }
+
     private static String cString(CCharPointer pointer) {
         int length = 0;
         while (pointer.read(length) != 0) {

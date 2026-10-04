@@ -20,6 +20,10 @@ public final class GraphSession implements AutoCloseable {
         kernel.checkpoint();
     }
 
+    public void sync() {
+        kernel.sync();
+    }
+
     @Override
     public void close() {
         kernel.close();

@@ -82,6 +82,8 @@ class Graph:
         lib.nodus_open_durable.argtypes = [thread, ctypes.c_char_p, ctypes.c_int]
         lib.nodus_checkpoint.restype = ctypes.c_int
         lib.nodus_checkpoint.argtypes = [thread, handle]
+        lib.nodus_sync.restype = ctypes.c_int
+        lib.nodus_sync.argtypes = [thread, handle]
         for name in ("nodus_add_edge", "nodus_remove_edge", "nodus_has_edge"):
             function = getattr(lib, name)
             function.restype = ctypes.c_int
@@ -103,6 +105,11 @@ class Graph:
         self._require_open()
         if self._lib.nodus_checkpoint(self._thread, self._handle) != 0:
             raise NodusError("checkpoint failed; the graph is not durable up to this point")
+
+    def sync(self):
+        self._require_open()
+        if self._lib.nodus_sync(self._thread, self._handle) != 0:
+            raise NodusError("sync failed; accepted writes may not be on disk yet")
 
     def close(self):
         if self._handle:
