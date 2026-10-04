@@ -195,7 +195,7 @@ Each engine's W4 row is DuckDB reading that engine's own files. The W4 layout of
 
 ## Quickstart
 
-Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building).
+Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building). Release wheels install with `pip install nodusdb` and need no compiler or GraalVM. The release workflow builds them, and they become available once a release is published.
 
 ```sh
 pip install -e python/
@@ -282,10 +282,11 @@ with nodusdb.LakeTable("/data/orders", schema) as table:
 
 ## Durability
 
-A durable graph lives in one directory with three files:
+A durable graph lives in one directory with four files:
 
 - `nodus.wal` is the write-ahead log. It starts with a 16-byte header: the ASCII magic `NODU`, a version, two reserved bytes, and a creation time. Every accepted edge change then adds a fixed 24-byte frame.
 - `snapshot.bin` is the last checkpoint. It stores each node's outgoing edges, with a header and a CRC32 over the whole body. Incoming edges are not stored, because the loader rebuilds them from the outgoing side.
+- `symbols.nodus` holds the string and UUID keys, in the order they were first used. Each record carries a CRC32C checksum. A key is forced to disk before any edge that uses it is written. The header also records whether the graph is keyed by integers or by strings.
 - `nodus.lock` holds a file lock, so a second process or a second handle cannot open the same directory.
 
 A frame is 24 bytes. It holds the operation (add or remove), one reserved byte, two zero bytes, a CRC32 over the operation and both node IDs, and the two IDs. The layout keeps every frame aligned to eight bytes, and the log is only ever appended to. Nothing is overwritten in place.
@@ -294,7 +295,7 @@ A frame is 24 bytes. It holds the operation (add or remove), one reserved byte, 
 
 **Checkpoint.** A checkpoint writes the snapshot to a temporary file, forces it to disk, renames it into place, and then replaces the log with an empty one. The writer pauses for the duration. A crash between the rename and the log replacement is safe: replaying the old log over the new snapshot gives the same final state, because the last operation on each edge decides whether it exists.
 
-**Recovery.** On open, the process deletes any half-written temporary files, loads the snapshot if one exists, and then replays the log. A frame with a bad checksum or only part of its bytes at the end of the file ends the replay. The file is then cut back to the last good frame. The damage is reported as truncated bytes, and the replay does not continue past it.
+**Recovery.** On open, the process deletes any half-written temporary files, loads the snapshot if one exists, and then replays the log. A frame with a bad checksum or only part of its bytes at the end of the file ends the replay. The file is then cut back to the last good frame. The damage is reported as truncated bytes, and the replay does not continue past it. The symbol file follows the same rule for a torn final record. A corrupt record anywhere else refuses to open, because an edge could then refer to the wrong key. A test writes 100,000 edges, appends an incomplete 14-byte record, and reopens: every edge comes back and the torn bytes are removed.
 
 ### What survives what
 
@@ -304,6 +305,14 @@ A frame is 24 bytes. It holds the operation (add or remove), one reserved byte, 
 | The machine loses power | Up to the last 10 ms of writes can be lost | Every acknowledged write survives |
 
 Call `sync()` or `checkpoint()` to force a point where everything is on disk.
+
+## Concurrency
+
+The kernel supports one writer and any number of readers. Every mutation runs inside a seqlock: a version counter is odd while an edge change is in progress and even otherwise. A reader checks the counter before and after each query. If a write overlapped the query, the reader discards the result and runs it again. Readers never take a lock and never block the writer, and a query never returns a half-applied change.
+
+The stress test in `GraphConcurrencyTest` runs one writer that toggles 200,000 edges on a high-degree node while eight readers run `kHop` and `commonNeighbors`. Every result must hold distinct, in-range targets. The test also checks that the readers allocate nothing after the writer stops. Breaking the validation step makes it fail with a duplicated target.
+
+The C and Python layers do not yet support concurrent readers on one handle. A handle keeps its query results in a single buffer, so two threads on the same handle can overwrite each other's results. Until that is fixed, give each thread its own `Graph`. Lake writes are serialized by a lock.
 
 ## How it works
 
@@ -389,6 +398,9 @@ GRAALVM_HOME=/path/to/graalvm-community-openjdk-22.0.2 mvn -Pnative -pl core pac
 # Python tests, which load the native library
 python -m unittest discover -s python/tests -v
 
+# Wheel for the current platform, written to the current directory
+python -m pip wheel python/ --no-deps -w dist
+
 # Comparison against NetworkX and SQLite (several minutes)
 python python/benchmarks/compare.py
 
@@ -406,11 +418,13 @@ java -jar bench/target/benchmarks.jar -prof gc
 
 The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arch>/`, then `target/native/`. CI copies the library into `bin/`. If you rebuild `target/native/` by hand, copy it into `bin/` too, or the loader keeps using the old copy.
 
+Release wheels come from `.github/workflows/wheels.yml`. It builds the native library on Linux (x86_64 and arm64), macOS (x86_64 and arm64), and Windows, and then runs cibuildwheel for CPython 3.9 to 3.13. Each wheel is smoke-tested against the installed package. The workflow runs when a release is published, or by hand from the Actions tab, and publishes to PyPI with trusted publishing. The workflow has not run yet. Linux wheels may need a manylinux build container, because the native library links against the glibc of its build host. That will show up when the workflow runs.
+
 ## Limits
 
 - **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
-- **One writer at a time.** The graph kernel allows reads to run alongside its single writer. Reads take no lock and retry when a write overlaps them. The Python wrapper still uses one thread per graph. Lake writes are serialized by a lock.
+- **One thread per handle.** The kernel allows one writer and many readers. The C and Python layers do not yet allow concurrent readers on one handle, because query results share a buffer. Use one `Graph` per thread. Lake writes are serialized by a lock.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
@@ -422,4 +436,4 @@ The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arc
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. A seqlock for lock-free graph reads is built. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Concurrent readers through the C and Python layers are not. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
