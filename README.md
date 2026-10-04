@@ -237,6 +237,20 @@ g.close()
 
 `sync_mode="sync"` makes each single-edge call wait until its log entry is on disk. The default, `"async"`, batches writes every 10 milliseconds. Batch calls group-commit in either mode.
 
+String and UUID keys. A node can be named by a string or a `uuid.UUID` instead of an integer:
+
+```python
+import uuid
+import nodusdb
+
+g = nodusdb.Graph()
+g.add_edge("user:alice", "role:admin")
+g.add_edge(uuid.uuid4(), "role:admin")
+print(g.khop("user:alice", 1))  # ['role:admin']
+```
+
+A graph uses one kind of key. The first key type written claims the graph, and a durable graph keeps the claim across restarts. Mixing kinds raises `TypeError`. Strings are stored once in a symbol table and mapped to dense integer ids, so the kernel still runs on integers. Reads never add a key: an unknown key answers as absent. The symbol table is forced to disk before any edge that uses a new key is written. A single call that adds new keys therefore costs one sync, and `add_edges_from` pays that cost once per batch.
+
 Lakehouse writes:
 
 ```python
@@ -397,7 +411,7 @@ The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arc
 - **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **One writer at a time.** The graph kernel allows reads to run alongside its single writer. Reads take no lock and retry when a write overlaps them. The Python wrapper still uses one thread per graph. Lake writes are serialized by a lock.
-- **Integer node IDs.** Node IDs are `long` values from 0 to `Integer.MAX_VALUE - 9`. Map external identifiers to integers first.
+- **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
 - **No compaction.** Superseded rows and tombstones stay in the files until something removes them.
