@@ -150,15 +150,9 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(v);
         while (true) {
             long started = beginRead();
-            try {
-                boolean present = outgoing.contains(u, v);
-                if (endRead(started)) {
-                    return present;
-                }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+            boolean present = outgoing.contains(u, v);
+            if (endRead(started)) {
+                return present;
             }
         }
     }
@@ -167,15 +161,9 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(u);
         while (true) {
             long started = beginRead();
-            try {
-                int degree = outgoing.degreeOf(u);
-                if (endRead(started)) {
-                    return degree;
-                }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+            int degree = outgoing.degreeOf(u);
+            if (endRead(started)) {
+                return degree;
             }
         }
     }
@@ -184,15 +172,9 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(v);
         while (true) {
             long started = beginRead();
-            try {
-                int degree = incoming.degreeOf(v);
-                if (endRead(started)) {
-                    return degree;
-                }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+            int degree = incoming.degreeOf(v);
+            if (endRead(started)) {
+                return degree;
             }
         }
     }
@@ -221,16 +203,11 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(u);
         while (true) {
             long started = beginRead();
-            try {
-                Objects.checkIndex(index, outgoing.degreeOf(u));
-                long neighbor = outgoing.neighborAt(u, index);
-                if (endRead(started)) {
-                    return neighbor;
-                }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+            int degree = outgoing.degreeOf(u);
+            long neighbor = index >= 0 && index < degree ? outgoing.neighborAt(u, index) : NodeIds.NONE;
+            if (endRead(started)) {
+                Objects.checkIndex(index, degree);
+                return neighbor;
             }
         }
     }
@@ -240,29 +217,12 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(v);
         while (true) {
             long started = beginRead();
-            try {
-                boolean uIsSmaller = outgoing.degreeOf(u) <= outgoing.degreeOf(v);
-                long smaller = uIsSmaller ? u : v;
-                long larger = uIsSmaller ? v : u;
-                int smallerDegree = outgoing.degreeOf(smaller);
-                if (out.length < smallerDegree) {
-                    throw new OutputBufferTooSmallException(
-                            "output buffer too small: " + out.length + " < " + smallerDegree);
+            int count = commonNeighborsOnce(u, v, out);
+            if (endRead(started)) {
+                if (count == KHopTraversal.OVERFLOW) {
+                    throw new OutputBufferTooSmallException("output buffer too small for common neighbors");
                 }
-                int count = 0;
-                for (int i = 0; i < smallerDegree; i++) {
-                    long candidate = outgoing.neighborAt(smaller, i);
-                    if (outgoing.contains(larger, candidate)) {
-                        out[count++] = candidate;
-                    }
-                }
-                if (endRead(started)) {
-                    return count;
-                }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+                return count;
             }
         }
     }
@@ -272,18 +232,36 @@ public final class GraphKernel implements AutoCloseable {
         KHopTraversal traversal = traversals.get();
         while (true) {
             long started = beginRead();
-            try {
-                traversal.ensureCapacity(outgoing.capacity());
-                int count = traversal.kHop(outgoing, start, maxDepth, out);
-                if (endRead(started)) {
-                    return count;
+            traversal.ensureCapacity(outgoing.capacity());
+            int count = traversal.kHop(outgoing, start, maxDepth, out);
+            if (endRead(started)) {
+                if (count == KHopTraversal.OVERFLOW) {
+                    throw new OutputBufferTooSmallException("output buffer too small for k-hop result");
                 }
-            } catch (RuntimeException e) {
-                if (endRead(started)) {
-                    throw e;
-                }
+                return count;
             }
         }
+    }
+
+    private int commonNeighborsOnce(long u, long v, long[] out) {
+        boolean uIsSmaller = outgoing.degreeOf(u) <= outgoing.degreeOf(v);
+        long smaller = uIsSmaller ? u : v;
+        long larger = uIsSmaller ? v : u;
+        int smallerDegree = outgoing.degreeOf(smaller);
+        if (out.length < smallerDegree) {
+            return KHopTraversal.OVERFLOW;
+        }
+        int count = 0;
+        for (int i = 0; i < smallerDegree; i++) {
+            long candidate = outgoing.neighborAt(smaller, i);
+            if (outgoing.contains(larger, candidate)) {
+                if (count == out.length) {
+                    return KHopTraversal.OVERFLOW;
+                }
+                out[count++] = candidate;
+            }
+        }
+        return count;
     }
 
     boolean isHighDegree(long u) {

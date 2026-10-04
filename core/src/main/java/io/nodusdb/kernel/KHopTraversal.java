@@ -4,6 +4,8 @@ import java.util.Arrays;
 
 final class KHopTraversal {
 
+    static final int OVERFLOW = -1;
+
     private static final int INITIAL_CAPACITY = 16;
 
     private int[] visited = new int[INITIAL_CAPACITY];
@@ -19,7 +21,8 @@ final class KHopTraversal {
     }
 
     int kHop(AdjacencyTable table, long start, int maxDepth, long[] out) {
-        if (maxDepth <= 0 || start >= table.capacity()) {
+        int limit = Math.min(table.capacity(), visited.length);
+        if (maxDepth <= 0 || start >= limit) {
             return 0;
         }
         int stamp = nextGeneration();
@@ -38,13 +41,20 @@ final class KHopTraversal {
                 }
                 long[] neighbors = table.neighborArray(node);
                 int base = table.neighborBase(node);
-                for (int i = 0; i < degree; i++) {
-                    long neighbor = neighbors[base + i];
+                if (base < 0 || base > neighbors.length - degree) {
+                    continue;
+                }
+                int end = base + degree;
+                for (int i = base; i < end; i++) {
+                    long neighbor = neighbors[i];
+                    if (neighbor < 0 || neighbor >= limit) {
+                        continue;
+                    }
                     int slot = (int) neighbor;
                     if (visited[slot] != stamp) {
                         visited[slot] = stamp;
                         if (count == out.length) {
-                            throw new OutputBufferTooSmallException("output buffer too small for k-hop result");
+                            return OVERFLOW;
                         }
                         out[count++] = neighbor;
                         queue[tail++] = neighbor;
