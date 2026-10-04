@@ -1,0 +1,138 @@
+name: wheels
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: native library (${{ matrix.tag }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            tag: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            tag: linux-arm64
+          - runner: macos-15-intel
+            tag: macos-x86_64
+          - runner: macos-14
+            tag: macos-arm64
+          - runner: windows-2022
+            tag: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up GraalVM CE 22
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: "22.0.2"
+          distribution: graalvm-community
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Expose GRAALVM_HOME
+        shell: bash
+        run: echo "GRAALVM_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Configure MSVC for native-image
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build native shared library
+        run: mvn -B -ntp -Pnative -pl core package -DskipTests
+
+      - name: Stage native library under its platform tag
+        shell: bash
+        run: |
+          set -eu
+          destination="python/nodusdb/bin/${{ matrix.tag }}"
+          mkdir -p "$destination"
+          case "$RUNNER_OS" in
+            Linux) library=libnodusdb.so ;;
+            macOS) library=libnodusdb.dylib ;;
+            Windows) library=libnodusdb.dll ;;
+          esac
+          cp "target/native/$library" "$destination/"
+
+      - name: Upload native library
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.tag }}
+          path: python/nodusdb/bin/${{ matrix.tag }}
+          if-no-files-found: error
+
+  wheels:
+    name: wheels (${{ matrix.tag }})
+    needs: native
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            tag: linux-x86_64
+            archs: x86_64
+          - runner: ubuntu-24.04-arm
+            tag: linux-arm64
+            archs: aarch64
+          - runner: macos-15-intel
+            tag: macos-x86_64
+            archs: x86_64
+          - runner: macos-14
+            tag: macos-arm64
+            archs: arm64
+          - runner: windows-2022
+            tag: windows-x86_64
+            archs: AMD64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore native library
+        uses: actions/download-artifact@v4
+        with:
+          name: native-${{ matrix.tag }}
+          path: python/nodusdb/bin/${{ matrix.tag }}
+
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@v2.21.3
+        with:
+          package-dir: python
+        env:
+          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32 pp*"
+          CIBW_ARCHS: ${{ matrix.archs }}
+          CIBW_TEST_COMMAND: "python {package}/tests/wheel_smoke.py"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.tag }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: publish to PyPI
+    needs: wheels
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish with trusted publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist

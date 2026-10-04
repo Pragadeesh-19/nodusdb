@@ -7,13 +7,21 @@ name = "nodusdb"
 version = "0.1.0"
 description = "Embedded high-churn dynamic graph kernel with a GraalVM native C-ABI"
 requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
+    "License :: OSI Approved :: Apache Software License",
     "Topic :: Database",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Pragadeesh-19/nodusdb"
+Repository = "https://github.com/Pragadeesh-19/nodusdb"
+Issues = "https://github.com/Pragadeesh-19/nodusdb/issues"
 
 [tool.setuptools.packages.find]
 include = ["nodusdb*"]
