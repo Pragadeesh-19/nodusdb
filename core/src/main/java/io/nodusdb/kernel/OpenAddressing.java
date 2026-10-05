@@ -10,16 +10,16 @@ package io.nodusdb.kernel;
  * arithmetic. A test that ignores wrap-around moves entries too early or too late
  * across the end of the table.
  */
-final class OpenAddressing {
+public final class OpenAddressing {
 
     private OpenAddressing() {
     }
 
-    static int home(long key, int mask) {
+    public static int home(long key, int mask) {
         return (int) mix(key) & mask;
     }
 
-    static boolean canMoveInto(int hole, int cursor, int home, int mask) {
+    public static boolean canMoveInto(int hole, int cursor, int home, int mask) {
         return ((hole - home) & mask) <= ((cursor - home) & mask);
     }
 
