@@ -48,7 +48,7 @@ The durable benchmark uses the SNAP soc-Pokec graph: 30,622,564 directed edges. 
 | Durable ingest, one call per edge, asynchronous | 1,454,562 edges/s |
 | Durable ingest, one call per edge, synchronous | 203 edges/s (median 3.6 ms, p99 34 ms per call) |
 | Checkpoint of the full graph | 8.7 to 9.1 s, writes a 500 MB snapshot |
-| Recovery in a fresh process, snapshot plus 500,000 log frames | 3.3 s (22 to 29 s before the parallel loader) |
+| Recovery in a fresh process, snapshot plus 500,000 log frames | 2.8 s (22 to 29 s before the parallel loader) |
 | Replay of 500,000 log frames alone | 0.13 s |
 
 After recovery, the degrees, in-degrees, and 3-hop results match the state before the crash. The benchmark compares a digest of all of them.
@@ -422,7 +422,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 ## Limits
 
-- **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 3.3 seconds, with the snapshot load taking about 2.7 of them. The live graph occupies about 2.6 GB, so most of the remaining time is garbage collection while the graph is built. Getting under a second needs a smaller per-node layout, which is a design change and not yet made.
+- **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 2.8 seconds, with the snapshot load taking about 2.2 of them. The live graph occupies about 1.5 GB. Most of the remaining time is building the membership indexes of high-degree nodes, and garbage collection during that build.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **Calls on one handle are serialized.** The kernel allows one writer and many readers. Python objects and C handles are both safe to share across threads, but calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.

@@ -191,9 +191,9 @@ class IndexedSparseSetTest {
         set.add(5L);
         Field indexField = IndexedSparseSet.class.getDeclaredField("index");
         indexField.setAccessible(true);
-        LongIntIndex index = (LongIntIndex) indexField.get(set);
+        PositionIndex index = (PositionIndex) indexField.get(set);
 
-        index.put(777L, 0);
+        index.insertAbsent(777L, 0);
 
         assertThrows(IllegalStateException.class, set::assertInvariant);
     }
