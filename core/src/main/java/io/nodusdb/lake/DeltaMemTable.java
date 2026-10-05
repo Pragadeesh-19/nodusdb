@@ -35,7 +35,6 @@ public final class DeltaMemTable implements AutoCloseable {
     private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
-    private static final byte[] EMPTY_SLAB = new byte[0];
 
     public record Schema(int longColumns, int intColumns, int varCharColumns) {
 
@@ -55,8 +54,8 @@ public final class DeltaMemTable implements AutoCloseable {
     private final NativeColumn[] varCharOffsets;
     private final NativeColumn[] varCharLengths;
     private int rowCapacity;
-    private byte[] varCharSlab;
-    private byte[] spareSlab = EMPTY_SLAB;
+    private NativeColumn slab;
+    private NativeColumn spareSlab;
     private int slabUsed;
     private long liveVarCharBytes;
     private int rowCount;
@@ -88,7 +87,7 @@ public final class DeltaMemTable implements AutoCloseable {
             varCharOffsets[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
             varCharLengths[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
         }
-        this.varCharSlab = new byte[initialSlabBytes];
+        this.slab = new NativeColumn(initialSlabBytes);
     }
 
     public boolean upsert(long keyHash, long[] longValues, int[] intValues,
@@ -189,13 +188,13 @@ public final class DeltaMemTable implements AutoCloseable {
     public int copyVarChar(int column, int row, byte[] destination, int destinationOffset) {
         checkRow(row);
         int length = varCharLengths[column].segment().getAtIndex(INT, row);
-        System.arraycopy(varCharSlab, varCharOffsets[column].segment().getAtIndex(INT, row),
+        MemorySegment.copy(slab.segment(), BYTE, varCharOffsets[column].segment().getAtIndex(INT, row),
                 destination, destinationOffset, length);
         return length;
     }
 
     int slabCapacity() {
-        return varCharSlab.length;
+        return Math.toIntExact(slab.capacity());
     }
 
     MemorySegment keyHashColumn() {
@@ -222,8 +221,8 @@ public final class DeltaMemTable implements AutoCloseable {
         return varCharLengths[column].segment();
     }
 
-    byte[] varCharSlab() {
-        return varCharSlab;
+    MemorySegment varCharSlab() {
+        return slab.segment();
     }
 
     @Override
@@ -235,14 +234,18 @@ public final class DeltaMemTable implements AutoCloseable {
         closeAll(intColumns);
         closeAll(varCharOffsets);
         closeAll(varCharLengths);
+        slab.close();
+        if (spareSlab != null) {
+            spareSlab.close();
+        }
     }
 
     public void assertInvariant() {
         if (index.size() != rowCount) {
             throw new IllegalStateException("index size " + index.size() + " != rowCount " + rowCount);
         }
-        if (slabUsed > varCharSlab.length) {
-            throw new IllegalStateException("slabUsed " + slabUsed + " exceeds slab " + varCharSlab.length);
+        if (slabUsed > slab.capacity()) {
+            throw new IllegalStateException("slabUsed " + slabUsed + " exceeds slab " + slab.capacity());
         }
         long liveBytes = 0;
         for (int row = 0; row < rowCount; row++) {
@@ -338,7 +341,7 @@ public final class DeltaMemTable implements AutoCloseable {
         int source = 0;
         for (int c = 0; c < varCharLengths.length; c++) {
             int length = varCharValueLengths[c];
-            System.arraycopy(varCharValues, source, varCharSlab, slabUsed, length);
+            MemorySegment.copy(varCharValues, source, slab.segment(), BYTE, slabUsed, length);
             varCharOffsets[c].segment().setAtIndex(INT, row, slabUsed);
             varCharLengths[c].segment().setAtIndex(INT, row, length);
             slabUsed += length;
@@ -365,7 +368,7 @@ public final class DeltaMemTable implements AutoCloseable {
     }
 
     private void ensureSlabRoom(int extra) {
-        if ((long) slabUsed + extra > varCharSlab.length) {
+        if ((long) slabUsed + extra > slab.capacity()) {
             rebuildSlab(extra);
         }
     }
@@ -380,19 +383,26 @@ public final class DeltaMemTable implements AutoCloseable {
         while (capacity < target) {
             capacity <<= 1;
         }
-        byte[] destination = spareSlab.length >= capacity ? spareSlab : new byte[capacity];
+        NativeColumn destination = spareSlab != null && spareSlab.capacity() >= capacity
+                ? spareSlab
+                : new NativeColumn(capacity);
+        if (destination != spareSlab && spareSlab != null) {
+            spareSlab.close();
+        }
+        MemorySegment source = slab.segment();
+        MemorySegment copyTarget = destination.segment();
         int cursor = 0;
         for (int row = 0; row < rowCount; row++) {
             for (int c = 0; c < varCharLengths.length; c++) {
                 int length = varCharLengths[c].segment().getAtIndex(INT, row);
-                System.arraycopy(varCharSlab, varCharOffsets[c].segment().getAtIndex(INT, row),
-                        destination, cursor, length);
+                MemorySegment.copy(source, varCharOffsets[c].segment().getAtIndex(INT, row),
+                        copyTarget, cursor, length);
                 varCharOffsets[c].segment().setAtIndex(INT, row, cursor);
                 cursor += length;
             }
         }
-        spareSlab = varCharSlab;
-        varCharSlab = destination;
+        spareSlab = slab;
+        slab = destination;
         slabUsed = cursor;
     }
 

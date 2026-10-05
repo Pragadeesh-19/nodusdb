@@ -119,11 +119,11 @@ final class ParquetWriter {
                 }
                 byte[] data = new byte[offsets[count]];
                 MemorySegment starts = table.varCharOffsetColumn(column.slot());
-                byte[] slab = table.varCharSlab();
+                MemorySegment slab = table.varCharSlab();
                 for (int i = 0; i < count; i++) {
                     int row = rows[from + i];
-                    System.arraycopy(slab, starts.getAtIndex(ValueLayout.JAVA_INT, row), data, offsets[i],
-                            lengths.getAtIndex(ValueLayout.JAVA_INT, row));
+                    MemorySegment.copy(slab, ValueLayout.JAVA_BYTE, starts.getAtIndex(ValueLayout.JAVA_INT, row),
+                            data, offsets[i], lengths.getAtIndex(ValueLayout.JAVA_INT, row));
                 }
                 yield encoder.encodeStrings(data, offsets);
             }
