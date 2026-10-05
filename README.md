@@ -347,13 +347,13 @@ Each graph keeps an outgoing table and an incoming table, and every edge edit up
 
 ### Columns for the lake
 
-The lake buffer applies the same idea in a different shape. Each column is its own primitive array, and row *n* is the *n*th entry in every array. Text goes into one shared byte slab, with an offset and a length for each row. A Parquet column is a sequential copy, because the buffer already holds its values in that order.
+The lake buffer applies the same idea in a different shape. Each column is its own native buffer, 64-byte aligned, and row *n* is the *n*th entry in every column. Text goes into one shared native slab, with an offset and a length for each row. A flush gathers the selected rows, encodes each column chunk from native memory, and streams the pages to the file, so no Java array holds column data at any point.
 
 A delete swaps the last row into the gap across every column, updates the index entry for the moved key, and then removes the deleted key. A delete that must survive a flush writes a tombstone instead.
 
 ### No allocation on the hot path
 
-Queries and in-tier edits allocate nothing once their structures exist. Allocation happens in three places: a node changes tier, an array grows, or a buffer is replaced. The lake reuses its buffers. After a flush, the frozen buffer is cleared and reused, so its arrays keep their grown size and the ingestion thread stops allocating.
+Queries and in-tier edits allocate nothing once their structures exist. Allocation happens in three places: a node changes tier, a native buffer grows, or a buffer is replaced. The lake reuses its buffers. After a flush, the frozen buffer is cleared and reused, so its native columns keep their grown size and the ingestion thread stops allocating. Lake upserts take `MemorySegment` inputs, so a caller's arrays are wrapped once, not per call.
 
 The graph allocation test reads the thread's allocated-bytes counter. Across the JMH baseline, the allocation rate stayed near 0.001 MB/s in every iteration. The first measured window after warm-up allocates a fixed 72 to 96 bytes, which the test records as a known exception (decision D12).
 
