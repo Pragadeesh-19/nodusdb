@@ -1,6 +1,7 @@
 package io.nodusdb.lake;
 
 import io.nodusdb.lake.ColumnChunkEncoder.EncodedChunk;
+import io.nodusdb.lake.ColumnChunkEncoder.Page;
 import io.nodusdb.lake.ColumnChunkEncoder.Physical;
 import io.nodusdb.lake.ColumnChunkEncoder.Statistics;
 
@@ -35,6 +36,9 @@ final class ParquetWriter {
     private static final int COLUMN_ORDER_TYPE_DEFINED = 1;
     private static final int COLUMN_DICTIONARY_PAGE_OFFSET = 11;
     private static final String CREATED_BY = "nodusdb lake";
+    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
+    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
 
     private enum Source {
         KEY, LONG, INT, VAR
@@ -50,33 +54,48 @@ final class ParquetWriter {
     private record RowGroupMeta(List<ChunkMeta> chunks, int rows, long totalBytes) {
     }
 
+    private record Gather(NativeColumn longs, NativeColumn offsets, NativeColumn data) {
+    }
+
     private ParquetWriter() {
     }
 
     static void write(Path path, LakeSchema schema, DeltaMemTable table, int[] rows, ParquetCodec codec)
             throws IOException {
+        if (ByteOrder.nativeOrder() != ByteOrder.LITTLE_ENDIAN) {
+            throw new UnsupportedOperationException("the parquet writer requires a little-endian platform");
+        }
         List<Column> columns = columns(schema);
-        ColumnChunkEncoder encoder = new ColumnChunkEncoder(codec);
         ByteArrayOutputStream file = new ByteArrayOutputStream();
         file.write(MAGIC, 0, MAGIC.length);
         List<RowGroupMeta> groups = new ArrayList<>();
-        int start = 0;
-        do {
-            int end = Math.min(rows.length, start + ROW_GROUP_ROWS);
-            List<ChunkMeta> chunks = new ArrayList<>(columns.size());
-            long totalBytes = 0;
-            for (Column column : columns) {
-                EncodedChunk chunk = encodeColumn(encoder, column, table, rows, start, end);
-                long fileOffset = file.size();
-                file.write(chunk.bytes(), 0, chunk.bytes().length);
-                long dictionaryOffset = chunk.dictionaryEncoded() ? fileOffset + chunk.dictionaryPageOffset() : -1;
-                chunks.add(new ChunkMeta(column, chunk, fileOffset, fileOffset + chunk.dataPageOffset(),
-                        dictionaryOffset));
-                totalBytes += chunk.uncompressedBytes();
-            }
-            groups.add(new RowGroupMeta(chunks, end - start, totalBytes));
-            start = end;
-        } while (start < rows.length);
+        try (ColumnChunkEncoder encoder = new ColumnChunkEncoder(codec);
+             NativeColumn longs = new NativeColumn(NativeColumn.ALIGNMENT);
+             NativeColumn offsets = new NativeColumn(NativeColumn.ALIGNMENT);
+             NativeColumn data = new NativeColumn(NativeColumn.ALIGNMENT)) {
+            Gather gather = new Gather(longs, offsets, data);
+            int start = 0;
+            do {
+                int end = Math.min(rows.length, start + ROW_GROUP_ROWS);
+                List<ChunkMeta> chunks = new ArrayList<>(columns.size());
+                long totalBytes = 0;
+                for (Column column : columns) {
+                    EncodedChunk chunk = encodeColumn(encoder, gather, column, table, rows, start, end);
+                    long fileOffset = file.size();
+                    for (Page page : chunk.pages()) {
+                        file.write(page.header(), 0, page.header().length);
+                        byte[] body = page.body().toArray(BYTE);
+                        file.write(body, 0, body.length);
+                    }
+                    long dictionaryOffset = chunk.dictionaryEncoded() ? fileOffset + chunk.dictionaryPageOffset() : -1;
+                    chunks.add(new ChunkMeta(column, chunk, fileOffset, fileOffset + chunk.dataPageOffset(),
+                            dictionaryOffset));
+                    totalBytes += chunk.uncompressedBytes();
+                }
+                groups.add(new RowGroupMeta(chunks, end - start, totalBytes));
+                start = end;
+            } while (start < rows.length);
+        }
         byte[] footer = footer(columns, groups, rows.length, codec);
         file.write(footer, 0, footer.length);
         file.write(ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(footer.length).array(),
@@ -101,49 +120,63 @@ final class ParquetWriter {
         return columns;
     }
 
-    private static EncodedChunk encodeColumn(ColumnChunkEncoder encoder, Column column, DeltaMemTable table,
-                                             int[] rows, int from, int to) {
+    private static EncodedChunk encodeColumn(ColumnChunkEncoder encoder, Gather gather, Column column,
+                                             DeltaMemTable table, int[] rows, int from, int to) {
+        int count = to - from;
         return switch (column.source()) {
-            case KEY -> encoder.encodeUniqueFixed(gatherLongs(table.keyHashColumn(), rows, from, to),
-                    column.physical());
-            case LONG -> encoder.encodeFixed(gatherLongs(table.longColumn(column.slot()), rows, from, to),
-                    column.physical());
-            case INT -> encoder.encodeFixed(gatherInts(table.intColumn(column.slot()), rows, from, to),
-                    column.physical());
-            case VAR -> {
-                int count = to - from;
-                int[] offsets = new int[count + 1];
-                MemorySegment lengths = table.varCharLengthColumn(column.slot());
-                for (int i = 0; i < count; i++) {
-                    offsets[i + 1] = offsets[i] + lengths.getAtIndex(ValueLayout.JAVA_INT, rows[from + i]);
-                }
-                byte[] data = new byte[offsets[count]];
-                MemorySegment starts = table.varCharOffsetColumn(column.slot());
-                MemorySegment slab = table.varCharSlab();
-                for (int i = 0; i < count; i++) {
-                    int row = rows[from + i];
-                    MemorySegment.copy(slab, ValueLayout.JAVA_BYTE, starts.getAtIndex(ValueLayout.JAVA_INT, row),
-                            data, offsets[i], lengths.getAtIndex(ValueLayout.JAVA_INT, row));
-                }
-                yield encoder.encodeStrings(data, offsets);
-            }
+            case KEY -> encoder.encodeUniqueFixed(gatherLongs(table.keyHashColumn(), rows, from, to, gather.longs()),
+                    count, column.physical());
+            case LONG -> encoder.encodeFixed(gatherLongs(table.longColumn(column.slot()), rows, from, to,
+                    gather.longs()), count, column.physical());
+            case INT -> encoder.encodeFixed(gatherInts(table.intColumn(column.slot()), rows, from, to,
+                    gather.longs()), count, column.physical());
+            case VAR -> encodeStrings(encoder, gather, table, column.slot(), rows, from, count);
         };
     }
 
-    private static long[] gatherLongs(MemorySegment source, int[] rows, int from, int to) {
-        long[] values = new long[to - from];
-        for (int i = 0; i < values.length; i++) {
-            values[i] = source.getAtIndex(ValueLayout.JAVA_LONG, rows[from + i]);
+    private static EncodedChunk encodeStrings(ColumnChunkEncoder encoder, Gather gather, DeltaMemTable table,
+                                              int slot, int[] rows, int from, int count) {
+        NativeColumn offsets = gather.offsets();
+        NativeColumn data = gather.data();
+        offsets.ensureCapacity((count + 1L) * Integer.BYTES);
+        MemorySegment lengths = table.varCharLengthColumn(slot);
+        MemorySegment starts = table.varCharOffsetColumn(slot);
+        MemorySegment slab = table.varCharSlab();
+        offsets.segment().setAtIndex(INT, 0, 0);
+        for (int i = 0; i < count; i++) {
+            int row = rows[from + i];
+            offsets.segment().setAtIndex(INT, i + 1, offsets.segment().getAtIndex(INT, i)
+                    + lengths.getAtIndex(INT, row));
         }
-        return values;
+        long total = offsets.segment().getAtIndex(INT, count);
+        data.ensureCapacity(Math.max(1, total));
+        for (int i = 0; i < count; i++) {
+            int row = rows[from + i];
+            MemorySegment.copy(slab, starts.getAtIndex(INT, row), data.segment(),
+                    offsets.segment().getAtIndex(INT, i), lengths.getAtIndex(INT, row));
+        }
+        return encoder.encodeStrings(data.segment().asSlice(0, total),
+                offsets.segment().asSlice(0, (count + 1L) * Integer.BYTES), count);
     }
 
-    private static long[] gatherInts(MemorySegment source, int[] rows, int from, int to) {
-        long[] values = new long[to - from];
-        for (int i = 0; i < values.length; i++) {
-            values[i] = source.getAtIndex(ValueLayout.JAVA_INT, rows[from + i]);
+    private static MemorySegment gatherLongs(MemorySegment source, int[] rows, int from, int to, NativeColumn target) {
+        int count = to - from;
+        target.ensureCapacity(count * (long) Long.BYTES);
+        MemorySegment out = target.segment();
+        for (int i = 0; i < count; i++) {
+            out.setAtIndex(LONG, i, source.getAtIndex(LONG, rows[from + i]));
         }
-        return values;
+        return out.asSlice(0, count * (long) Long.BYTES);
+    }
+
+    private static MemorySegment gatherInts(MemorySegment source, int[] rows, int from, int to, NativeColumn target) {
+        int count = to - from;
+        target.ensureCapacity(count * (long) Long.BYTES);
+        MemorySegment out = target.segment();
+        for (int i = 0; i < count; i++) {
+            out.setAtIndex(LONG, i, source.getAtIndex(INT, rows[from + i]));
+        }
+        return out.asSlice(0, count * (long) Long.BYTES);
     }
 
     private static byte[] footer(List<Column> columns, List<RowGroupMeta> groups, long rowCount, ParquetCodec codec) {
@@ -208,7 +241,7 @@ final class ParquetWriter {
         footer.i32Field(4, codec.thriftId);
         footer.i64Field(5, rows);
         footer.i64Field(6, chunk.uncompressedBytes());
-        footer.i64Field(7, chunk.bytes().length);
+        footer.i64Field(7, chunk.compressedBytes());
         footer.i64Field(9, meta.dataPageOffset());
         if (chunk.dictionaryEncoded()) {
             footer.i64Field(COLUMN_DICTIONARY_PAGE_OFFSET, meta.dictionaryPageOffset());

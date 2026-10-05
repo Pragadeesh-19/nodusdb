@@ -3,6 +3,9 @@ package io.nodusdb.lake;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Random;
@@ -75,6 +78,11 @@ class SnappyCodecTest {
     }
 
     private static void assertRoundTrip(byte[] input) throws IOException {
-        assertArrayEquals(input, SnappyCodec.decompress(SnappyCodec.compress(input)));
+        try (SnappyCompressor compressor = new SnappyCompressor(); NativeSink sink = new NativeSink()) {
+            MemorySegment source = Arena.ofAuto().allocate(input.length);
+            MemorySegment.copy(input, 0, source, ValueLayout.JAVA_BYTE, 0, input.length);
+            compressor.compress(source, sink);
+            assertArrayEquals(input, SnappyCodec.decompress(sink.segment().toArray(ValueLayout.JAVA_BYTE)));
+        }
     }
 }

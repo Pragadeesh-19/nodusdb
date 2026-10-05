@@ -1,18 +1,22 @@
 package io.nodusdb.lake;
 
+import java.lang.foreign.MemorySegment;
+
 public enum ParquetCodec {
 
     UNCOMPRESSED(0) {
         @Override
-        byte[] compress(byte[] payload) {
+        MemorySegment compress(MemorySegment payload, NativeSink out, SnappyCompressor snappy) {
             return payload;
         }
     },
 
     SNAPPY(1) {
         @Override
-        byte[] compress(byte[] payload) {
-            return SnappyCodec.compress(payload);
+        MemorySegment compress(MemorySegment payload, NativeSink out, SnappyCompressor snappy) {
+            long start = out.length();
+            snappy.compress(payload, out);
+            return out.segment().asSlice(start);
         }
     };
 
@@ -22,5 +26,5 @@ public enum ParquetCodec {
         this.thriftId = thriftId;
     }
 
-    abstract byte[] compress(byte[] payload);
+    abstract MemorySegment compress(MemorySegment payload, NativeSink out, SnappyCompressor snappy);
 }

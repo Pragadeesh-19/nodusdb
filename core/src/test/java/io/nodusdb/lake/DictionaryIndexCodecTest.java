@@ -3,12 +3,24 @@ package io.nodusdb.lake;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class DictionaryIndexCodecTest {
+
+    private static byte[] encode(int[] indices, int dictionarySize) {
+        MemorySegment segment = Arena.ofAuto().allocate((long) indices.length * Integer.BYTES);
+        MemorySegment.copy(indices, 0, segment, ValueLayout.JAVA_INT, 0, indices.length);
+        try (NativeSink sink = new NativeSink()) {
+            DictionaryIndexCodec.encode(segment, indices.length, dictionarySize, sink);
+            return sink.segment().toArray(ValueLayout.JAVA_BYTE);
+        }
+    }
 
     @Test
     void roundTripsIndicesAcrossDictionarySizesAndPartialGroups() throws IOException {
@@ -20,7 +32,7 @@ class DictionaryIndexCodecTest {
                 for (int i = 0; i < count; i++) {
                     indices[i] = random.nextInt(dictionarySize);
                 }
-                byte[] encoded = DictionaryIndexCodec.encode(indices, dictionarySize);
+                byte[] encoded = encode(indices, dictionarySize);
 
                 int[] decoded = DictionaryIndexCodec.decode(encoded, 0, encoded.length, count);
 

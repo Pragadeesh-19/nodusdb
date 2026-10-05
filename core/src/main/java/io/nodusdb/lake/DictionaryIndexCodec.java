@@ -1,11 +1,13 @@
 package io.nodusdb.lake;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 
 final class DictionaryIndexCodec {
 
     private static final int MAX_BIT_WIDTH = 32;
+    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
 
     private DictionaryIndexCodec() {
     }
@@ -14,26 +16,24 @@ final class DictionaryIndexCodec {
         return Math.max(1, Integer.SIZE - Integer.numberOfLeadingZeros(Math.max(0, dictionarySize - 1)));
     }
 
-    static byte[] encode(int[] indices, int dictionarySize) {
+    static void encode(MemorySegment indices, int count, int dictionarySize, NativeSink out) {
         int width = bitWidthFor(dictionarySize);
-        int groups = (indices.length + 7) / 8;
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(width);
-        writeVarint(out, ((long) groups << 1) | 1L);
+        int groups = (count + 7) / 8;
+        out.put(width);
+        out.putVarint(((long) groups << 1) | 1L);
         long buffer = 0;
         int bits = 0;
         int slots = groups * 8;
         for (int i = 0; i < slots; i++) {
-            int value = i < indices.length ? indices[i] : 0;
+            int value = i < count ? indices.getAtIndex(INT, i) : 0;
             buffer |= (long) value << bits;
             bits += width;
             while (bits >= Byte.SIZE) {
-                out.write((int) buffer);
+                out.put((int) buffer);
                 buffer >>>= Byte.SIZE;
                 bits -= Byte.SIZE;
             }
         }
-        return out.toByteArray();
     }
 
     static int[] decode(byte[] data, int offset, int length, int count) throws IOException {
@@ -88,15 +88,6 @@ final class DictionaryIndexCodec {
             }
         }
         return values;
-    }
-
-    private static void writeVarint(ByteArrayOutputStream out, long value) {
-        long remaining = value;
-        while (remaining >= 0x80) {
-            out.write((int) (remaining & 0x7F) | 0x80);
-            remaining >>>= 7;
-        }
-        out.write((int) remaining);
     }
 
     private static long readVarint(byte[] data, Cursor cursor, int end) throws IOException {
