@@ -95,6 +95,43 @@ class BulkLoadTest {
     }
 
     @Test
+    void parallelFillOfManyHighDegreeNodesMatchesASequentialFill() throws InterruptedException {
+        int nodes = 256;
+        Random random = new Random(41L);
+        List<Set<Long>> outgoing = new ArrayList<>();
+        for (int u = 0; u < nodes; u++) {
+            Set<Long> targets = new HashSet<>();
+            int degree = 17 + (u * 7) % 40;
+            while (targets.size() < degree) {
+                targets.add((long) random.nextInt(nodes));
+            }
+            outgoing.add(targets);
+        }
+        List<Set<Long>> incoming = incomingOf(outgoing);
+        GraphKernel reference = new GraphKernel();
+        load(reference, outgoing, incoming);
+
+        GraphKernel parallel = new GraphKernel();
+        parallel.prepareBulkLoad(degrees(outgoing), degrees(incoming));
+        int threads = 8;
+        Thread[] workers = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            int from = nodes * t / threads;
+            int to = nodes * (t + 1) / threads;
+            workers[t] = new Thread(() -> fill(parallel, outgoing, incoming, from, to));
+            workers[t].start();
+        }
+        for (Thread worker : workers) {
+            worker.join();
+        }
+        for (int u = 0; u < nodes; u++) {
+            assertEquals(reference.getDegree(u), parallel.getDegree(u), "out-degree of " + u);
+            assertEquals(neighbors(reference, u, true), neighbors(parallel, u, true), "out-neighbors of " + u);
+            assertEquals(neighbors(reference, u, false), neighbors(parallel, u, false), "in-neighbors of " + u);
+        }
+    }
+
+    @Test
     void preparingANonEmptyGraphIsRejected() {
         GraphKernel kernel = new GraphKernel();
         kernel.addEdge(0, 1);

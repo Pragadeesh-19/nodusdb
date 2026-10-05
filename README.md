@@ -422,7 +422,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 ## Limits
 
-- **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 2.8 seconds, with the snapshot load taking about 2.2 of them. The live graph occupies about 1.5 GB. Most of the remaining time is building the membership indexes of high-degree nodes, and garbage collection during that build.
+- **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 2.3 to 3.7 seconds (3.7 seconds when it also replays 500,000 log frames). The graph lives in native memory, so the live Java heap after load is about 1 MB, down from 1,180 MB before the off-heap move. The remaining time is the snapshot load, which fills native blocks one edge at a time.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **Calls on one handle are serialized.** The kernel allows one writer and many readers. Python objects and C handles are both safe to share across threads, but calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.

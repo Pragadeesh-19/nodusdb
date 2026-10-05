@@ -5,45 +5,57 @@ import org.junit.jupiter.api.Test;
 import java.lang.foreign.Arena;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NodeTableTest {
 
     @Test
-    void unwrittenNodesAreEmptyWithNoBlock() {
+    void unwrittenNodesAreEmptyWithNoBlockAndNoSet() {
         NodeTable table = new NodeTable(Arena.ofAuto(), 16);
         table.ensureCapacity(200);
 
-        for (int node : new int[] {0, 15, 16, 199, -1, 500}) {
+        for (int node : new int[] {0, 15, 16, 199, 500}) {
             long slot = table.read(node);
             assertEquals(0, NodeTable.degreeOf(slot), "degree of " + node);
             assertEquals(NodeTable.NO_BLOCK, NodeTable.blockOf(slot), "block of " + node);
+            assertFalse(NodeTable.isSet(slot), "set flag of " + node);
         }
     }
 
     @Test
-    void degreeAndBlockAreIndependentlyRecovered() {
+    void lowDegreeWritesRecoverDegreeAndBlock() {
         NodeTable table = new NodeTable(Arena.ofAuto(), 16);
         table.write(3, 15, 7);
-        table.write(4, Integer.MAX_VALUE, NodeTable.NO_BLOCK);
-        table.write(5, 0, Integer.MAX_VALUE);
+        table.write(4, 0, NodeTable.NO_BLOCK);
 
         assertEquals(15, NodeTable.degreeOf(table.read(3)));
         assertEquals(7, NodeTable.blockOf(table.read(3)));
-        assertEquals(Integer.MAX_VALUE, NodeTable.degreeOf(table.read(4)));
+        assertFalse(NodeTable.isSet(table.read(3)));
         assertEquals(NodeTable.NO_BLOCK, NodeTable.blockOf(table.read(4)));
-        assertEquals(0, NodeTable.degreeOf(table.read(5)));
-        assertEquals(Integer.MAX_VALUE, NodeTable.blockOf(table.read(5)));
+    }
+
+    @Test
+    void setWritesCarryTheFlagAndTheHandle() {
+        NodeTable table = new NodeTable(Arena.ofAuto(), 16);
+        table.writeSet(5, Integer.MAX_VALUE, 1_234_567);
+
+        long slot = table.read(5);
+        assertTrue(NodeTable.isSet(slot));
+        assertEquals(Integer.MAX_VALUE, NodeTable.degreeOf(slot));
+        assertEquals(1_234_567, NodeTable.handleOf(slot));
     }
 
     @Test
     void growthKeepsEarlierWrites() {
         NodeTable table = new NodeTable(Arena.ofAuto(), 16);
         table.write(9, 4, 2);
+        table.writeSet(10, 20, 77);
 
         table.ensureCapacity(10_000);
 
-        assertEquals(4, NodeTable.degreeOf(table.read(9)));
         assertEquals(2, NodeTable.blockOf(table.read(9)));
+        assertEquals(77, NodeTable.handleOf(table.read(10)));
         assertEquals(0, NodeTable.degreeOf(table.read(9_999)));
     }
 }
