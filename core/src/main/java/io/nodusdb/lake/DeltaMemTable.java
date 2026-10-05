@@ -1,18 +1,17 @@
 package io.nodusdb.lake;
 
-import io.nodusdb.kernel.LongIntIndex;
-
-import java.util.Arrays;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.Objects;
 
 /*
  * Columnar write absorber keyed by a 64-bit key hash. Rows 0..rowCount-1 are always dense.
  *
- *   keyHashes          [k0 k1 k2 ... k(n-1) | free ]
- *   rowKinds           [INSERT/TOMBSTONE per row  | free ]
- *   longColumns[c]     [v0 v1 v2 ... v(n-1) | free ]   doubles are stored as raw bits
+ *   keyHashes          [k0 k1 k2 ... k(n-1) | free ]     native, 64-byte aligned
+ *   rowKinds           [INSERT/TOMBSTONE per row | free ]
+ *   longColumns[c]     [v0 v1 v2 ... v(n-1) | free ]     doubles are stored as raw bits
  *   intColumns[c]      [i0 i1 i2 ... i(n-1) | free ]
- *   varCharOffsets[c]  [o0 o1 o2 ... o(n-1) | free ]  -> position in varCharSlab
+ *   varCharOffsets[c]  [o0 o1 o2 ... o(n-1) | free ]     -> position in varCharSlab
  *   varCharLengths[c]  [l0 l1 l2 ... l(n-1) | free ]
  *   varCharSlab        [ live bytes ... | dead bytes | free ]
  *   index              keyHash -> row, the only structure that maps keys to rows
@@ -21,7 +20,7 @@ import java.util.Objects;
  * the deletion can be written to a delete file if an older committed row exists. delete removes
  * the row outright, with swap-and-pop across every column.
  */
-public final class DeltaMemTable {
+public final class DeltaMemTable implements AutoCloseable {
 
     public static final int ABSENT = -1;
 
@@ -33,6 +32,9 @@ public final class DeltaMemTable {
 
     static final int MAX_SLAB_BYTES = 1 << 30;
 
+    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
+    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
     private static final byte[] EMPTY_SLAB = new byte[0];
 
     public record Schema(int longColumns, int intColumns, int varCharColumns) {
@@ -45,13 +47,14 @@ public final class DeltaMemTable {
     }
 
     private final Schema schema;
-    private final LongIntIndex index;
-    private final long[][] longColumns;
-    private final int[][] intColumns;
-    private final int[][] varCharOffsets;
-    private final int[][] varCharLengths;
-    private long[] keyHashes;
-    private byte[] rowKinds;
+    private final NativeKeyIndex index;
+    private final NativeColumn keyHashes;
+    private final NativeColumn rowKinds;
+    private final NativeColumn[] longColumns;
+    private final NativeColumn[] intColumns;
+    private final NativeColumn[] varCharOffsets;
+    private final NativeColumn[] varCharLengths;
+    private int rowCapacity;
     private byte[] varCharSlab;
     private byte[] spareSlab = EMPTY_SLAB;
     private int slabUsed;
@@ -67,22 +70,23 @@ public final class DeltaMemTable {
             throw new IllegalArgumentException(
                     "initial slab size must be a power of two in [1, 2^30]: " + initialSlabBytes);
         }
-        this.index = new LongIntIndex(initialCapacity << 1);
-        this.keyHashes = new long[initialCapacity];
-        this.rowKinds = new byte[initialCapacity];
-        this.longColumns = new long[schema.longColumns()][];
-        this.intColumns = new int[schema.intColumns()][];
-        this.varCharOffsets = new int[schema.varCharColumns()][];
-        this.varCharLengths = new int[schema.varCharColumns()][];
+        this.rowCapacity = initialCapacity;
+        this.index = new NativeKeyIndex(initialCapacity << 1);
+        this.keyHashes = new NativeColumn((long) initialCapacity * Long.BYTES);
+        this.rowKinds = new NativeColumn(initialCapacity);
+        this.longColumns = new NativeColumn[schema.longColumns()];
+        this.intColumns = new NativeColumn[schema.intColumns()];
+        this.varCharOffsets = new NativeColumn[schema.varCharColumns()];
+        this.varCharLengths = new NativeColumn[schema.varCharColumns()];
         for (int c = 0; c < schema.longColumns(); c++) {
-            longColumns[c] = new long[initialCapacity];
+            longColumns[c] = new NativeColumn((long) initialCapacity * Long.BYTES);
         }
         for (int c = 0; c < schema.intColumns(); c++) {
-            intColumns[c] = new int[initialCapacity];
+            intColumns[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
         }
         for (int c = 0; c < schema.varCharColumns(); c++) {
-            varCharOffsets[c] = new int[initialCapacity];
-            varCharLengths[c] = new int[initialCapacity];
+            varCharOffsets[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
+            varCharLengths[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
         }
         this.varCharSlab = new byte[initialSlabBytes];
     }
@@ -98,7 +102,7 @@ public final class DeltaMemTable {
         checkArity(varCharValueLengths.length, schema.varCharColumns(), "varCharValueLengths");
         int totalBytes = totalLength(varCharValueLengths, varCharValues.length);
 
-        int row = index.get(keyHash);
+        int row = index.find(keyHashes.segment(), keyHash);
         if (row != ABSENT) {
             overwrite(row, longValues, intValues, varCharValues, varCharValueLengths, totalBytes);
             return false;
@@ -108,29 +112,29 @@ public final class DeltaMemTable {
     }
 
     public boolean delete(long keyHash) {
-        int row = index.get(keyHash);
+        int row = index.find(keyHashes.segment(), keyHash);
         if (row == ABSENT) {
             return false;
         }
         int lastRow = rowCount - 1;
-        for (int c = 0; c < varCharLengths.length; c++) {
-            liveVarCharBytes -= varCharLengths[c][row];
+        for (NativeColumn column : varCharLengths) {
+            liveVarCharBytes -= column.segment().getAtIndex(INT, row);
         }
+        index.remove(keyHashes.segment(), keyHash);
         if (row != lastRow) {
             moveRow(lastRow, row);
         }
-        index.remove(keyHash);
         rowCount = lastRow;
         return true;
     }
 
     public void tombstone(long keyHash) {
-        int row = index.get(keyHash);
+        int row = index.find(keyHashes.segment(), keyHash);
         if (row == ABSENT) {
             appendTombstone(keyHash);
-        } else if (rowKinds[row] == INSERT) {
+        } else if (kindAt(row) == INSERT) {
             clearVarChars(row);
-            rowKinds[row] = TOMBSTONE;
+            rowKinds.segment().set(BYTE, row, TOMBSTONE);
         }
     }
 
@@ -142,7 +146,7 @@ public final class DeltaMemTable {
     }
 
     public int getRow(long keyHash) {
-        return index.get(keyHash);
+        return index.find(keyHashes.segment(), keyHash);
     }
 
     public int size() {
@@ -155,17 +159,17 @@ public final class DeltaMemTable {
 
     public long keyHashAt(int row) {
         checkRow(row);
-        return keyHashes[row];
+        return keyHashes.segment().getAtIndex(LONG, row);
     }
 
     public byte kindAt(int row) {
         checkRow(row);
-        return rowKinds[row];
+        return rowKinds.segment().get(BYTE, row);
     }
 
     public long longAt(int column, int row) {
         checkRow(row);
-        return longColumns[column][row];
+        return longColumns[column].segment().getAtIndex(LONG, row);
     }
 
     public double doubleAt(int column, int row) {
@@ -174,18 +178,19 @@ public final class DeltaMemTable {
 
     public int intAt(int column, int row) {
         checkRow(row);
-        return intColumns[column][row];
+        return intColumns[column].segment().getAtIndex(INT, row);
     }
 
     public int varCharLength(int column, int row) {
         checkRow(row);
-        return varCharLengths[column][row];
+        return varCharLengths[column].segment().getAtIndex(INT, row);
     }
 
     public int copyVarChar(int column, int row, byte[] destination, int destinationOffset) {
         checkRow(row);
-        int length = varCharLengths[column][row];
-        System.arraycopy(varCharSlab, varCharOffsets[column][row], destination, destinationOffset, length);
+        int length = varCharLengths[column].segment().getAtIndex(INT, row);
+        System.arraycopy(varCharSlab, varCharOffsets[column].segment().getAtIndex(INT, row),
+                destination, destinationOffset, length);
         return length;
     }
 
@@ -193,32 +198,43 @@ public final class DeltaMemTable {
         return varCharSlab.length;
     }
 
-    long[] keyHashColumn() {
-        return keyHashes;
+    MemorySegment keyHashColumn() {
+        return keyHashes.segment();
     }
 
-    byte[] kindColumn() {
-        return rowKinds;
+    MemorySegment kindColumn() {
+        return rowKinds.segment();
     }
 
-    long[] longColumn(int column) {
-        return longColumns[column];
+    MemorySegment longColumn(int column) {
+        return longColumns[column].segment();
     }
 
-    int[] intColumn(int column) {
-        return intColumns[column];
+    MemorySegment intColumn(int column) {
+        return intColumns[column].segment();
     }
 
-    int[] varCharOffsetColumn(int column) {
-        return varCharOffsets[column];
+    MemorySegment varCharOffsetColumn(int column) {
+        return varCharOffsets[column].segment();
     }
 
-    int[] varCharLengthColumn(int column) {
-        return varCharLengths[column];
+    MemorySegment varCharLengthColumn(int column) {
+        return varCharLengths[column].segment();
     }
 
     byte[] varCharSlab() {
         return varCharSlab;
+    }
+
+    @Override
+    public void close() {
+        index.close();
+        keyHashes.close();
+        rowKinds.close();
+        closeAll(longColumns);
+        closeAll(intColumns);
+        closeAll(varCharOffsets);
+        closeAll(varCharLengths);
     }
 
     public void assertInvariant() {
@@ -230,22 +246,24 @@ public final class DeltaMemTable {
         }
         long liveBytes = 0;
         for (int row = 0; row < rowCount; row++) {
-            if (index.get(keyHashes[row]) != row) {
+            long key = keyHashAt(row);
+            if (index.find(keyHashes.segment(), key) != row) {
                 throw new IllegalStateException(
-                        "keyHashes[" + row + "]=" + keyHashes[row] + " is indexed at " + index.get(keyHashes[row]));
+                        "keyHashes[" + row + "]=" + key + " is indexed at " + index.find(keyHashes.segment(), key));
             }
-            if (rowKinds[row] != INSERT && rowKinds[row] != TOMBSTONE) {
-                throw new IllegalStateException("row " + row + " has unknown kind " + rowKinds[row]);
+            byte kind = kindAt(row);
+            if (kind != INSERT && kind != TOMBSTONE) {
+                throw new IllegalStateException("row " + row + " has unknown kind " + kind);
             }
             for (int c = 0; c < varCharLengths.length; c++) {
-                int offset = varCharOffsets[c][row];
-                int length = varCharLengths[c][row];
+                int offset = varCharOffsets[c].segment().getAtIndex(INT, row);
+                int length = varCharLengths[c].segment().getAtIndex(INT, row);
                 if (offset < 0 || length < 0 || (long) offset + length > slabUsed) {
                     throw new IllegalStateException(
                             "var column " + c + " row " + row + " spans [" + offset + ", +" + length
                                     + ") outside used slab " + slabUsed);
                 }
-                if (rowKinds[row] == TOMBSTONE && length != 0) {
+                if (kind == TOMBSTONE && length != 0) {
                     throw new IllegalStateException("tombstone row " + row + " carries " + length + " var-char bytes");
                 }
                 liveBytes += length;
@@ -260,31 +278,33 @@ public final class DeltaMemTable {
                         byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
         checkRowCapacity();
         ensureSlabRoom(totalBytes);
-        if (rowCount == keyHashes.length) {
+        if (rowCount == rowCapacity) {
             growRows();
         }
         int row = rowCount;
-        keyHashes[row] = keyHash;
-        rowKinds[row] = INSERT;
+        keyHashes.segment().setAtIndex(LONG, row, keyHash);
+        rowKinds.segment().set(BYTE, row, INSERT);
         writeFixedWidth(row, longValues, intValues);
         writeVarChars(row, varCharValues, varCharValueLengths);
-        index.put(keyHash, row);
+        index.insert(keyHashes.segment(), keyHash, row);
         rowCount++;
     }
 
     private void appendTombstone(long keyHash) {
         checkRowCapacity();
-        if (rowCount == keyHashes.length) {
+        if (rowCount == rowCapacity) {
             growRows();
         }
         int row = rowCount;
-        keyHashes[row] = keyHash;
-        rowKinds[row] = TOMBSTONE;
-        for (int c = 0; c < varCharLengths.length; c++) {
-            varCharOffsets[c][row] = 0;
-            varCharLengths[c][row] = 0;
+        keyHashes.segment().setAtIndex(LONG, row, keyHash);
+        rowKinds.segment().set(BYTE, row, TOMBSTONE);
+        for (NativeColumn column : varCharOffsets) {
+            column.segment().setAtIndex(INT, row, 0);
         }
-        index.put(keyHash, row);
+        for (NativeColumn column : varCharLengths) {
+            column.segment().setAtIndex(INT, row, 0);
+        }
+        index.insert(keyHashes.segment(), keyHash, row);
         rowCount++;
     }
 
@@ -292,25 +312,25 @@ public final class DeltaMemTable {
                            byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
         ensureSlabRoom(totalBytes);
         clearVarChars(row);
-        rowKinds[row] = INSERT;
+        rowKinds.segment().set(BYTE, row, INSERT);
         writeFixedWidth(row, longValues, intValues);
         writeVarChars(row, varCharValues, varCharValueLengths);
     }
 
     private void clearVarChars(int row) {
         for (int c = 0; c < varCharLengths.length; c++) {
-            liveVarCharBytes -= varCharLengths[c][row];
-            varCharLengths[c][row] = 0;
-            varCharOffsets[c][row] = 0;
+            liveVarCharBytes -= varCharLengths[c].segment().getAtIndex(INT, row);
+            varCharLengths[c].segment().setAtIndex(INT, row, 0);
+            varCharOffsets[c].segment().setAtIndex(INT, row, 0);
         }
     }
 
     private void writeFixedWidth(int row, long[] longValues, int[] intValues) {
         for (int c = 0; c < longColumns.length; c++) {
-            longColumns[c][row] = longValues[c];
+            longColumns[c].segment().setAtIndex(LONG, row, longValues[c]);
         }
         for (int c = 0; c < intColumns.length; c++) {
-            intColumns[c][row] = intValues[c];
+            intColumns[c].segment().setAtIndex(INT, row, intValues[c]);
         }
     }
 
@@ -319,8 +339,8 @@ public final class DeltaMemTable {
         for (int c = 0; c < varCharLengths.length; c++) {
             int length = varCharValueLengths[c];
             System.arraycopy(varCharValues, source, varCharSlab, slabUsed, length);
-            varCharOffsets[c][row] = slabUsed;
-            varCharLengths[c][row] = length;
+            varCharOffsets[c].segment().setAtIndex(INT, row, slabUsed);
+            varCharLengths[c].segment().setAtIndex(INT, row, length);
             slabUsed += length;
             liveVarCharBytes += length;
             source += length;
@@ -328,20 +348,20 @@ public final class DeltaMemTable {
     }
 
     private void moveRow(int from, int to) {
-        long movedKey = keyHashes[from];
-        keyHashes[to] = movedKey;
-        rowKinds[to] = rowKinds[from];
-        for (long[] column : longColumns) {
-            column[to] = column[from];
+        long movedKey = keyHashes.segment().getAtIndex(LONG, from);
+        keyHashes.segment().setAtIndex(LONG, to, movedKey);
+        rowKinds.segment().set(BYTE, to, rowKinds.segment().get(BYTE, from));
+        for (NativeColumn column : longColumns) {
+            column.segment().setAtIndex(LONG, to, column.segment().getAtIndex(LONG, from));
         }
-        for (int[] column : intColumns) {
-            column[to] = column[from];
+        for (NativeColumn column : intColumns) {
+            column.segment().setAtIndex(INT, to, column.segment().getAtIndex(INT, from));
         }
         for (int c = 0; c < varCharLengths.length; c++) {
-            varCharOffsets[c][to] = varCharOffsets[c][from];
-            varCharLengths[c][to] = varCharLengths[c][from];
+            varCharOffsets[c].segment().setAtIndex(INT, to, varCharOffsets[c].segment().getAtIndex(INT, from));
+            varCharLengths[c].segment().setAtIndex(INT, to, varCharLengths[c].segment().getAtIndex(INT, from));
         }
-        index.put(movedKey, to);
+        index.relocate(keyHashes.segment(), movedKey, to);
     }
 
     private void ensureSlabRoom(int extra) {
@@ -364,9 +384,10 @@ public final class DeltaMemTable {
         int cursor = 0;
         for (int row = 0; row < rowCount; row++) {
             for (int c = 0; c < varCharLengths.length; c++) {
-                int length = varCharLengths[c][row];
-                System.arraycopy(varCharSlab, varCharOffsets[c][row], destination, cursor, length);
-                varCharOffsets[c][row] = cursor;
+                int length = varCharLengths[c].segment().getAtIndex(INT, row);
+                System.arraycopy(varCharSlab, varCharOffsets[c].segment().getAtIndex(INT, row),
+                        destination, cursor, length);
+                varCharOffsets[c].segment().setAtIndex(INT, row, cursor);
                 cursor += length;
             }
         }
@@ -382,23 +403,32 @@ public final class DeltaMemTable {
     }
 
     private void growRows() {
-        int newCapacity = keyHashes.length << 1;
-        keyHashes = Arrays.copyOf(keyHashes, newCapacity);
-        rowKinds = Arrays.copyOf(rowKinds, newCapacity);
-        for (int c = 0; c < longColumns.length; c++) {
-            longColumns[c] = Arrays.copyOf(longColumns[c], newCapacity);
+        long rows = 2L * rowCapacity;
+        keyHashes.ensureCapacity(rows * Long.BYTES);
+        rowKinds.ensureCapacity(rows);
+        for (NativeColumn column : longColumns) {
+            column.ensureCapacity(rows * Long.BYTES);
         }
-        for (int c = 0; c < intColumns.length; c++) {
-            intColumns[c] = Arrays.copyOf(intColumns[c], newCapacity);
+        for (NativeColumn column : intColumns) {
+            column.ensureCapacity(rows * Integer.BYTES);
         }
-        for (int c = 0; c < varCharLengths.length; c++) {
-            varCharOffsets[c] = Arrays.copyOf(varCharOffsets[c], newCapacity);
-            varCharLengths[c] = Arrays.copyOf(varCharLengths[c], newCapacity);
+        for (NativeColumn column : varCharOffsets) {
+            column.ensureCapacity(rows * Integer.BYTES);
         }
+        for (NativeColumn column : varCharLengths) {
+            column.ensureCapacity(rows * Integer.BYTES);
+        }
+        rowCapacity = Math.toIntExact(rows);
     }
 
     private void checkRow(int row) {
         Objects.checkIndex(row, rowCount);
+    }
+
+    private static void closeAll(NativeColumn[] columns) {
+        for (NativeColumn column : columns) {
+            column.close();
+        }
     }
 
     private static void checkArity(int actual, int expected, String name) {

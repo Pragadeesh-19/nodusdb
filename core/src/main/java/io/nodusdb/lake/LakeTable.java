@@ -59,6 +59,7 @@ public final class LakeTable implements AutoCloseable {
     private List<Manifest.Entry> committed;
     private long nextSequence;
     private Throwable lastFlushFailure;
+    private boolean closed;
 
     public static LakeTable open(Path directory, LakeSchema schema, Config config) throws IOException {
         ScheduledExecutorService flusher = Executors.newSingleThreadScheduledExecutor(daemon("nodus-lake-flusher"));
@@ -226,12 +227,17 @@ public final class LakeTable implements AutoCloseable {
     @Override
     public void close() {
         flush();
+        synchronized (lock) {
+            closed = true;
+            active.close();
+            spare.close();
+        }
         release.run();
     }
 
     private void flushIfDirty() {
         synchronized (lock) {
-            if (frozen == null && active.size() == 0) {
+            if (closed || (frozen == null && active.size() == 0)) {
                 return;
             }
         }

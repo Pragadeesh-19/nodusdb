@@ -6,6 +6,8 @@ import io.nodusdb.lake.ColumnChunkEncoder.Statistics;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -111,34 +113,35 @@ final class ParquetWriter {
             case VAR -> {
                 int count = to - from;
                 int[] offsets = new int[count + 1];
-                int[] lengths = table.varCharLengthColumn(column.slot());
+                MemorySegment lengths = table.varCharLengthColumn(column.slot());
                 for (int i = 0; i < count; i++) {
-                    offsets[i + 1] = offsets[i] + lengths[rows[from + i]];
+                    offsets[i + 1] = offsets[i] + lengths.getAtIndex(ValueLayout.JAVA_INT, rows[from + i]);
                 }
                 byte[] data = new byte[offsets[count]];
-                int[] starts = table.varCharOffsetColumn(column.slot());
+                MemorySegment starts = table.varCharOffsetColumn(column.slot());
                 byte[] slab = table.varCharSlab();
                 for (int i = 0; i < count; i++) {
                     int row = rows[from + i];
-                    System.arraycopy(slab, starts[row], data, offsets[i], lengths[row]);
+                    System.arraycopy(slab, starts.getAtIndex(ValueLayout.JAVA_INT, row), data, offsets[i],
+                            lengths.getAtIndex(ValueLayout.JAVA_INT, row));
                 }
                 yield encoder.encodeStrings(data, offsets);
             }
         };
     }
 
-    private static long[] gatherLongs(long[] source, int[] rows, int from, int to) {
+    private static long[] gatherLongs(MemorySegment source, int[] rows, int from, int to) {
         long[] values = new long[to - from];
         for (int i = 0; i < values.length; i++) {
-            values[i] = source[rows[from + i]];
+            values[i] = source.getAtIndex(ValueLayout.JAVA_LONG, rows[from + i]);
         }
         return values;
     }
 
-    private static long[] gatherInts(int[] source, int[] rows, int from, int to) {
+    private static long[] gatherInts(MemorySegment source, int[] rows, int from, int to) {
         long[] values = new long[to - from];
         for (int i = 0; i < values.length; i++) {
-            values[i] = source[rows[from + i]];
+            values[i] = source.getAtIndex(ValueLayout.JAVA_INT, rows[from + i]);
         }
         return values;
     }
