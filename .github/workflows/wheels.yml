@@ -80,19 +80,24 @@ jobs:
             tag: linux-x86_64
             archs: x86_64
             plat: manylinux_2_34_x86_64
+            test_skip: "*-manylinux*"
           - runner: ubuntu-22.04-arm
             tag: linux-arm64
             archs: aarch64
             plat: manylinux_2_34_aarch64
+            test_skip: "*-manylinux*"
           - runner: macos-15-intel
             tag: macos-x86_64
             archs: x86_64
+            test_skip: ""
           - runner: macos-14
             tag: macos-arm64
             archs: arm64
+            test_skip: ""
           - runner: windows-2022
             tag: windows-x86_64
             archs: AMD64
+            test_skip: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -112,11 +117,24 @@ jobs:
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32 pp*"
           CIBW_ARCHS: ${{ matrix.archs }}
           CIBW_TEST_COMMAND: "python {package}/tests/wheel_smoke.py"
-          CIBW_MANYLINUX_X86_64_IMAGE: "quay.io/pypa/manylinux_2_34_x86_64"
-          CIBW_MANYLINUX_AARCH64_IMAGE: "quay.io/pypa/manylinux_2_34_aarch64"
+          CIBW_TEST_SKIP: ${{ matrix.test_skip }}
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --plat ${{ matrix.plat }} -w {dest_dir} {wheel}"
           CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+
+      - name: Smoke test Linux wheel on the host
+        if: runner.os == 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install and run Linux wheel on the host
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -eu
+          python -m pip install dist/*cp312*manylinux*.whl
+          python python/tests/wheel_smoke.py
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
