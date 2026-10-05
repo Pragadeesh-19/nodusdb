@@ -4,6 +4,7 @@ import io.nodusdb.kernel.wal.RecoveryManager;
 import io.nodusdb.kernel.wal.WalConfig;
 
 import java.io.IOException;
+import java.lang.foreign.Arena;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.VarHandle;
 import java.nio.file.Path;
@@ -21,8 +22,10 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
-    private final AdjacencyTable outgoing = new AdjacencyTable();
-    private final AdjacencyTable incoming = new AdjacencyTable();
+    private final Arena arena = Arena.ofShared();
+    private final AdjacencyTable outgoing = new AdjacencyTable(arena);
+    private final AdjacencyTable incoming = new AdjacencyTable(arena);
+    private boolean closed;
     private final ThreadLocal<KHopTraversal> traversals = ThreadLocal.withInitial(KHopTraversal::new);
     private Persistence persistence = Persistence.NONE;
     private long sequence;
@@ -60,7 +63,15 @@ public final class GraphKernel implements AutoCloseable {
 
     @Override
     public void close() {
-        persistence.close();
+        if (closed) {
+            return;
+        }
+        closed = true;
+        try {
+            persistence.close();
+        } finally {
+            arena.close();
+        }
     }
 
     public boolean addEdge(long u, long v) {

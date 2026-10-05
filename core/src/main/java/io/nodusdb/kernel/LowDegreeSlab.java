@@ -1,82 +1,108 @@
 package io.nodusdb.kernel;
 
+import java.lang.foreign.Arena;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 
+/*
+ * Fixed-size neighbor blocks in native memory. A block is 16 longs (128 bytes),
+ * and every block starts on a 64-byte boundary.
+ *
+ * Blocks live in chunks. With first = the first chunk's size (a power of two):
+ *
+ *   chunk 0   blocks [0, first)               size first
+ *   chunk 1   blocks [first, 2*first)         size first
+ *   chunk 2   blocks [2*first, 4*first)       size 2*first
+ *   chunk 3   blocks [4*first, 8*first)       size 4*first
+ *
+ * Growth appends a chunk and never moves an existing one, so a reader that holds
+ * a segment stays valid until the arena closes. Free blocks form an intrusive
+ * stack: a freed block's first long holds the next free block id plus one, and
+ * zero marks the end. Allocation flags live in a parallel byte per block.
+ */
 final class LowDegreeSlab {
 
     static final int BLOCK_SHIFT = 4;
     static final int BLOCK_SIZE = 1 << BLOCK_SHIFT;
 
-    private static final int INITIAL_BLOCKS = 16;
+    private static final int BLOCK_BYTES = BLOCK_SIZE * Long.BYTES;
+    private static final int ALIGNMENT = 64;
     private static final int MAX_BLOCKS = 1 << 26;
+    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
+    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
 
-    private long[] slots;
-    private int[] freeBlocks;
-    private boolean[] allocated;
-    private int blockCapacity;
+    private final Arena arena;
+    private final int first;
+    private final int firstShift;
+    private MemorySegment[] words = new MemorySegment[0];
+    private MemorySegment[] flags = new MemorySegment[0];
+    private int chunkCount;
+    private int capacity;
     private int nextFresh;
-    private int freeTop;
+    private int freeHead;
+    private int freeCount;
 
-    LowDegreeSlab() {
-        this(INITIAL_BLOCKS);
-    }
-
-    LowDegreeSlab(int initialBlocks) {
-        this.blockCapacity = initialBlocks;
-        this.slots = new long[initialBlocks << BLOCK_SHIFT];
-        this.freeBlocks = new int[initialBlocks];
-        this.allocated = new boolean[initialBlocks];
+    LowDegreeSlab(Arena arena, int initialBlocks) {
+        if (initialBlocks < 1 || Integer.bitCount(initialBlocks) != 1) {
+            throw new IllegalArgumentException("initial blocks must be a positive power of two: " + initialBlocks);
+        }
+        this.arena = arena;
+        this.first = initialBlocks;
+        this.firstShift = Integer.numberOfTrailingZeros(initialBlocks);
     }
 
     int allocateBlock() {
         int block;
-        if (freeTop > 0) {
-            block = freeBlocks[--freeTop];
+        if (freeHead != 0) {
+            block = freeHead - 1;
+            freeHead = (int) get(block, 0);
+            freeCount--;
         } else {
-            if (nextFresh == blockCapacity) {
-                grow();
-            }
-            block = nextFresh++;
+            block = nextFresh;
+            ensureCapacity(block + 1);
+            nextFresh++;
         }
-        allocated[block] = true;
+        setFlag(block, (byte) 1);
         return block;
     }
 
     void freeBlock(int block) {
-        if (block < 0 || block >= nextFresh || !allocated[block]) {
+        if (block < 0 || block >= nextFresh || flag(block) != 1) {
             throw new IllegalStateException("block is not allocated: " + block);
         }
-        allocated[block] = false;
-        freeBlocks[freeTop++] = block;
+        setFlag(block, (byte) 0);
+        set(block, 0, freeHead);
+        freeHead = block + 1;
+        freeCount++;
     }
 
     long get(int block, int offset) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
-        return slots[(block << BLOCK_SHIFT) | offset];
+        int chunk = chunkOf(block);
+        return words[chunk].getAtIndex(LONG, longIndex(block, chunk, offset));
     }
 
     void set(int block, int offset, long value) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
-        slots[(block << BLOCK_SHIFT) | offset] = value;
-    }
-
-    long[] slots() {
-        return slots;
+        int chunk = chunkOf(block);
+        words[chunk].setAtIndex(LONG, longIndex(block, chunk, offset), value);
     }
 
     boolean containsValue(int block, int count, long value) {
         if (block < 0) {
             return false;
         }
-        long[] table = slots;
-        int base = block << BLOCK_SHIFT;
+        MemorySegment[] segments = words;
+        int chunk = chunkOf(block);
+        if (chunk >= segments.length) {
+            return false;
+        }
+        MemorySegment segment = segments[chunk];
+        long base = longIndex(block, chunk, 0);
         int limit = Math.min(count, BLOCK_SIZE);
         for (int i = 0; i < limit; i++) {
-            int index = base + i;
-            if (index >= table.length) {
-                return false;
-            }
-            if (table[index] == value) {
+            if (segment.getAtIndex(LONG, base + i) == value) {
                 return true;
             }
         }
@@ -87,40 +113,73 @@ final class LowDegreeSlab {
         if (block < 0 || offset < 0 || offset >= BLOCK_SIZE) {
             return NodeIds.NONE;
         }
-        long[] table = slots;
-        int index = (block << BLOCK_SHIFT) | offset;
-        return index < table.length ? table[index] : NodeIds.NONE;
+        MemorySegment[] segments = words;
+        int chunk = chunkOf(block);
+        return chunk < segments.length
+                ? segments[chunk].getAtIndex(LONG, longIndex(block, chunk, offset))
+                : NodeIds.NONE;
     }
 
-    int blockBase(int block) {
-        return block << BLOCK_SHIFT;
-    }
-
-    int allocatedBlocks() {
-        return nextFresh - freeTop;
-    }
-
-    int blockCapacity() {
-        return blockCapacity;
+    long addressOf(int block) {
+        int chunk = chunkOf(block);
+        return words[chunk].address() + (long) (block - chunkBase(chunk)) * BLOCK_BYTES;
     }
 
     void reserve(int blocks) {
-        if (blocks > blockCapacity) {
-            resize(Integer.highestOneBit(blocks - 1) << 1);
+        ensureCapacity(blocks);
+    }
+
+    int allocatedBlocks() {
+        return nextFresh - freeCount;
+    }
+
+    int blockCapacity() {
+        return capacity;
+    }
+
+    private void ensureCapacity(int blocks) {
+        while (capacity < blocks) {
+            appendChunk();
         }
     }
 
-    private void grow() {
-        resize(blockCapacity << 1);
-    }
-
-    private void resize(int newCapacity) {
-        if (newCapacity > MAX_BLOCKS) {
+    private void appendChunk() {
+        if (capacity >= MAX_BLOCKS) {
             throw new IllegalStateException("slab block limit reached: " + MAX_BLOCKS);
         }
-        slots = Arrays.copyOf(slots, newCapacity << BLOCK_SHIFT);
-        freeBlocks = Arrays.copyOf(freeBlocks, newCapacity);
-        allocated = Arrays.copyOf(allocated, newCapacity);
-        blockCapacity = newCapacity;
+        int blocks = chunkBlocks(chunkCount);
+        words = Arrays.copyOf(words, chunkCount + 1);
+        flags = Arrays.copyOf(flags, chunkCount + 1);
+        words[chunkCount] = arena.allocate((long) blocks * BLOCK_BYTES, ALIGNMENT);
+        flags[chunkCount] = arena.allocate(blocks, 1);
+        capacity += blocks;
+        chunkCount++;
+    }
+
+    private int chunkOf(int block) {
+        int quotient = block >>> firstShift;
+        return quotient == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(quotient);
+    }
+
+    private int chunkBase(int chunk) {
+        return chunk == 0 ? 0 : first << (chunk - 1);
+    }
+
+    private int chunkBlocks(int chunk) {
+        return chunk == 0 ? first : first << (chunk - 1);
+    }
+
+    private long longIndex(int block, int chunk, int offset) {
+        return (long) (block - chunkBase(chunk)) * BLOCK_SIZE + offset;
+    }
+
+    private byte flag(int block) {
+        int chunk = chunkOf(block);
+        return flags[chunk].get(BYTE, block - chunkBase(chunk));
+    }
+
+    private void setFlag(int block, byte value) {
+        int chunk = chunkOf(block);
+        flags[chunk].set(BYTE, block - chunkBase(chunk), value);
     }
 }

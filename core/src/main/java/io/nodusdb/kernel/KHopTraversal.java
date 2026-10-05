@@ -10,6 +10,7 @@ final class KHopTraversal {
 
     private int[] visited = new int[INITIAL_CAPACITY];
     private long[] queue = new long[INITIAL_CAPACITY];
+    private final long[] scratch = new long[AdjacencyTable.MAX_LOW_DEGREE];
     private int generation;
 
     void ensureCapacity(int nodeCount) {
@@ -39,13 +40,11 @@ final class KHopTraversal {
                 if (degree == 0) {
                     continue;
                 }
-                long[] neighbors = table.neighborArray(node);
-                int base = table.neighborBase(node);
-                if (base < 0 || base > neighbors.length - degree) {
+                long[] neighbors = table.neighborsOf(node, scratch);
+                if (degree > neighbors.length) {
                     continue;
                 }
-                int end = base + degree;
-                for (int i = base; i < end; i++) {
+                for (int i = 0; i < degree; i++) {
                     long neighbor = neighbors[i];
                     if (neighbor < 0 || neighbor >= limit) {
                         continue;

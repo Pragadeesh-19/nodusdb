@@ -1,5 +1,6 @@
 package io.nodusdb.kernel;
 
+import java.lang.foreign.Arena;
 import java.util.Arrays;
 
 final class AdjacencyTable {
@@ -13,10 +14,14 @@ final class AdjacencyTable {
     private static final long MAX_NODE_COUNT = NodeIds.MAX_NODE_ID + 1;
     private static final long[] NO_NEIGHBORS = new long[0];
 
-    private final LowDegreeSlab slab = new LowDegreeSlab();
+    private final LowDegreeSlab slab;
     private int[] degrees = new int[INITIAL_NODES];
     private int[] blocks = noBlocks(INITIAL_NODES);
     private IndexedSparseSet[] sets = new IndexedSparseSet[INITIAL_NODES];
+
+    AdjacencyTable(Arena arena) {
+        this.slab = new LowDegreeSlab(arena, INITIAL_NODES);
+    }
 
     int capacity() {
         return degrees.length;
@@ -76,23 +81,30 @@ final class AdjacencyTable {
         return n < nodeBlocks.length ? slab.peek(nodeBlocks[n], i) : NodeIds.NONE;
     }
 
-    long[] neighborArray(long node) {
+    /*
+     * Returns the neighbors of node in positions [0, degree). A high-degree node
+     * returns its dense array. A low-degree node copies into scratch, which must
+     * hold at least MAX_LOW_DEGREE longs, and returns scratch.
+     */
+    long[] neighborsOf(long node, long[] scratch) {
         IndexedSparseSet[] nodeSets = sets;
         if (node >= nodeSets.length) {
             return NO_NEIGHBORS;
         }
-        IndexedSparseSet set = nodeSets[(int) node];
-        return set != null ? set.denseArray() : slab.slots();
-    }
-
-    int neighborBase(long node) {
-        IndexedSparseSet[] nodeSets = sets;
-        int[] nodeBlocks = blocks;
-        if (node >= nodeSets.length || node >= nodeBlocks.length) {
-            return 0;
-        }
         int n = (int) node;
-        return nodeSets[n] == null && nodeBlocks[n] != NO_BLOCK ? slab.blockBase(nodeBlocks[n]) : 0;
+        IndexedSparseSet set = nodeSets[n];
+        if (set != null) {
+            return set.denseArray();
+        }
+        int block = blocks[n];
+        if (block == NO_BLOCK) {
+            return NO_NEIGHBORS;
+        }
+        int degree = degrees[n];
+        for (int i = 0; i < degree && i < MAX_LOW_DEGREE; i++) {
+            scratch[i] = slab.peek(block, i);
+        }
+        return scratch;
     }
 
     boolean add(long node, long neighbor) {
