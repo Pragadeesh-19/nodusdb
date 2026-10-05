@@ -15,5 +15,6 @@ mkdir -p "$2"
 output_dir=$(cd "$2" && pwd)
 
 cd "$output_dir"
+export MACOSX_DEPLOYMENT_TARGET=11.0
 "$GRAALVM_HOME/bin/native-image" --shared -O3 --no-fallback -o libnodusdb -cp "$classes_dir"
 cp libnodusdb.h nodusdb.h

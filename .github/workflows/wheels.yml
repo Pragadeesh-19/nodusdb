@@ -19,7 +19,7 @@ jobs:
         include:
           - runner: ubuntu-22.04
             tag: linux-x86_64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-22.04-arm
             tag: linux-arm64
           - runner: macos-15-intel
             tag: macos-x86_64
@@ -79,9 +79,11 @@ jobs:
           - runner: ubuntu-22.04
             tag: linux-x86_64
             archs: x86_64
-          - runner: ubuntu-24.04-arm
+            plat: manylinux_2_35_x86_64
+          - runner: ubuntu-22.04-arm
             tag: linux-arm64
             archs: aarch64
+            plat: manylinux_2_35_aarch64
           - runner: macos-15-intel
             tag: macos-x86_64
             archs: x86_64
@@ -110,6 +112,9 @@ jobs:
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32 pp*"
           CIBW_ARCHS: ${{ matrix.archs }}
           CIBW_TEST_COMMAND: "python {package}/tests/wheel_smoke.py"
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --plat ${{ matrix.plat }} -w {dest_dir} {wheel}"
+          CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
