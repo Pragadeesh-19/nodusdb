@@ -312,7 +312,7 @@ The kernel supports one writer and any number of readers. Every mutation runs in
 
 The stress test in `GraphConcurrencyTest` runs one writer that toggles 200,000 edges on a high-degree node while eight readers run `kHop` and `commonNeighbors`. Every result must hold distinct, in-range targets. The test also checks that the readers allocate nothing after the writer stops. Breaking the validation step makes it fail with a duplicated target.
 
-The Python `Graph` and `LakeTable` objects serialize their calls with a lock, so threads may share one object. Each OS thread runs its native calls on its own GraalVM isolate thread. The C ABI does not serialize calls. A handle keeps its query results in one buffer, so one handle must not be used from two threads at once. `python/tests/test_concurrency.py` covers both Python cases, and `python/tests/test_crash.py` kills a writer with SIGKILL and checks that every acknowledged sync write survives.
+The Python `Graph` and `LakeTable` objects serialize their calls with a lock, so threads may share one object. Each OS thread runs its native calls on its own GraalVM isolate thread. Every C-ABI call on a graph handle also takes that handle's monitor, so threads may share a handle. Calls on one handle run one at a time, so readers do not yet run in parallel within a handle. `python/tests/test_concurrency.py` covers both Python cases, and `python/tests/test_crash.py` kills a writer with SIGKILL and checks that every acknowledged sync write survives.
 
 ## How it works
 
@@ -424,7 +424,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 - **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
-- **C handles are single-threaded.** The kernel allows one writer and many readers. Python objects are safe to share, because their calls are serialized. A C caller must not use one handle from two threads at once.
+- **Calls on one handle are serialized.** The kernel allows one writer and many readers. Python objects and C handles are both safe to share across threads, but calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
@@ -436,4 +436,4 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Python `Graph` and `LakeTable` objects can be shared across threads. Concurrent calls on one C handle are not supported. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Python `Graph` and `LakeTable` objects can be shared across threads. Calls on one handle are serialized, and readers do not run in parallel within a handle yet. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.

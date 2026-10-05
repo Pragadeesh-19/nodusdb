@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Every C-ABI call on one graph handle holds that handle's monitor. Before, concurrent calls could overwrite each other's query results, and concurrent batch writes could return wrong counts.
+- Calls on a closed session fail with an error. Closing twice is safe.
+
+### Known limits
+
+- Calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
+
 ## 0.1.0rc1
 
 First release candidate. The API may change before 0.1.0.

@@ -19,6 +19,7 @@ public final class GraphSession implements AutoCloseable {
     private final SymbolLog symbols;
     private KeyKind keyKind;
     private boolean symbolsFailed;
+    private boolean closed;
     private long[] results = new long[INITIAL_RESULT_CAPACITY];
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
     private long[] keyIds = new long[INITIAL_RESULT_CAPACITY];
@@ -37,16 +38,22 @@ public final class GraphSession implements AutoCloseable {
         }
     }
 
-    public void checkpoint() {
+    public synchronized void checkpoint() {
+        requireOpen();
         kernel.checkpoint();
     }
 
-    public void sync() {
+    public synchronized void sync() {
+        requireOpen();
         kernel.sync();
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
         try {
             kernel.close();
         } finally {
@@ -54,11 +61,13 @@ public final class GraphSession implements AutoCloseable {
         }
     }
 
-    public KeyKind keyKind() {
+    public synchronized KeyKind keyKind() {
+        requireOpen();
         return keyKind;
     }
 
-    public KeyKind claimKeys(KeyKind wanted) {
+    public synchronized KeyKind claimKeys(KeyKind wanted) {
+        requireOpen();
         if (keyKind == KeyKind.UNSET) {
             if (symbols != null) {
                 persistKind(wanted);
@@ -68,7 +77,8 @@ public final class GraphSession implements AutoCloseable {
         return keyKind;
     }
 
-    public long intern(byte[] utf8, int offset, int length) {
+    public synchronized long intern(byte[] utf8, int offset, int length) {
+        requireOpen();
         requireStringKeys();
         long before = strings.size();
         long id = strings.intern(utf8, offset, length);
@@ -76,18 +86,21 @@ public final class GraphSession implements AutoCloseable {
         return id;
     }
 
-    public long lookup(byte[] utf8, int offset, int length) {
+    public synchronized long lookup(byte[] utf8, int offset, int length) {
+        requireOpen();
         if (keyKind == KeyKind.INTEGER) {
             throw new IllegalStateException("graph is keyed by integers");
         }
         return strings.lookup(utf8, offset, length);
     }
 
-    public byte[] resolve(long id) {
+    public synchronized byte[] resolve(long id) {
+        requireOpen();
         return strings.resolve(id);
     }
 
-    public int addStringEdges(byte[] utf8, int[] lengths, int pairCount) {
+    public synchronized int addStringEdges(byte[] utf8, int[] lengths, int pairCount) {
+        requireOpen();
         requireStringKeys();
         if (pairCount < 0 || pairCount > MAX_BATCH_PAIRS) {
             throw new IllegalArgumentException("batch size out of range: " + pairCount);
@@ -112,27 +125,33 @@ public final class GraphSession implements AutoCloseable {
         return kernel.addEdges(staged, pairCount);
     }
 
-    public boolean addEdge(long u, long v) {
+    public synchronized boolean addEdge(long u, long v) {
+        requireOpen();
         return kernel.addEdge(u, v);
     }
 
-    public boolean removeEdge(long u, long v) {
+    public synchronized boolean removeEdge(long u, long v) {
+        requireOpen();
         return kernel.removeEdge(u, v);
     }
 
-    public boolean hasEdge(long u, long v) {
+    public synchronized boolean hasEdge(long u, long v) {
+        requireOpen();
         return kernel.hasEdge(u, v);
     }
 
-    public int degree(long u) {
+    public synchronized int degree(long u) {
+        requireOpen();
         return kernel.getDegree(u);
     }
 
-    public int inDegree(long v) {
+    public synchronized int inDegree(long v) {
+        requireOpen();
         return kernel.getInDegree(v);
     }
 
-    public long[] edgeBuffer(int pairCount) {
+    public synchronized long[] edgeBuffer(int pairCount) {
+        requireOpen();
         if (pairCount < 0 || pairCount > MAX_BATCH_PAIRS) {
             throw new IllegalArgumentException("batch size out of range: " + pairCount);
         }
@@ -142,15 +161,18 @@ public final class GraphSession implements AutoCloseable {
         return edges;
     }
 
-    public int addEdges(int pairCount) {
+    public synchronized int addEdges(int pairCount) {
+        requireOpen();
         return kernel.addEdges(edges, pairCount);
     }
 
-    public int removeEdges(int pairCount) {
+    public synchronized int removeEdges(int pairCount) {
+        requireOpen();
         return kernel.removeEdges(edges, pairCount);
     }
 
-    public int commonNeighbors(long u, long v) {
+    public synchronized int commonNeighbors(long u, long v) {
+        requireOpen();
         while (true) {
             try {
                 return kernel.commonNeighbors(u, v, results);
@@ -160,7 +182,8 @@ public final class GraphSession implements AutoCloseable {
         }
     }
 
-    public int khop(long start, int maxDepth) {
+    public synchronized int khop(long start, int maxDepth) {
+        requireOpen();
         while (true) {
             try {
                 return kernel.kHop(start, maxDepth, results);
@@ -170,8 +193,15 @@ public final class GraphSession implements AutoCloseable {
         }
     }
 
-    public long result(int index) {
+    public synchronized long result(int index) {
+        requireOpen();
         return results[index];
+    }
+
+    private void requireOpen() {
+        if (closed) {
+            throw new IllegalStateException("graph is closed");
+        }
     }
 
     private void requireStringKeys() {

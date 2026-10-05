@@ -140,8 +140,10 @@ public final class NodusCApi {
                                     CLongPointer vArr, int count) {
         try {
             GraphSession session = session(handle);
-            stageEdges(session, uArr, vArr, count);
-            return session.addEdges(count);
+            synchronized (session) {
+                stageEdges(session, uArr, vArr, count);
+                return session.addEdges(count);
+            }
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -152,8 +154,10 @@ public final class NodusCApi {
                                        CLongPointer vArr, int count) {
         try {
             GraphSession session = session(handle);
-            stageEdges(session, uArr, vArr, count);
-            return session.removeEdges(count);
+            synchronized (session) {
+                stageEdges(session, uArr, vArr, count);
+                return session.removeEdges(count);
+            }
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -163,9 +167,11 @@ public final class NodusCApi {
     public static int commonNeighbors(IsolateThread thread, VoidPointer handle, long u, long v, CLongPointer outBuf, int outCap) {
         try {
             GraphSession session = session(handle);
-            int total = session.commonNeighbors(u, v);
-            copyResults(session, total, outBuf, outCap);
-            return total;
+            synchronized (session) {
+                int total = session.commonNeighbors(u, v);
+                copyResults(session, total, outBuf, outCap);
+                return total;
+            }
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -175,9 +181,11 @@ public final class NodusCApi {
     public static int khop(IsolateThread thread, VoidPointer handle, long start, int maxDepth, CLongPointer outBuf, int outCap) {
         try {
             GraphSession session = session(handle);
-            int total = session.khop(start, maxDepth);
-            copyResults(session, total, outBuf, outCap);
-            return total;
+            synchronized (session) {
+                int total = session.khop(start, maxDepth);
+                copyResults(session, total, outBuf, outCap);
+                return total;
+            }
         } catch (RuntimeException e) {
             return ERROR;
         }
