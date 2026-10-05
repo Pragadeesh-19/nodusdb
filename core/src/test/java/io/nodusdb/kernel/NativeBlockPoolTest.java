@@ -31,12 +31,33 @@ class NativeBlockPoolTest {
     }
 
     @Test
+    void everyPayloadStartsOnACacheLine() {
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        for (int log = NativeBlockPool.MIN_LOG_WORDS; log <= 9; log++) {
+            for (int i = 0; i < 20; i++) {
+                int handle = pool.allocate(log);
+                assertEquals(0, handle % NativeBlockPool.LINE_WORDS, "log " + log + " handle " + handle);
+                assertEquals(log, pool.logWordsOf(handle));
+            }
+        }
+    }
+
+    @Test
+    void misalignedHandlesAreNotBlocks() {
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        int handle = pool.allocate(NativeBlockPool.MIN_LOG_WORDS);
+
+        assertEquals(-1, pool.logWordsOf(handle + 1));
+        assertEquals(-1, pool.logWordsOf(handle + 4));
+    }
+
+    @Test
     void releasedBlockIsReusedForTheSameClassOnly() {
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
-        int small = pool.allocate(2);
+        int small = pool.allocate(3);
         pool.release(small);
 
-        assertEquals(small, pool.allocate(2));
+        assertEquals(small, pool.allocate(3));
         assertNotEquals(small, pool.allocate(5));
     }
 
@@ -55,7 +76,7 @@ class NativeBlockPoolTest {
     @Test
     void doubleReleaseAndForeignHandlesAreRejected() {
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
-        int handle = pool.allocate(2);
+        int handle = pool.allocate(3);
         pool.release(handle);
 
         assertThrows(IllegalStateException.class, () -> pool.release(handle));
@@ -68,6 +89,7 @@ class NativeBlockPoolTest {
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
 
         assertThrows(IllegalArgumentException.class, () -> pool.allocate(0));
+        assertThrows(IllegalArgumentException.class, () -> pool.allocate(NativeBlockPool.MIN_LOG_WORDS - 1));
         assertThrows(IllegalArgumentException.class, () -> pool.allocate(NativeBlockPool.MAX_LOG_WORDS + 1));
     }
 }

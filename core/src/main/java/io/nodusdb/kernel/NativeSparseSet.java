@@ -12,10 +12,15 @@ package io.nodusdb.kernel;
  * dense[position] with the key, so every key is stored once. Deletion shifts later
  * probe-chain entries back, so the table never holds tombstones. The set itself holds
  * no state: the degree lives with the caller, and the handle names the block.
+ *
+ * Capacity is padded up to MIN_CAPACITY, so the 2C-word payload fills whole cache
+ * lines and both dense and table start on a line when C is a multiple of 8. Callers
+ * read the capacity back with capacityOf rather than assuming the requested value.
  */
 final class NativeSparseSet {
 
     static final int ABSENT = -1;
+    static final int MIN_CAPACITY = NativeBlockPool.LINE_WORDS / 2;
 
     private static final int EMPTY = -1;
 
@@ -27,7 +32,8 @@ final class NativeSparseSet {
 
     int allocate(int capacity) {
         checkCapacity(capacity);
-        return pool.allocate(Integer.numberOfTrailingZeros(capacity) + 1);
+        int padded = Math.max(capacity, MIN_CAPACITY);
+        return pool.allocate(Integer.numberOfTrailingZeros(padded) + 1);
     }
 
     int capacityOf(int handle) {
@@ -123,7 +129,7 @@ final class NativeSparseSet {
             return ABSENT;
         }
         int mask = 2 * capacity - 1;
-        int slot = home(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         for (int probes = 0; probes <= mask; probes++) {
             int position = tableAt(handle, capacity, slot);
             if (position == EMPTY) {
@@ -139,7 +145,7 @@ final class NativeSparseSet {
 
     private void insertAbsent(int handle, int capacity, long key, int position) {
         int mask = 2 * capacity - 1;
-        int slot = home(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         while (tableAt(handle, capacity, slot) != EMPTY) {
             slot = (slot + 1) & mask;
         }
@@ -152,8 +158,8 @@ final class NativeSparseSet {
         int vacant = hole;
         while (tableAt(handle, capacity, cursor) != EMPTY) {
             int position = tableAt(handle, capacity, cursor);
-            int home = home(pool.get(handle, position), mask);
-            if (((vacant - home) & mask) <= ((cursor - home) & mask)) {
+            int home = OpenAddressing.home(pool.get(handle, position), mask);
+            if (OpenAddressing.canMoveInto(vacant, cursor, home, mask)) {
                 setTable(handle, capacity, vacant, position);
                 vacant = cursor;
             }
@@ -173,10 +179,6 @@ final class NativeSparseSet {
         long mask = 0xFFFF_FFFFL << shift;
         long current = pool.get(handle, word);
         pool.set(handle, word, (current & ~mask) | ((position + 1L & 0xFFFF_FFFFL) << shift));
-    }
-
-    private static int home(long key, int mask) {
-        return (int) LongIntIndex.mix(key) & mask;
     }
 
     private static void checkCapacity(int capacity) {

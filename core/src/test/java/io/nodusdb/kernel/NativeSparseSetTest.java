@@ -84,10 +84,31 @@ class NativeSparseSetTest {
     @Test
     void appendBeyondCapacityIsRejected() {
         int handle = set.allocate(2);
-        set.append(handle, 0, 1L);
-        set.append(handle, 1, 2L);
+        int capacity = set.capacityOf(handle);
+        for (int i = 0; i < capacity; i++) {
+            set.append(handle, i, 1L + i);
+        }
 
-        assertThrows(IllegalStateException.class, () -> set.append(handle, 2, 3L));
+        assertThrows(IllegalStateException.class, () -> set.append(handle, capacity, 3L));
+    }
+
+    @Test
+    void smallCapacitiesArePaddedToWholeCacheLines() {
+        for (int requested : new int[] {1, 2, 4}) {
+            int handle = set.allocate(requested);
+
+            assertEquals(NativeSparseSet.MIN_CAPACITY, set.capacityOf(handle), "requested " + requested);
+            assertEquals(0, handle % NativeBlockPool.LINE_WORDS, "handle of requested " + requested);
+        }
+    }
+
+    @Test
+    void largeBlocksKeepDenseAndTableOnCacheLines() {
+        int handle = set.allocate(64);
+
+        assertEquals(64, set.capacityOf(handle));
+        assertEquals(0, handle % NativeBlockPool.LINE_WORDS);
+        assertEquals(7, pool.logWordsOf(handle), "payload of 2 * 64 words");
     }
 
     @Test

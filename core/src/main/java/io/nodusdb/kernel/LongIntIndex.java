@@ -29,7 +29,7 @@ public final class LongIntIndex {
         int[] table = values;
         long[] keyTable = keys;
         int currentMask = mask;
-        int slot = homeOf(key, currentMask);
+        int slot = OpenAddressing.home(key, currentMask);
         for (int probes = 0; probes <= currentMask; probes++) {
             if (slot >= table.length || slot >= keyTable.length || table[slot] == ABSENT) {
                 return ABSENT;
@@ -74,8 +74,8 @@ public final class LongIntIndex {
         }
         int cursor = (hole + 1) & mask;
         while (values[cursor] != ABSENT) {
-            int home = homeOf(keys[cursor], mask);
-            if (((hole - home) & mask) <= ((cursor - home) & mask)) {
+            int home = OpenAddressing.home(keys[cursor], mask);
+            if (OpenAddressing.canMoveInto(hole, cursor, home, mask)) {
                 keys[hole] = keys[cursor];
                 values[hole] = values[cursor];
                 hole = cursor;
@@ -100,22 +100,8 @@ public final class LongIntIndex {
         return mask + 1;
     }
 
-    static int homeOf(long key, int mask) {
-        return (int) mix(key) & mask;
-    }
-
-    static long mix(long key) {
-        long h = key;
-        h ^= h >>> 33;
-        h *= 0xff51afd7ed558ccdL;
-        h ^= h >>> 33;
-        h *= 0xc4ceb9fe1a85ec53L;
-        h ^= h >>> 33;
-        return h;
-    }
-
     private int slotOf(long key) {
-        int slot = homeOf(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         while (values[slot] != ABSENT) {
             if (keys[slot] == key) {
                 return slot;
@@ -126,7 +112,7 @@ public final class LongIntIndex {
     }
 
     private void insertFresh(long key, int value) {
-        int slot = homeOf(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         while (values[slot] != ABSENT) {
             slot = (slot + 1) & mask;
         }

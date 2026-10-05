@@ -46,7 +46,7 @@ final class PositionIndex {
     void insertAbsent(long key, int position) {
         int[] slots = table;
         int mask = slots.length - 1;
-        int slot = home(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         while (slots[slot] != ABSENT) {
             slot = (slot + 1) & mask;
         }
@@ -67,8 +67,8 @@ final class PositionIndex {
         assert hole != NO_SLOT : "key is not indexed: " + key;
         int cursor = (hole + 1) & mask;
         while (slots[cursor] != ABSENT) {
-            int shiftedHome = home(dense[slots[cursor]], mask);
-            if (((hole - shiftedHome) & mask) <= ((cursor - shiftedHome) & mask)) {
+            int shiftedHome = OpenAddressing.home(dense[slots[cursor]], mask);
+            if (OpenAddressing.canMoveInto(hole, cursor, shiftedHome, mask)) {
                 slots[hole] = slots[cursor];
                 hole = cursor;
             }
@@ -88,7 +88,7 @@ final class PositionIndex {
     private int slotOf(long[] dense, int degree, long key) {
         int[] slots = table;
         int mask = slots.length - 1;
-        int slot = home(key, mask);
+        int slot = OpenAddressing.home(key, mask);
         for (int probes = 0; probes <= mask; probes++) {
             int position = slots[slot];
             if (position == ABSENT) {
@@ -100,10 +100,6 @@ final class PositionIndex {
             slot = (slot + 1) & mask;
         }
         return NO_SLOT;
-    }
-
-    private static int home(long key, int mask) {
-        return (int) LongIntIndex.mix(key) & mask;
     }
 
     private void allocate(int capacity) {
