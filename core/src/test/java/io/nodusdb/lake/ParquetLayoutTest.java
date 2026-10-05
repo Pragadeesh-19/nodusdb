@@ -111,7 +111,9 @@ class ParquetLayoutTest {
             rows[row] = row;
         }
         Path file = directory.resolve("layout.parquet");
-        ParquetWriter.write(file, SCHEMA, table, rows, ParquetCodec.SNAPPY);
+        try (RowSelection selection = RowSelection.of(rows)) {
+            ParquetWriter.write(file, SCHEMA, table, selection, ParquetCodec.SNAPPY);
+        }
         return file;
     }
 

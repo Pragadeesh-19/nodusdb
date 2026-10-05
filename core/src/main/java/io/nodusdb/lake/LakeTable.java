@@ -414,38 +414,24 @@ public final class LakeTable implements AutoCloseable {
     private Manifest.Entry writeFiles(DeltaMemTable table, long sequence) throws IOException {
         String dataFile = null;
         String deleteFile = null;
-        int[] inserts = rowsOfKind(table, DeltaMemTable.INSERT);
-        if (inserts.length > 0) {
-            dataFile = fileName(DATA_PREFIX, sequence);
-            ParquetWriter.write(directory.resolve(dataFile), schema, table, inserts, config.codec());
+        try (RowSelection inserts = RowSelection.ofKind(table, DeltaMemTable.INSERT)) {
+            if (inserts.size() > 0) {
+                dataFile = fileName(DATA_PREFIX, sequence);
+                ParquetWriter.write(directory.resolve(dataFile), schema, table, inserts, config.codec());
+            }
         }
-        int[] tombstones = rowsOfKind(table, DeltaMemTable.TOMBSTONE);
-        if (tombstones.length > 0) {
-            deleteFile = fileName(DELETE_PREFIX, sequence);
-            ParquetWriter.write(directory.resolve(deleteFile), LakeSchema.KEYS_ONLY, table, tombstones, config.codec());
+        try (RowSelection tombstones = RowSelection.ofKind(table, DeltaMemTable.TOMBSTONE)) {
+            if (tombstones.size() > 0) {
+                deleteFile = fileName(DELETE_PREFIX, sequence);
+                ParquetWriter.write(directory.resolve(deleteFile), LakeSchema.KEYS_ONLY, table, tombstones,
+                        config.codec());
+            }
         }
         return new Manifest.Entry(sequence, dataFile, deleteFile);
     }
 
     private static String fileName(String prefix, long sequence) {
         return String.format("%s%08d%s", prefix, sequence, EXTENSION);
-    }
-
-    private static int[] rowsOfKind(DeltaMemTable table, byte kind) {
-        int count = 0;
-        for (int row = 0; row < table.size(); row++) {
-            if (table.kindAt(row) == kind) {
-                count++;
-            }
-        }
-        int[] rows = new int[count];
-        int next = 0;
-        for (int row = 0; row < table.size(); row++) {
-            if (table.kindAt(row) == kind) {
-                rows[next++] = row;
-            }
-        }
-        return rows;
     }
 
     private static void await(CompletableFuture<Void> job) {

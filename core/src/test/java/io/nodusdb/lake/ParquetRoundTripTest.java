@@ -44,7 +44,9 @@ class ParquetRoundTripTest {
             rows[row] = row;
         }
         Path file = directory.resolve("roundtrip.parquet");
-        ParquetWriter.write(file, SCHEMA, table, rows, ParquetCodec.SNAPPY);
+        try (RowSelection selection = RowSelection.of(rows)) {
+            ParquetWriter.write(file, SCHEMA, table, selection, ParquetCodec.SNAPPY);
+        }
         ParquetReader.Contents contents = ParquetReader.read(file, SCHEMA);
 
         assertEquals(ROWS, contents.keyHashes().length);
@@ -66,7 +68,10 @@ class ParquetRoundTripTest {
         table.tombstone(22L);
         Path file = directory.resolve("deletes.parquet");
 
-        ParquetWriter.write(file, LakeSchema.KEYS_ONLY, table, new int[] {0, 1}, ParquetCodec.SNAPPY);
+        try (RowSelection selection = RowSelection.of(new int[] {0, 1})) {
+            ParquetWriter.write(file, LakeSchema.KEYS_ONLY, table, selection, ParquetCodec.SNAPPY);
+
+        }
         ParquetReader.Contents contents = ParquetReader.read(file, LakeSchema.KEYS_ONLY);
 
         assertArrayEquals(new long[] {11L, 22L}, contents.keyHashes());
@@ -86,7 +91,10 @@ class ParquetRoundTripTest {
         }
         Path file = directory.resolve("uncompressed.parquet");
 
-        ParquetWriter.write(file, SCHEMA, table, rows, ParquetCodec.UNCOMPRESSED);
+        try (RowSelection selection = RowSelection.of(rows)) {
+            ParquetWriter.write(file, SCHEMA, table, selection, ParquetCodec.UNCOMPRESSED);
+
+        }
         ParquetReader.Contents contents = ParquetReader.read(file, SCHEMA);
 
         assertEquals(3_000, contents.keyHashes().length);
@@ -100,7 +108,10 @@ class ParquetRoundTripTest {
         DeltaMemTable table = new DeltaMemTable(SCHEMA.memtableSchema(), 4, 16);
         Path file = directory.resolve("empty.parquet");
 
-        ParquetWriter.write(file, SCHEMA, table, new int[0], ParquetCodec.SNAPPY);
+        try (RowSelection selection = RowSelection.of(new int[0])) {
+            ParquetWriter.write(file, SCHEMA, table, selection, ParquetCodec.SNAPPY);
+
+        }
         ParquetReader.Contents contents = ParquetReader.read(file, SCHEMA);
 
         assertEquals(0, contents.keyHashes().length);

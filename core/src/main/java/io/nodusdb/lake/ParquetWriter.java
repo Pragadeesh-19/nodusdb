@@ -5,15 +5,15 @@ import io.nodusdb.lake.ColumnChunkEncoder.Page;
 import io.nodusdb.lake.ColumnChunkEncoder.Physical;
 import io.nodusdb.lake.ColumnChunkEncoder.Statistics;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -60,32 +60,32 @@ final class ParquetWriter {
     private ParquetWriter() {
     }
 
-    static void write(Path path, LakeSchema schema, DeltaMemTable table, int[] rows, ParquetCodec codec)
+    static void write(Path path, LakeSchema schema, DeltaMemTable table, RowSelection rows, ParquetCodec codec)
             throws IOException {
         if (ByteOrder.nativeOrder() != ByteOrder.LITTLE_ENDIAN) {
             throw new UnsupportedOperationException("the parquet writer requires a little-endian platform");
         }
         List<Column> columns = columns(schema);
-        ByteArrayOutputStream file = new ByteArrayOutputStream();
-        file.write(MAGIC, 0, MAGIC.length);
         List<RowGroupMeta> groups = new ArrayList<>();
-        try (ColumnChunkEncoder encoder = new ColumnChunkEncoder(codec);
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING);
+             ColumnChunkEncoder encoder = new ColumnChunkEncoder(codec);
              NativeColumn longs = new NativeColumn(NativeColumn.ALIGNMENT);
              NativeColumn offsets = new NativeColumn(NativeColumn.ALIGNMENT);
              NativeColumn data = new NativeColumn(NativeColumn.ALIGNMENT)) {
             Gather gather = new Gather(longs, offsets, data);
+            drain(channel, ByteBuffer.wrap(MAGIC));
             int start = 0;
             do {
-                int end = Math.min(rows.length, start + ROW_GROUP_ROWS);
+                int end = Math.min(rows.size(), start + ROW_GROUP_ROWS);
                 List<ChunkMeta> chunks = new ArrayList<>(columns.size());
                 long totalBytes = 0;
                 for (Column column : columns) {
                     EncodedChunk chunk = encodeColumn(encoder, gather, column, table, rows, start, end);
-                    long fileOffset = file.size();
+                    long fileOffset = channel.position();
                     for (Page page : chunk.pages()) {
-                        file.write(page.header(), 0, page.header().length);
-                        byte[] body = page.body().toArray(BYTE);
-                        file.write(body, 0, body.length);
+                        drain(channel, ByteBuffer.wrap(page.header()));
+                        drain(channel, page.body().asByteBuffer());
                     }
                     long dictionaryOffset = chunk.dictionaryEncoded() ? fileOffset + chunk.dictionaryPageOffset() : -1;
                     chunks.add(new ChunkMeta(column, chunk, fileOffset, fileOffset + chunk.dataPageOffset(),
@@ -94,14 +94,19 @@ final class ParquetWriter {
                 }
                 groups.add(new RowGroupMeta(chunks, end - start, totalBytes));
                 start = end;
-            } while (start < rows.length);
+            } while (start < rows.size());
+            byte[] footer = footer(columns, groups, rows.size(), codec);
+            drain(channel, ByteBuffer.wrap(footer));
+            drain(channel, ByteBuffer.wrap(ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN)
+                    .putInt(footer.length).array()));
+            drain(channel, ByteBuffer.wrap(MAGIC));
         }
-        byte[] footer = footer(columns, groups, rows.length, codec);
-        file.write(footer, 0, footer.length);
-        file.write(ByteBuffer.allocate(Integer.BYTES).order(ByteOrder.LITTLE_ENDIAN).putInt(footer.length).array(),
-                0, Integer.BYTES);
-        file.write(MAGIC, 0, MAGIC.length);
-        Files.write(path, file.toByteArray());
+    }
+
+    private static void drain(FileChannel channel, ByteBuffer buffer) throws IOException {
+        while (buffer.hasRemaining()) {
+            channel.write(buffer);
+        }
     }
 
     private static List<Column> columns(LakeSchema schema) {
@@ -121,7 +126,7 @@ final class ParquetWriter {
     }
 
     private static EncodedChunk encodeColumn(ColumnChunkEncoder encoder, Gather gather, Column column,
-                                             DeltaMemTable table, int[] rows, int from, int to) {
+                                             DeltaMemTable table, RowSelection rows, int from, int to) {
         int count = to - from;
         return switch (column.source()) {
             case KEY -> encoder.encodeUniqueFixed(gatherLongs(table.keyHashColumn(), rows, from, to, gather.longs()),
@@ -135,7 +140,7 @@ final class ParquetWriter {
     }
 
     private static EncodedChunk encodeStrings(ColumnChunkEncoder encoder, Gather gather, DeltaMemTable table,
-                                              int slot, int[] rows, int from, int count) {
+                                              int slot, RowSelection rows, int from, int count) {
         NativeColumn offsets = gather.offsets();
         NativeColumn data = gather.data();
         offsets.ensureCapacity((count + 1L) * Integer.BYTES);
@@ -144,14 +149,14 @@ final class ParquetWriter {
         MemorySegment slab = table.varCharSlab();
         offsets.segment().setAtIndex(INT, 0, 0);
         for (int i = 0; i < count; i++) {
-            int row = rows[from + i];
+            int row = rows.rowAt(from + i);
             offsets.segment().setAtIndex(INT, i + 1, offsets.segment().getAtIndex(INT, i)
                     + lengths.getAtIndex(INT, row));
         }
         long total = offsets.segment().getAtIndex(INT, count);
         data.ensureCapacity(Math.max(1, total));
         for (int i = 0; i < count; i++) {
-            int row = rows[from + i];
+            int row = rows.rowAt(from + i);
             MemorySegment.copy(slab, starts.getAtIndex(INT, row), data.segment(),
                     offsets.segment().getAtIndex(INT, i), lengths.getAtIndex(INT, row));
         }
@@ -159,22 +164,22 @@ final class ParquetWriter {
                 offsets.segment().asSlice(0, (count + 1L) * Integer.BYTES), count);
     }
 
-    private static MemorySegment gatherLongs(MemorySegment source, int[] rows, int from, int to, NativeColumn target) {
+    private static MemorySegment gatherLongs(MemorySegment source, RowSelection rows, int from, int to, NativeColumn target) {
         int count = to - from;
         target.ensureCapacity(count * (long) Long.BYTES);
         MemorySegment out = target.segment();
         for (int i = 0; i < count; i++) {
-            out.setAtIndex(LONG, i, source.getAtIndex(LONG, rows[from + i]));
+            out.setAtIndex(LONG, i, source.getAtIndex(LONG, rows.rowAt(from + i)));
         }
         return out.asSlice(0, count * (long) Long.BYTES);
     }
 
-    private static MemorySegment gatherInts(MemorySegment source, int[] rows, int from, int to, NativeColumn target) {
+    private static MemorySegment gatherInts(MemorySegment source, RowSelection rows, int from, int to, NativeColumn target) {
         int count = to - from;
         target.ensureCapacity(count * (long) Long.BYTES);
         MemorySegment out = target.segment();
         for (int i = 0; i < count; i++) {
-            out.setAtIndex(LONG, i, source.getAtIndex(INT, rows[from + i]));
+            out.setAtIndex(LONG, i, source.getAtIndex(INT, rows.rowAt(from + i)));
         }
         return out.asSlice(0, count * (long) Long.BYTES);
     }
