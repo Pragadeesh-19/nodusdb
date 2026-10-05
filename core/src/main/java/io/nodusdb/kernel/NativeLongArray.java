@@ -8,7 +8,7 @@ import java.util.Objects;
 
 /*
  * A grow-only array of longs in native memory. Growth appends chunks and never
- * moves one, so a reader holding a segment stays valid until the arena closes.
+ * moves one, so a reader holding a segment stays valid while the arena is reachable.
  * Reads past the allocated range return the default value, so a reader racing a
  * writer never throws.
  */

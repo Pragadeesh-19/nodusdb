@@ -22,7 +22,7 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
-    private final Arena arena = Arena.ofShared();
+    private final Arena arena = Arena.ofAuto();
     private final AdjacencyTable outgoing = new AdjacencyTable(arena);
     private final AdjacencyTable incoming = new AdjacencyTable(arena);
     private boolean closed;
@@ -67,11 +67,7 @@ public final class GraphKernel implements AutoCloseable {
             return;
         }
         closed = true;
-        try {
-            persistence.close();
-        } finally {
-            arena.close();
-        }
+        persistence.close();
     }
 
     public boolean addEdge(long u, long v) {

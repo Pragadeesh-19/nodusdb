@@ -17,7 +17,7 @@ import java.util.Arrays;
  *   chunk 3   blocks [4*first, 8*first)       size 4*first
  *
  * Growth appends a chunk and never moves an existing one, so a reader that holds
- * a segment stays valid until the arena closes. Free blocks form an intrusive
+ * a segment stays valid while the arena is reachable. Free blocks form an intrusive
  * stack: a freed block's first long holds the next free block id plus one, and
  * zero marks the end. Allocation flags live in a parallel byte per block.
  */
