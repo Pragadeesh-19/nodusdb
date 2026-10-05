@@ -35,7 +35,7 @@ class ParquetRoundTripTest {
             long[] longs = {random.nextLong(), random.nextLong()};
             int[] ints = {random.nextInt()};
             byte[] label = randomLabel(random).getBytes(StandardCharsets.UTF_8);
-            table.upsert(key, longs, ints, label, new int[] {label.length});
+            UpsertArrays.upsert(table, key, longs, ints, label, new int[] {label.length});
         }
         table.assertInvariant();
 
@@ -82,7 +82,7 @@ class ParquetRoundTripTest {
         DeltaMemTable table = new DeltaMemTable(SCHEMA.memtableSchema(), 1 << 12, 1 << 16);
         for (int i = 0; i < 3_000; i++) {
             byte[] label = (i % 2 == 0 ? "even" : "odd").getBytes(StandardCharsets.UTF_8);
-            table.upsert(i + 1L, new long[] {i, Double.doubleToRawLongBits(i * 0.5)}, new int[] {i % 4}, label,
+            UpsertArrays.upsert(table, i + 1L, new long[] {i, Double.doubleToRawLongBits(i * 0.5)}, new int[] {i % 4}, label,
                     new int[] {label.length});
         }
         int[] rows = new int[table.size()];

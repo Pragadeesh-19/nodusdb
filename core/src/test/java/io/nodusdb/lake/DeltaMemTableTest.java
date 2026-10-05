@@ -133,7 +133,7 @@ class DeltaMemTableTest {
             Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY, 1.5
         };
         for (int i = 0; i < samples.length; i++) {
-            table.upsert(i, new long[] {Double.doubleToRawLongBits(samples[i])}, new int[0],
+            UpsertArrays.upsert(table, i, new long[] {Double.doubleToRawLongBits(samples[i])}, new int[0],
                     new byte[0], new int[0]);
         }
         for (int i = 0; i < samples.length; i++) {
@@ -193,7 +193,7 @@ class DeltaMemTableTest {
     void schemaWithoutVarCharColumnsAcceptsEmptyPayloads() {
         DeltaMemTable table = new DeltaMemTable(new Schema(1, 1, 0), 2, 1);
 
-        assertTrue(table.upsert(5L, new long[] {8L}, new int[] {13}, new byte[0], new int[0]));
+        assertTrue(UpsertArrays.upsert(table, 5L, new long[] {8L}, new int[] {13}, new byte[0], new int[0]));
         table.assertInvariant();
         assertEquals(8L, table.longAt(0, 0));
         assertEquals(13, table.intAt(0, 0));
@@ -216,9 +216,9 @@ class DeltaMemTableTest {
         DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
 
         assertThrows(IllegalArgumentException.class,
-                () -> table.upsert(1L, new long[] {1L}, new int[] {1}, new byte[0], new int[] {0}));
+                () -> UpsertArrays.upsert(table, 1L, new long[] {1L}, new int[] {1}, new byte[0], new int[] {0}));
         assertThrows(IllegalArgumentException.class,
-                () -> table.upsert(1L, new long[] {1L, 2L}, new int[] {1, 2}, new byte[0], new int[] {0}));
+                () -> UpsertArrays.upsert(table, 1L, new long[] {1L, 2L}, new int[] {1, 2}, new byte[0], new int[] {0}));
         assertEquals(0, table.size());
         table.assertInvariant();
     }
@@ -228,9 +228,9 @@ class DeltaMemTableTest {
         DeltaMemTable table = new DeltaMemTable(SCHEMA, 4, 64);
 
         assertThrows(IllegalArgumentException.class,
-                () -> table.upsert(1L, new long[2], new int[1], new byte[2], new int[] {5}));
+                () -> UpsertArrays.upsert(table, 1L, new long[2], new int[1], new byte[2], new int[] {5}));
         assertThrows(IllegalArgumentException.class,
-                () -> table.upsert(1L, new long[2], new int[1], new byte[2], new int[] {-1}));
+                () -> UpsertArrays.upsert(table, 1L, new long[2], new int[1], new byte[2], new int[] {-1}));
         assertEquals(0, table.size());
         table.assertInvariant();
     }
@@ -308,7 +308,7 @@ class DeltaMemTableTest {
 
     private static boolean upsert(DeltaMemTable table, long key, long a, long b, int status, String name) {
         byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
-        return table.upsert(key, new long[] {a, b}, new int[] {status}, bytes, new int[] {bytes.length});
+        return UpsertArrays.upsert(table, key, new long[] {a, b}, new int[] {status}, bytes, new int[] {bytes.length});
     }
 
     private static void assertRow(DeltaMemTable table, int row, long key, long a, long b, int status, String name) {

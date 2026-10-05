@@ -197,7 +197,7 @@ class LakeTableTest {
 
     private static void put(LakeTable table, long key, long amount, double score, int status, String name) {
         byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
-        table.upsert(key, new long[] {amount, Double.doubleToRawLongBits(score)},
+        UpsertArrays.upsert(table, key, new long[] {amount, Double.doubleToRawLongBits(score)},
                 new int[] {status}, bytes, new int[] {bytes.length});
     }
 

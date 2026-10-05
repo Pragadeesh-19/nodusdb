@@ -100,7 +100,7 @@ class ParquetLayoutTest {
             long[] longs = {i * 7_919L, Double.doubleToRawLongBits(i * 0.5)};
             int[] ints = {i % 5};
             byte[] label = LABELS[i % LABELS.length].getBytes(StandardCharsets.UTF_8);
-            table.upsert(i + 1L, longs, ints, label, new int[] {label.length});
+            UpsertArrays.upsert(table, i + 1L, longs, ints, label, new int[] {label.length});
         }
         return table;
     }

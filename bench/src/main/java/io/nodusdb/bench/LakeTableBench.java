@@ -14,6 +14,7 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.nio.charset.StandardCharsets;
@@ -35,11 +36,15 @@ public class LakeTableBench {
     private static final long KEY_STRIDE = 0x9E3779B97F4A7C15L;
     private static final byte[] LABEL = "payload-000016B".getBytes(StandardCharsets.UTF_8);
     private static final int[] LABEL_LENGTHS = {LABEL.length};
+    private static final MemorySegment LABEL_SEGMENT = MemorySegment.ofArray(LABEL);
+    private static final MemorySegment LABEL_LENGTHS_SEGMENT = MemorySegment.ofArray(LABEL_LENGTHS);
 
     private Path directory;
     private LakeTable table;
     private final long[] longValues = new long[2];
     private final int[] intValues = new int[1];
+    private final MemorySegment longSegment = MemorySegment.ofArray(longValues);
+    private final MemorySegment intSegment = MemorySegment.ofArray(intValues);
     private long cursor;
     private long iterationStartCursor;
     private long iterationStartBytes;
@@ -86,6 +91,6 @@ public class LakeTableBench {
         longValues[0] = row;
         longValues[1] = Double.doubleToRawLongBits(row * 0.25);
         intValues[0] = (int) row;
-        table.upsert(key, longValues, intValues, LABEL, LABEL_LENGTHS);
+        table.upsert(key, longSegment, intSegment, LABEL_SEGMENT, LABEL_LENGTHS_SEGMENT);
     }
 }

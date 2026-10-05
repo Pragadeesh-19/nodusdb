@@ -10,6 +10,7 @@ import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
 
+import java.lang.foreign.MemorySegment;
 import java.util.concurrent.TimeUnit;
 
 @BenchmarkMode(Mode.AverageTime)
@@ -27,6 +28,10 @@ public class DeltaMemTableBench {
     private final int[] intValues = new int[1];
     private final int[] varCharLengths = {PAYLOAD_BYTES};
     private final byte[] payload = new byte[PAYLOAD_BYTES];
+    private final MemorySegment longSegment = MemorySegment.ofArray(longValues);
+    private final MemorySegment intSegment = MemorySegment.ofArray(intValues);
+    private final MemorySegment payloadSegment = MemorySegment.ofArray(payload);
+    private final MemorySegment lengthSegment = MemorySegment.ofArray(varCharLengths);
     private long cursor;
 
     @Setup(Level.Trial)
@@ -34,7 +39,7 @@ public class DeltaMemTableBench {
         table = new DeltaMemTable(SCHEMA, 1 << 20, 1 << 25);
         for (long row = 0; row < ROWS; row++) {
             longValues[0] = row;
-            table.upsert(keyFor(row), longValues, intValues, payload, varCharLengths);
+            table.upsert(keyFor(row), longSegment, intSegment, payloadSegment, lengthSegment);
         }
         cursor = 0;
     }
@@ -47,7 +52,7 @@ public class DeltaMemTableBench {
         longValues[1] = Double.doubleToRawLongBits(row * 0.5);
         intValues[0] = (int) row;
         payload[0] = (byte) row;
-        return table.upsert(keyFor(row), longValues, intValues, payload, varCharLengths);
+        return table.upsert(keyFor(row), longSegment, intSegment, payloadSegment, lengthSegment);
     }
 
     private static long keyFor(long row) {

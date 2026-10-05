@@ -108,11 +108,6 @@ public final class LakeTable implements AutoCloseable {
         return schema;
     }
 
-    public void upsert(long keyHash, long[] longValues, int[] intValues, byte[] varCharValues, int[] varCharLengths) {
-        upsert(keyHash, MemorySegment.ofArray(longValues), MemorySegment.ofArray(intValues),
-                MemorySegment.ofArray(varCharValues), MemorySegment.ofArray(varCharLengths));
-    }
-
     public void upsert(long keyHash, MemorySegment longValues, MemorySegment intValues,
                        MemorySegment varCharValues, MemorySegment varCharLengths) {
         synchronized (lock) {

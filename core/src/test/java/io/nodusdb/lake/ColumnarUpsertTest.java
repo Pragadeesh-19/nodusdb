@@ -50,7 +50,7 @@ class ColumnarUpsertTest {
         try (LakeTable byRow = LakeTable.open(directory.resolve("row"), SCHEMA, CONFIG);
              LakeTable byColumn = LakeTable.open(directory.resolve("column"), SCHEMA, CONFIG)) {
             for (int i = 0; i < rows; i++) {
-                byRow.upsert(keys[i], new long[] {amounts[i], scoreBits[i]}, new int[] {statuses[i]},
+                UpsertArrays.upsert(byRow, keys[i], new long[] {amounts[i], scoreBits[i]}, new int[] {statuses[i]},
                         names[i], new int[] {names[i].length});
             }
 

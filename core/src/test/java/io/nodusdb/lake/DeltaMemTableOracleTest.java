@@ -41,7 +41,7 @@ class DeltaMemTableOracleTest {
 
             if (roll < 55) {
                 Expected value = randomValue(random);
-                boolean inserted = table.upsert(key, new long[] {value.first(), value.second()},
+                boolean inserted = UpsertArrays.upsert(table, key, new long[] {value.first(), value.second()},
                         new int[] {value.status()}, value.name(), new int[] {value.name().length});
                 boolean expectedInsert = oracle.put(key, value) == null;
                 assertEquals(expectedInsert, inserted, where);

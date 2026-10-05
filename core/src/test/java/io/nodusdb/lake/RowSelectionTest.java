@@ -26,9 +26,9 @@ class RowSelectionTest {
     @Test
     void kindSelectionListsMatchingRowsInMemtableOrder() {
         DeltaMemTable table = new DeltaMemTable(new DeltaMemTable.Schema(1, 0, 0), 4, 16);
-        table.upsert(1L, new long[] {10L}, new int[0], new byte[0], new int[0]);
+        UpsertArrays.upsert(table, 1L, new long[] {10L}, new int[0], new byte[0], new int[0]);
         table.tombstone(2L);
-        table.upsert(3L, new long[] {30L}, new int[0], new byte[0], new int[0]);
+        UpsertArrays.upsert(table, 3L, new long[] {30L}, new int[0], new byte[0], new int[0]);
         table.tombstone(4L);
         try (RowSelection inserts = RowSelection.ofKind(table, DeltaMemTable.INSERT);
              RowSelection tombstones = RowSelection.ofKind(table, DeltaMemTable.TOMBSTONE)) {
