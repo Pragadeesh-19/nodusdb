@@ -9,76 +9,65 @@ final class AdjacencyTable {
     static final int PROMOTED_CAPACITY = 16;
     static final int DEMOTION_DEGREE = 8;
 
-    private static final int NO_BLOCK = -1;
     private static final int INITIAL_NODES = 16;
-    private static final long MAX_NODE_COUNT = NodeIds.MAX_NODE_ID + 1;
     private static final long[] NO_NEIGHBORS = new long[0];
 
     private final LowDegreeSlab slab;
-    private int[] degrees = new int[INITIAL_NODES];
-    private int[] blocks = noBlocks(INITIAL_NODES);
+    private final NodeTable nodes;
     private IndexedSparseSet[] sets = new IndexedSparseSet[INITIAL_NODES];
 
     AdjacencyTable(Arena arena) {
         this.slab = new LowDegreeSlab(arena, INITIAL_NODES);
+        this.nodes = new NodeTable(arena, INITIAL_NODES);
     }
 
     int capacity() {
-        return degrees.length;
+        return nodes.capacity();
     }
 
     void ensureCapacity(int nodeCount) {
-        int old = degrees.length;
-        if (nodeCount <= old) {
+        if (nodeCount <= capacity()) {
             return;
         }
-        int newCapacity = (int) Math.max(nodeCount, Math.min((long) old << 1, MAX_NODE_COUNT));
-        degrees = Arrays.copyOf(degrees, newCapacity);
-        blocks = Arrays.copyOf(blocks, newCapacity);
-        Arrays.fill(blocks, old, newCapacity, NO_BLOCK);
-        sets = Arrays.copyOf(sets, newCapacity);
+        nodes.ensureCapacity(nodeCount);
+        sets = Arrays.copyOf(sets, nodes.capacity());
     }
 
     int degreeOf(long node) {
-        int[] nodeDegrees = degrees;
-        return node < nodeDegrees.length ? nodeDegrees[(int) node] : 0;
+        return NodeTable.degreeOf(nodes.read(slotOf(node)));
     }
 
     boolean isHighDegree(long node) {
+        int n = slotOf(node);
         IndexedSparseSet[] nodeSets = sets;
-        return node < nodeSets.length && nodeSets[(int) node] != null;
+        return n >= 0 && n < nodeSets.length && nodeSets[n] != null;
     }
 
     boolean contains(long node, long neighbor) {
-        int[] nodeDegrees = degrees;
-        if (node >= nodeDegrees.length) {
-            return false;
-        }
-        int n = (int) node;
+        int n = slotOf(node);
         IndexedSparseSet[] nodeSets = sets;
-        if (n >= nodeSets.length) {
+        if (n < 0 || n >= nodeSets.length) {
             return false;
         }
         IndexedSparseSet set = nodeSets[n];
         if (set != null) {
             return set.contains(neighbor);
         }
-        int[] nodeBlocks = blocks;
-        return n < nodeBlocks.length && slab.containsValue(nodeBlocks[n], nodeDegrees[n], neighbor);
+        long slot = nodes.read(n);
+        return slab.containsValue(NodeTable.blockOf(slot), NodeTable.degreeOf(slot), neighbor);
     }
 
     long neighborAt(long node, int i) {
+        int n = slotOf(node);
         IndexedSparseSet[] nodeSets = sets;
-        if (node >= nodeSets.length) {
+        if (n < 0 || n >= nodeSets.length) {
             return NodeIds.NONE;
         }
-        int n = (int) node;
         IndexedSparseSet set = nodeSets[n];
         if (set != null) {
             return set.peek(i);
         }
-        int[] nodeBlocks = blocks;
-        return n < nodeBlocks.length ? slab.peek(nodeBlocks[n], i) : NodeIds.NONE;
+        return slab.peek(NodeTable.blockOf(nodes.read(n)), i);
     }
 
     /*
@@ -87,20 +76,21 @@ final class AdjacencyTable {
      * hold at least MAX_LOW_DEGREE longs, and returns scratch.
      */
     long[] neighborsOf(long node, long[] scratch) {
+        int n = slotOf(node);
         IndexedSparseSet[] nodeSets = sets;
-        if (node >= nodeSets.length) {
+        if (n < 0 || n >= nodeSets.length) {
             return NO_NEIGHBORS;
         }
-        int n = (int) node;
         IndexedSparseSet set = nodeSets[n];
         if (set != null) {
             return set.denseArray();
         }
-        int block = blocks[n];
-        if (block == NO_BLOCK) {
+        long slot = nodes.read(n);
+        int block = NodeTable.blockOf(slot);
+        if (block == NodeTable.NO_BLOCK) {
             return NO_NEIGHBORS;
         }
-        int degree = degrees[n];
+        int degree = NodeTable.degreeOf(slot);
         for (int i = 0; i < degree && i < MAX_LOW_DEGREE; i++) {
             scratch[i] = slab.peek(block, i);
         }
@@ -112,48 +102,54 @@ final class AdjacencyTable {
             return false;
         }
         int n = (int) node;
-        int degree = degrees[n];
+        long slot = nodes.read(n);
+        int degree = NodeTable.degreeOf(slot);
+        int block = NodeTable.blockOf(slot);
         IndexedSparseSet set = sets[n];
         if (set != null) {
             set.appendAbsent(neighbor);
         } else if (degree == MAX_LOW_DEGREE) {
-            promote(n, neighbor);
+            promote(n, block, neighbor);
+            block = NodeTable.NO_BLOCK;
         } else {
-            if (blocks[n] == NO_BLOCK) {
-                blocks[n] = slab.allocateBlock();
+            if (block == NodeTable.NO_BLOCK) {
+                block = slab.allocateBlock();
             }
-            slab.set(blocks[n], degree, neighbor);
+            slab.set(block, degree, neighbor);
         }
-        degrees[n] = degree + 1;
+        nodes.write(n, degree + 1, block);
         return true;
     }
 
     boolean remove(long node, long neighbor) {
-        if (node >= degrees.length) {
+        int n = slotOf(node);
+        if (n < 0 || n >= sets.length) {
             return false;
         }
-        int n = (int) node;
+        long slot = nodes.read(n);
+        int degree = NodeTable.degreeOf(slot);
+        int block = NodeTable.blockOf(slot);
         IndexedSparseSet set = sets[n];
         if (set != null) {
             if (!set.remove(neighbor)) {
                 return false;
             }
-            degrees[n]--;
-            if (degrees[n] == DEMOTION_DEGREE) {
-                demote(n);
+            int remaining = degree - 1;
+            if (remaining == DEMOTION_DEGREE) {
+                demote(n, remaining);
+            } else {
+                nodes.write(n, remaining, NodeTable.NO_BLOCK);
             }
             return true;
         }
-        int degree = degrees[n];
-        int block = blocks[n];
         for (int i = 0; i < degree; i++) {
             if (slab.get(block, i) == neighbor) {
                 slab.set(block, i, slab.get(block, degree - 1));
-                degrees[n] = degree - 1;
                 if (degree == 1) {
                     slab.freeBlock(block);
-                    blocks[n] = NO_BLOCK;
+                    block = NodeTable.NO_BLOCK;
                 }
+                nodes.write(n, degree - 1, block);
                 return true;
             }
         }
@@ -170,17 +166,16 @@ final class AdjacencyTable {
         slab.reserve(lowNodes);
         for (int n = 0; n < nodeDegrees.length; n++) {
             int degree = nodeDegrees[n];
-            degrees[n] = degree;
-            if (degree > 0 && degree <= MAX_LOW_DEGREE) {
-                blocks[n] = slab.allocateBlock();
-            }
+            int block = degree > 0 && degree <= MAX_LOW_DEGREE ? slab.allocateBlock() : NodeTable.NO_BLOCK;
+            nodes.write(n, degree, block);
         }
     }
 
     void fillBulkNode(int n, long[] neighbors, int degree) {
-        assert degrees[n] == degree : "prepared degree differs for node " + n;
+        long slot = nodes.read(n);
+        assert NodeTable.degreeOf(slot) == degree : "prepared degree differs for node " + n;
         if (degree <= MAX_LOW_DEGREE) {
-            int block = blocks[n];
+            int block = NodeTable.blockOf(slot);
             for (int i = 0; i < degree; i++) {
                 slab.set(block, i, neighbors[i]);
             }
@@ -193,31 +188,27 @@ final class AdjacencyTable {
         }
     }
 
-    private void promote(int n, long neighbor) {
+    private void promote(int n, int block, long neighbor) {
         IndexedSparseSet set = new IndexedSparseSet(PROMOTED_CAPACITY);
-        int block = blocks[n];
         for (int i = 0; i < MAX_LOW_DEGREE; i++) {
             set.appendAbsent(slab.get(block, i));
         }
         set.appendAbsent(neighbor);
         slab.freeBlock(block);
-        blocks[n] = NO_BLOCK;
         sets[n] = set;
     }
 
-    private void demote(int n) {
+    private void demote(int n, int degree) {
         IndexedSparseSet set = sets[n];
         int block = slab.allocateBlock();
         for (int i = 0; i < DEMOTION_DEGREE; i++) {
             slab.set(block, i, set.get(i));
         }
         sets[n] = null;
-        blocks[n] = block;
+        nodes.write(n, degree, block);
     }
 
-    private static int[] noBlocks(int length) {
-        int[] result = new int[length];
-        Arrays.fill(result, NO_BLOCK);
-        return result;
+    private static int slotOf(long node) {
+        return node >= 0 && node < Integer.MAX_VALUE ? (int) node : -1;
     }
 }

@@ -33,8 +33,7 @@ final class LowDegreeSlab {
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
 
     private final Arena arena;
-    private final int first;
-    private final int firstShift;
+    private final ChunkLayout layout;
     private MemorySegment[] words = new MemorySegment[0];
     private MemorySegment[] flags = new MemorySegment[0];
     private int chunkCount;
@@ -44,12 +43,8 @@ final class LowDegreeSlab {
     private int freeCount;
 
     LowDegreeSlab(Arena arena, int initialBlocks) {
-        if (initialBlocks < 1 || Integer.bitCount(initialBlocks) != 1) {
-            throw new IllegalArgumentException("initial blocks must be a positive power of two: " + initialBlocks);
-        }
         this.arena = arena;
-        this.first = initialBlocks;
-        this.firstShift = Integer.numberOfTrailingZeros(initialBlocks);
+        this.layout = new ChunkLayout(initialBlocks);
     }
 
     int allocateBlock() {
@@ -79,13 +74,13 @@ final class LowDegreeSlab {
 
     long get(int block, int offset) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
-        int chunk = chunkOf(block);
+        int chunk = layout.chunkOf(block);
         return words[chunk].getAtIndex(LONG, longIndex(block, chunk, offset));
     }
 
     void set(int block, int offset, long value) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
-        int chunk = chunkOf(block);
+        int chunk = layout.chunkOf(block);
         words[chunk].setAtIndex(LONG, longIndex(block, chunk, offset), value);
     }
 
@@ -94,7 +89,7 @@ final class LowDegreeSlab {
             return false;
         }
         MemorySegment[] segments = words;
-        int chunk = chunkOf(block);
+        int chunk = layout.chunkOf(block);
         if (chunk >= segments.length) {
             return false;
         }
@@ -114,15 +109,15 @@ final class LowDegreeSlab {
             return NodeIds.NONE;
         }
         MemorySegment[] segments = words;
-        int chunk = chunkOf(block);
+        int chunk = layout.chunkOf(block);
         return chunk < segments.length
                 ? segments[chunk].getAtIndex(LONG, longIndex(block, chunk, offset))
                 : NodeIds.NONE;
     }
 
     long addressOf(int block) {
-        int chunk = chunkOf(block);
-        return words[chunk].address() + (long) (block - chunkBase(chunk)) * BLOCK_BYTES;
+        int chunk = layout.chunkOf(block);
+        return words[chunk].address() + (long) layout.offsetOf(block, chunk) * BLOCK_BYTES;
     }
 
     void reserve(int blocks) {
@@ -147,7 +142,7 @@ final class LowDegreeSlab {
         if (capacity >= MAX_BLOCKS) {
             throw new IllegalStateException("slab block limit reached: " + MAX_BLOCKS);
         }
-        int blocks = chunkBlocks(chunkCount);
+        int blocks = layout.chunkSize(chunkCount);
         words = Arrays.copyOf(words, chunkCount + 1);
         flags = Arrays.copyOf(flags, chunkCount + 1);
         words[chunkCount] = arena.allocate((long) blocks * BLOCK_BYTES, ALIGNMENT);
@@ -156,30 +151,17 @@ final class LowDegreeSlab {
         chunkCount++;
     }
 
-    private int chunkOf(int block) {
-        int quotient = block >>> firstShift;
-        return quotient == 0 ? 0 : 32 - Integer.numberOfLeadingZeros(quotient);
-    }
-
-    private int chunkBase(int chunk) {
-        return chunk == 0 ? 0 : first << (chunk - 1);
-    }
-
-    private int chunkBlocks(int chunk) {
-        return chunk == 0 ? first : first << (chunk - 1);
-    }
-
     private long longIndex(int block, int chunk, int offset) {
-        return (long) (block - chunkBase(chunk)) * BLOCK_SIZE + offset;
+        return (long) layout.offsetOf(block, chunk) * BLOCK_SIZE + offset;
     }
 
     private byte flag(int block) {
-        int chunk = chunkOf(block);
-        return flags[chunk].get(BYTE, block - chunkBase(chunk));
+        int chunk = layout.chunkOf(block);
+        return flags[chunk].get(BYTE, layout.offsetOf(block, chunk));
     }
 
     private void setFlag(int block, byte value) {
-        int chunk = chunkOf(block);
-        flags[chunk].set(BYTE, block - chunkBase(chunk), value);
+        int chunk = layout.chunkOf(block);
+        flags[chunk].set(BYTE, layout.offsetOf(block, chunk), value);
     }
 }
