@@ -3,9 +3,10 @@ import ctypes
 import hashlib
 import os
 import struct
+import threading
 
 from . import _native
-from ._native import NodusError
+from ._native import NodusError, serialized
 
 MAX_FLUSH_ROWS = 1 << 29
 MAX_VAR_BYTES = 1 << 30
@@ -162,7 +163,8 @@ class LakeTable:
         if compression not in _CODEC_IDS:
             raise ValueError(f"compression must be one of {sorted(_CODEC_IDS)}, not {compression!r}")
 
-        self._lib, self._thread = _native.load(library_path)
+        self._lib, self._isolate = _native.load(library_path)
+        self._lock = threading.RLock()
         _bind(self._lib)
         spec = ",".join(f"{name}:{_JAVA_TYPES[kind]}" for name, kind in self._fields).encode("ascii")
         location = os.fsencode(os.fspath(path))
@@ -174,6 +176,11 @@ class LakeTable:
             raise NodusError(f"could not open lake table at {os.fspath(path)}")
         self._handle = handle
 
+    @property
+    def _thread(self):
+        return _native.current_thread(self._lib, self._isolate)
+
+    @serialized
     def upsert(self, key, row):
         keys, longs, ints, var_bytes, var_lengths = self._pack([(key, row)])
         ok = self._lib.nodus_lake_upsert(
@@ -184,6 +191,7 @@ class LakeTable:
         if not ok:
             raise NodusError("lake upsert failed")
 
+    @serialized
     def upsert_from(self, rows):
         pending = []
         written = 0
@@ -196,6 +204,7 @@ class LakeTable:
             written += self._upsert_chunk(pending)
         return written
 
+    @serialized
     def upsert_columns(self, keys, columns):
         if set(columns) != {name for name, _ in self._fields}:
             raise ValueError(f"columns must be exactly {[name for name, _ in self._fields]}")
@@ -232,6 +241,7 @@ class LakeTable:
             raise NodusError("lake columnar upsert failed; no rows were applied")
         return applied
 
+    @serialized
     def upsert_table(self, table, key="id"):
         batches = table.to_batches() if hasattr(table, "to_batches") else [table]
         applied = 0
@@ -240,6 +250,7 @@ class LakeTable:
             applied += self.upsert_columns(batch.column(key), columns)
         return applied
 
+    @serialized
     def sum(self, name):
         out = ctypes.c_double()
         status = self._lib.nodus_lake_sum(self._thread, self._handle, self._numeric_index(name),
@@ -248,6 +259,7 @@ class LakeTable:
             raise NodusError("lake sum failed")
         return out.value
 
+    @serialized
     def average(self, name):
         out = ctypes.c_double()
         status = self._lib.nodus_lake_avg(self._thread, self._handle, self._numeric_index(name),
@@ -258,6 +270,7 @@ class LakeTable:
             raise NodusError("lake average failed")
         return out.value
 
+    @serialized
     def delete(self, key):
         if not self._lib.nodus_lake_delete(self._thread, self._handle, key_hash(key)):
             raise NodusError("lake delete failed")
@@ -271,6 +284,7 @@ class LakeTable:
             raise TypeError(f"column {name} is text; sum and average need a number")
         return index
 
+    @serialized
     def get(self, key):
         keyed = key_hash(key)
         capacity = INITIAL_VAR_BYTES
@@ -291,10 +305,12 @@ class LakeTable:
                 continue
             raise NodusError("lake get failed")
 
+    @serialized
     def flush(self):
         if not self._lib.nodus_lake_flush(self._thread, self._handle):
             raise NodusError("lake flush failed")
 
+    @serialized
     def close(self):
         if self._handle:
             if not self._lib.nodus_lake_close(self._thread, self._handle):

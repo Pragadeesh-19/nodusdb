@@ -312,7 +312,7 @@ The kernel supports one writer and any number of readers. Every mutation runs in
 
 The stress test in `GraphConcurrencyTest` runs one writer that toggles 200,000 edges on a high-degree node while eight readers run `kHop` and `commonNeighbors`. Every result must hold distinct, in-range targets. The test also checks that the readers allocate nothing after the writer stops. Breaking the validation step makes it fail with a duplicated target.
 
-The C and Python layers do not yet support concurrent readers on one handle. A handle keeps its query results in a single buffer, so two threads on the same handle can overwrite each other's results. Until that is fixed, give each thread its own `Graph`. Lake writes are serialized by a lock.
+The Python `Graph` and `LakeTable` objects serialize their calls with a lock, so threads may share one object. Each OS thread runs its native calls on its own GraalVM isolate thread. The C ABI does not serialize calls. A handle keeps its query results in one buffer, so one handle must not be used from two threads at once. `python/tests/test_concurrency.py` covers both Python cases, and `python/tests/test_crash.py` kills a writer with SIGKILL and checks that every acknowledged sync write survives.
 
 ## How it works
 
@@ -418,13 +418,13 @@ java -jar bench/target/benchmarks.jar -prof gc
 
 The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arch>/`, then `target/native/`. CI copies the library into `bin/`. If you rebuild `target/native/` by hand, copy it into `bin/` too, or the loader keeps using the old copy.
 
-Release wheels come from `.github/workflows/wheels.yml`. It builds the native library on Linux (x86_64 and arm64), macOS (x86_64 and arm64), and Windows, and then runs cibuildwheel for CPython 3.9 to 3.13. Each wheel is smoke-tested against the installed package. The workflow runs when a release is published, or by hand from the Actions tab, and publishes to PyPI with trusted publishing. The workflow has not run yet. Linux wheels may need a manylinux build container, because the native library links against the glibc of its build host. That will show up when the workflow runs.
+Release wheels come from `.github/workflows/wheels.yml`. It builds the native library on Linux (x86_64 and arm64), macOS (x86_64 and arm64), and Windows, and then runs cibuildwheel for CPython 3.9 to 3.13. Each wheel is smoke-tested against the installed package. The workflow runs on every push. It publishes to PyPI only when a release is published, through trusted publishing and a required reviewer on the `pypi` environment. Linux wheels are tagged `manylinux_2_34`, so they need glibc 2.34 or newer: Ubuntu 22.04 and later, Debian 12, and RHEL 9. The Linux wheels are installed and smoke-tested on the host runner, because the manylinux2014 build container cannot install a 2.34 wheel. macOS wheels target 11.0 and later. Windows wheels are x86_64 only.
 
 ## Limits
 
 - **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
-- **One thread per handle.** The kernel allows one writer and many readers. The C and Python layers do not yet allow concurrent readers on one handle, because query results share a buffer. Use one `Graph` per thread. Lake writes are serialized by a lock.
+- **C handles are single-threaded.** The kernel allows one writer and many readers. Python objects are safe to share, because their calls are serialized. A C caller must not use one handle from two threads at once.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
@@ -436,4 +436,4 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Concurrent readers through the C and Python layers are not. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Python `Graph` and `LakeTable` objects can be shared across threads. Concurrent calls on one C handle are not supported. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.

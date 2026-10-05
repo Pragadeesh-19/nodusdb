@@ -1,10 +1,11 @@
 import array
 import ctypes
 import os
+import threading
 import uuid
 
 from . import _native
-from ._native import NodusError
+from ._native import NodusError, serialized
 
 MAX_NODE_ID = 2**31 - 10
 DEFAULT_RESULT_CAPACITY = 1 << 16
@@ -76,7 +77,8 @@ def _int32_pointer(column):
 
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async"):
-        self._lib, self._thread = _native.load(library_path)
+        self._lib, self._isolate = _native.load(library_path)
+        self._lock = threading.RLock()
         self._bind_signatures()
         self._handle = self._open(path, sync_mode)
         if not self._handle:
@@ -85,6 +87,10 @@ class Graph:
         if self._kind < 0:
             raise NodusError("could not read the graph's key kind")
         self._buffer = (ctypes.c_int64 * result_capacity)()
+
+    @property
+    def _thread(self):
+        return _native.current_thread(self._lib, self._isolate)
 
     def _open(self, path, sync_mode):
         if path is None:
@@ -137,16 +143,19 @@ class Graph:
         lib.nodus_khop.restype = ctypes.c_int
         lib.nodus_khop.argtypes = [thread, handle, node, ctypes.c_int, _native.RESULT_BUFFER, ctypes.c_int]
 
+    @serialized
     def checkpoint(self):
         self._require_open()
         if self._lib.nodus_checkpoint(self._thread, self._handle) != 0:
             raise NodusError("checkpoint failed; the graph is not durable up to this point")
 
+    @serialized
     def sync(self):
         self._require_open()
         if self._lib.nodus_sync(self._thread, self._handle) != 0:
             raise NodusError("sync failed; accepted writes may not be on disk yet")
 
+    @serialized
     def close(self):
         if self._handle:
             if self._lib.nodus_destroy(self._thread, self._handle) != 0:
@@ -164,12 +173,14 @@ class Graph:
             raise NodusError("graph is closed")
         return self._handle
 
+    @serialized
     def add_edge(self, u, v):
         if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
             return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), u, v))
         first, second = self._write_ids((u, v))
         return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), first, second))
 
+    @serialized
     def remove_edge(self, u, v):
         if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
             return bool(self._lib.nodus_remove_edge(self._thread, self._require_open(), u, v))
@@ -178,6 +189,7 @@ class Graph:
             return False
         return bool(self._lib.nodus_remove_edge(self._thread, self._require_open(), ids[0], ids[1]))
 
+    @serialized
     def add_edges_from(self, edges):
         items = edges if isinstance(edges, (list, tuple, array.array)) else list(edges)
         if len(items) and _is_string_pair(items[0]):
@@ -186,6 +198,7 @@ class Graph:
             self._claim(KIND_INTEGER)
         return self._batch(self._lib.nodus_add_edges_batch, items, "add_edges_from")
 
+    @serialized
     def remove_edges_from(self, edges):
         items = edges if isinstance(edges, (list, tuple, array.array)) else list(edges)
         if len(items) and _is_string_pair(items[0]):
@@ -193,6 +206,7 @@ class Graph:
             items = [pair for pair in ids if pair is not None]
         return self._batch(self._lib.nodus_remove_edges_batch, items, "remove_edges_from")
 
+    @serialized
     def has_edge(self, u, v):
         if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
             return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), u, v))
@@ -201,6 +215,7 @@ class Graph:
             return False
         return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), ids[0], ids[1]))
 
+    @serialized
     def degree(self, u):
         ids = self._read_ids((u,))
         if ids is None:
@@ -208,6 +223,7 @@ class Graph:
         result = self._lib.nodus_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "degree")
 
+    @serialized
     def in_degree(self, v):
         ids = self._read_ids((v,))
         if ids is None:
@@ -215,6 +231,7 @@ class Graph:
         result = self._lib.nodus_in_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "in_degree")
 
+    @serialized
     def common_neighbors(self, u, v):
         ids = self._read_ids((u, v))
         if ids is None:
@@ -226,6 +243,7 @@ class Graph:
         )
         return self._to_keys(found)
 
+    @serialized
     def khop(self, start, max_depth):
         _check_depth(max_depth)
         ids = self._read_ids((start,))

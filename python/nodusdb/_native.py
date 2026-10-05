@@ -1,7 +1,9 @@
 import ctypes
+import functools
 import os
 import platform
 import sys
+import threading
 from pathlib import Path
 
 ENVIRONMENT_VARIABLE = "NODUSDB_LIBRARY"
@@ -18,6 +20,7 @@ _OPERATING_SYSTEMS = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}
 _ARCHITECTURES = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "arm64", "aarch64": "arm64"}
 
 _loaded = {}
+_attached = threading.local()
 
 
 class NodusError(RuntimeError):
@@ -70,13 +73,38 @@ def find_library(explicit_path=None):
     )
 
 
-def _create_isolate_thread(library):
+def _create_isolate(library):
     create = library.graal_create_isolate
     create.restype = ctypes.c_int
-    create.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    create.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+    isolate = ctypes.c_void_p()
     thread = ctypes.c_void_p()
-    if create(None, None, ctypes.byref(thread)) != 0 or not thread.value:
+    if create(None, ctypes.byref(isolate), ctypes.byref(thread)) != 0 or not isolate.value:
         raise NodusError("failed to create the GraalVM isolate")
+    return isolate
+
+
+def serialized(method):
+    @functools.wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
+def current_thread(library, isolate):
+    """Return this OS thread's isolate thread, attaching it on first use."""
+    attached = _attached.__dict__.setdefault("threads", {})
+    thread = attached.get(isolate.value)
+    if thread is None:
+        attach = library.graal_attach_thread
+        attach.restype = ctypes.c_int
+        attach.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        candidate = ctypes.c_void_p()
+        if attach(isolate, ctypes.byref(candidate)) != 0 or not candidate.value:
+            raise NodusError("failed to attach this thread to the GraalVM isolate")
+        thread = candidate
+        attached[isolate.value] = thread
     return thread
 
 
@@ -84,5 +112,5 @@ def load(explicit_path=None):
     path = str(find_library(explicit_path))
     if path not in _loaded:
         library = ctypes.CDLL(path)
-        _loaded[path] = (library, _create_isolate_thread(library))
+        _loaded[path] = (library, _create_isolate(library))
     return _loaded[path]
