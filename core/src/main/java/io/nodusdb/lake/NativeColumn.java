@@ -2,6 +2,7 @@ package io.nodusdb.lake;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 
 /*
  * A growable byte buffer in native memory. Capacity is a power of two and the first byte
@@ -14,6 +15,10 @@ final class NativeColumn implements AutoCloseable {
 
     static final long ALIGNMENT = 64;
     static final long MAX_BYTES = 1L << 40;
+
+    private static final ValueLayout.OfLong UNALIGNED_LONG = ValueLayout.JAVA_LONG_UNALIGNED;
+    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
+    private static final long LOOP_COPY_LIMIT = 64;
 
     private Arena arena;
     private MemorySegment segment;
@@ -54,6 +59,21 @@ final class NativeColumn implements AutoCloseable {
         arena.close();
         arena = next;
         segment = grown;
+    }
+
+    static void copyBytes(MemorySegment source, long sourceOffset, MemorySegment destination, long destinationOffset,
+                          long length) {
+        if (length > LOOP_COPY_LIMIT) {
+            MemorySegment.copy(source, sourceOffset, destination, destinationOffset, length);
+            return;
+        }
+        long i = 0;
+        for (; i + Long.BYTES <= length; i += Long.BYTES) {
+            destination.set(UNALIGNED_LONG, destinationOffset + i, source.get(UNALIGNED_LONG, sourceOffset + i));
+        }
+        for (; i < length; i++) {
+            destination.set(BYTE, destinationOffset + i, source.get(BYTE, sourceOffset + i));
+        }
     }
 
     private static long powerOfTwoAtLeast(long bytes) {

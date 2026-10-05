@@ -36,6 +36,8 @@ public final class DeltaMemTable implements AutoCloseable {
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
     private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
+    private static final ValueLayout.OfLong UNALIGNED_LONG = ValueLayout.JAVA_LONG_UNALIGNED;
+    private static final ValueLayout.OfInt UNALIGNED_INT = ValueLayout.JAVA_INT_UNALIGNED;
 
     public record Schema(int longColumns, int intColumns, int varCharColumns) {
 
@@ -89,12 +91,6 @@ public final class DeltaMemTable implements AutoCloseable {
             varCharLengths[c] = new NativeColumn((long) initialCapacity * Integer.BYTES);
         }
         this.slab = new NativeColumn(initialSlabBytes);
-    }
-
-    public boolean upsert(long keyHash, long[] longValues, int[] intValues,
-                          byte[] varCharValues, int[] varCharValueLengths) {
-        return upsert(keyHash, MemorySegment.ofArray(longValues), MemorySegment.ofArray(intValues),
-                MemorySegment.ofArray(varCharValues), MemorySegment.ofArray(varCharValueLengths));
     }
 
     public boolean upsert(long keyHash, MemorySegment longValues, MemorySegment intValues,
@@ -337,12 +333,10 @@ public final class DeltaMemTable implements AutoCloseable {
 
     private void writeFixedWidth(int row, MemorySegment longValues, MemorySegment intValues) {
         for (int c = 0; c < longColumns.length; c++) {
-            MemorySegment.copy(longValues, c * (long) Long.BYTES, longColumns[c].segment(),
-                    row * (long) Long.BYTES, Long.BYTES);
+            longColumns[c].segment().setAtIndex(LONG, row, longValues.getAtIndex(UNALIGNED_LONG, c));
         }
         for (int c = 0; c < intColumns.length; c++) {
-            MemorySegment.copy(intValues, c * (long) Integer.BYTES, intColumns[c].segment(),
-                    row * (long) Integer.BYTES, Integer.BYTES);
+            intColumns[c].segment().setAtIndex(INT, row, intValues.getAtIndex(UNALIGNED_INT, c));
         }
     }
 
@@ -350,7 +344,7 @@ public final class DeltaMemTable implements AutoCloseable {
         long source = 0;
         for (int c = 0; c < varCharLengths.length; c++) {
             int length = lengths.get(INT_UNALIGNED, c * (long) Integer.BYTES);
-            MemorySegment.copy(varCharValues, source, slab.segment(), slabUsed, length);
+            NativeColumn.copyBytes(varCharValues, source, slab.segment(), slabUsed, length);
             varCharOffsets[c].segment().setAtIndex(INT, row, slabUsed);
             varCharLengths[c].segment().setAtIndex(INT, row, length);
             slabUsed += length;

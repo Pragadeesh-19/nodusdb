@@ -10,8 +10,11 @@ import java.lang.foreign.ValueLayout;
  */
 final class RowBuffer implements AutoCloseable {
 
+    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
+    private static final ValueLayout.OfLong UNALIGNED_LONG = ValueLayout.JAVA_LONG_UNALIGNED;
+    private static final ValueLayout.OfInt UNALIGNED_INT = ValueLayout.JAVA_INT_UNALIGNED;
     private static final long LONG_BYTES = Long.BYTES;
     private static final long INT_BYTES = Integer.BYTES;
 
@@ -31,11 +34,10 @@ final class RowBuffer implements AutoCloseable {
 
     void load(ColumnarRows rows, int row) {
         for (int c = 0; c < shape.longColumns(); c++) {
-            MemorySegment.copy(rows.longColumns().get(c), row * LONG_BYTES, longs.segment(), c * LONG_BYTES,
-                    LONG_BYTES);
+            longs.segment().setAtIndex(LONG, c, rows.longColumns().get(c).get(UNALIGNED_LONG, row * LONG_BYTES));
         }
         for (int c = 0; c < shape.intColumns(); c++) {
-            MemorySegment.copy(rows.intColumns().get(c), row * INT_BYTES, ints.segment(), c * INT_BYTES, INT_BYTES);
+            ints.segment().setAtIndex(INT, c, rows.intColumns().get(c).get(UNALIGNED_INT, row * INT_BYTES));
         }
         long cursor = 0;
         for (int c = 0; c < shape.varCharColumns(); c++) {
@@ -45,7 +47,7 @@ final class RowBuffer implements AutoCloseable {
             int length = end - start;
             lengths.segment().setAtIndex(INT, c, length);
             bytes.ensureCapacity(cursor + length);
-            MemorySegment.copy(rows.varCharData().get(c), start, bytes.segment(), cursor, length);
+            NativeColumn.copyBytes(rows.varCharData().get(c), start, bytes.segment(), cursor, length);
             cursor += length;
         }
     }
