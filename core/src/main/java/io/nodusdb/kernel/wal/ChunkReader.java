@@ -28,6 +28,17 @@ final class ChunkReader {
         return buffer;
     }
 
+    void skip(long bytes) {
+        long target = offset() + bytes;
+        if (target <= bufferStart + buffer.limit()) {
+            buffer.position((int) (target - bufferStart));
+            return;
+        }
+        bufferStart = target;
+        buffer.clear();
+        buffer.limit(0);
+    }
+
     boolean ensure(int bytes) throws IOException {
         if (buffer.remaining() < bytes) {
             refill(bytes);

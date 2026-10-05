@@ -200,16 +200,37 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public long outgoingNeighbor(long u, int index) {
-        NodeIds.checkValid(u);
-        while (true) {
-            long started = beginRead();
-            int degree = outgoing.degreeOf(u);
-            long neighbor = index >= 0 && index < degree ? outgoing.neighborAt(u, index) : NodeIds.NONE;
-            if (endRead(started)) {
-                Objects.checkIndex(index, degree);
-                return neighbor;
-            }
+        return neighborAt(outgoing, u, index);
+    }
+
+    public long incomingNeighbor(long v, int index) {
+        return neighborAt(incoming, v, index);
+    }
+
+    /*
+     * Bulk load, in two steps. prepareBulkLoad runs once on one thread and sizes
+     * every node. loadBulkNode then fills nodes, and calls for distinct nodes may
+     * run in parallel. Neither step takes the write sequence, so the kernel must
+     * not be shared with readers until every fill has returned.
+     */
+    public void prepareBulkLoad(int[] forwardDegrees, int[] backwardDegrees) {
+        if (forwardDegrees.length != backwardDegrees.length) {
+            throw new IllegalArgumentException("degree arrays differ in length");
         }
+        if (hasEdges()) {
+            throw new IllegalStateException("bulk load needs an empty graph");
+        }
+        ensureCapacity(forwardDegrees.length);
+        outgoing.prepareBulkLoad(forwardDegrees);
+        incoming.prepareBulkLoad(backwardDegrees);
+    }
+
+    public void loadBulkNode(boolean forward, long node, long[] neighbors, int degree) {
+        if (degree <= 0 || degree > neighbors.length) {
+            throw new IllegalArgumentException("degree " + degree + " does not fit " + neighbors.length + " neighbors");
+        }
+        AdjacencyTable table = forward ? outgoing : incoming;
+        table.fillBulkNode((int) node, neighbors, degree);
     }
 
     public int commonNeighbors(long u, long v, long[] out) {
@@ -270,6 +291,19 @@ public final class GraphKernel implements AutoCloseable {
 
     boolean hasIncoming(long v, long u) {
         return incoming.contains(v, u);
+    }
+
+    private long neighborAt(AdjacencyTable table, long node, int index) {
+        NodeIds.checkValid(node);
+        while (true) {
+            long started = beginRead();
+            int degree = table.degreeOf(node);
+            long neighbor = index >= 0 && index < degree ? table.neighborAt(node, index) : NodeIds.NONE;
+            if (endRead(started)) {
+                Objects.checkIndex(index, degree);
+                return neighbor;
+            }
+        }
     }
 
     private void beginWrite() {

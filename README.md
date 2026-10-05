@@ -47,8 +47,8 @@ The durable benchmark uses the SNAP soc-Pokec graph: 30,622,564 directed edges. 
 | Durable ingest, synchronous log, batches | 1,167,272 edges/s |
 | Durable ingest, one call per edge, asynchronous | 1,454,562 edges/s |
 | Durable ingest, one call per edge, synchronous | 203 edges/s (median 3.6 ms, p99 34 ms per call) |
-| Checkpoint of the full graph | 3.7 to 5.6 s, writes a 250 MB snapshot |
-| Recovery in a fresh process, snapshot plus 500,000 log frames | 22.0 s |
+| Checkpoint of the full graph | 8.7 to 9.1 s, writes a 500 MB snapshot |
+| Recovery in a fresh process, snapshot plus 500,000 log frames | 3.3 s (22 to 29 s before the parallel loader) |
 | Replay of 500,000 log frames alone | 0.13 s |
 
 After recovery, the degrees, in-degrees, and 3-hop results match the state before the crash. The benchmark compares a digest of all of them.
@@ -285,7 +285,7 @@ with nodusdb.LakeTable("/data/orders", schema) as table:
 A durable graph lives in one directory with four files:
 
 - `nodus.wal` is the write-ahead log. It starts with a 16-byte header: the ASCII magic `NODU`, a version, two reserved bytes, and a creation time. Every accepted edge change then adds a fixed 24-byte frame.
-- `snapshot.bin` is the last checkpoint. It stores each node's outgoing edges, with a header and a CRC32 over the whole body. Incoming edges are not stored, because the loader rebuilds them from the outgoing side.
+- `snapshot.bin` is the last checkpoint. It stores each node's outgoing edges, then each node's incoming edges, with a header and a CRC32 over the whole body. Version 2 is written now. Version 1 files, which hold outgoing edges only, still load. Version 2 files cannot be read by builds that predate this change.
 - `symbols.nodus` holds the string and UUID keys, in the order they were first used. Each record carries a CRC32C checksum. A key is forced to disk before any edge that uses it is written. The header also records whether the graph is keyed by integers or by strings.
 - `nodus.lock` holds a file lock, so a second process or a second handle cannot open the same directory.
 
@@ -422,7 +422,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 ## Limits
 
-- **Recovery is linear in graph size.** At 30.6 million edges, a fresh process needs 22 seconds, and nearly all of it is loading the snapshot. The log replays fast: 500,000 frames take 0.13 seconds. Sub-second recovery of a graph this size would need the in-memory layout stored directly, which the snapshot does not do.
+- **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 3.3 seconds, with the snapshot load taking about 2.7 of them. The live graph occupies about 2.6 GB, so most of the remaining time is garbage collection while the graph is built. Getting under a second needs a smaller per-node layout, which is a design change and not yet made.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **Calls on one handle are serialized.** The kernel allows one writer and many readers. Python objects and C handles are both safe to share across threads, but calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.

@@ -104,11 +104,20 @@ final class LowDegreeSlab {
         return blockCapacity;
     }
 
+    void reserve(int blocks) {
+        if (blocks > blockCapacity) {
+            resize(Integer.highestOneBit(blocks - 1) << 1);
+        }
+    }
+
     private void grow() {
-        if (blockCapacity >= MAX_BLOCKS) {
+        resize(blockCapacity << 1);
+    }
+
+    private void resize(int newCapacity) {
+        if (newCapacity > MAX_BLOCKS) {
             throw new IllegalStateException("slab block limit reached: " + MAX_BLOCKS);
         }
-        int newCapacity = blockCapacity << 1;
         slots = Arrays.copyOf(slots, newCapacity << BLOCK_SHIFT);
         freeBlocks = Arrays.copyOf(freeBlocks, newCapacity);
         allocated = Arrays.copyOf(allocated, newCapacity);

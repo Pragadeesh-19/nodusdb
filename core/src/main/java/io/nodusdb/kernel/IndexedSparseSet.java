@@ -36,7 +36,7 @@ public final class IndexedSparseSet {
             dense = Arrays.copyOf(dense, dense.length << 1);
         }
         dense[degree] = v;
-        index.put(v, degree);
+        index.putAbsent(v, degree);
         degree++;
     }
 

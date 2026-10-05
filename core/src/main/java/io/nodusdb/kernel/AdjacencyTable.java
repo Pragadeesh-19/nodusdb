@@ -148,6 +148,39 @@ final class AdjacencyTable {
         return false;
     }
 
+    void prepareBulkLoad(int[] nodeDegrees) {
+        int lowNodes = 0;
+        for (int degree : nodeDegrees) {
+            if (degree > 0 && degree <= MAX_LOW_DEGREE) {
+                lowNodes++;
+            }
+        }
+        slab.reserve(lowNodes);
+        for (int n = 0; n < nodeDegrees.length; n++) {
+            int degree = nodeDegrees[n];
+            degrees[n] = degree;
+            if (degree > 0 && degree <= MAX_LOW_DEGREE) {
+                blocks[n] = slab.allocateBlock();
+            }
+        }
+    }
+
+    void fillBulkNode(int n, long[] neighbors, int degree) {
+        assert degrees[n] == degree : "prepared degree differs for node " + n;
+        if (degree <= MAX_LOW_DEGREE) {
+            int block = blocks[n];
+            for (int i = 0; i < degree; i++) {
+                slab.set(block, i, neighbors[i]);
+            }
+        } else {
+            IndexedSparseSet set = new IndexedSparseSet(Integer.highestOneBit(degree - 1) << 1);
+            for (int i = 0; i < degree; i++) {
+                set.appendAbsent(neighbors[i]);
+            }
+            sets[n] = set;
+        }
+    }
+
     private void promote(int n, long neighbor) {
         IndexedSparseSet set = new IndexedSparseSet(PROMOTED_CAPACITY);
         int block = blocks[n];

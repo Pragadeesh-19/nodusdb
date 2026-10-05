@@ -55,6 +55,11 @@ public final class LongIntIndex {
             values[existing] = value;
             return;
         }
+        putAbsent(key, value);
+    }
+
+    void putAbsent(long key, int value) {
+        assert value >= 0 && slotOf(key) == ABSENT : "key is already present: " + key;
         if (size + 1 > growthThreshold) {
             grow();
         }
