@@ -22,7 +22,7 @@ set "CLASSES=%~f1"
 if not exist "%~2" mkdir "%~2"
 cd /d "%~f2"
 
-call native-image --shared -O3 --no-fallback -o libnodusdb -cp "%CLASSES%"
+call native-image --shared -O3 --no-fallback -H:+ForeignAPISupport -o libnodusdb -cp "%CLASSES%"
 if errorlevel 1 exit /b 1
 
 copy /Y libnodusdb.h nodusdb.h >nul
