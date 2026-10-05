@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodusdb"
-version = "0.1.0"
+version = "0.1.0rc1"
 description = "Embedded high-churn dynamic graph kernel with a GraalVM native C-ABI"
 requires-python = ">=3.9"
 license = { text = "Apache-2.0" }
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
+    "Development Status :: 3 - Alpha",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
