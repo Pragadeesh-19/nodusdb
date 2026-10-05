@@ -2,6 +2,8 @@ package io.nodusdb.lake;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -107,6 +109,12 @@ public final class LakeTable implements AutoCloseable {
     }
 
     public void upsert(long keyHash, long[] longValues, int[] intValues, byte[] varCharValues, int[] varCharLengths) {
+        upsert(keyHash, MemorySegment.ofArray(longValues), MemorySegment.ofArray(intValues),
+                MemorySegment.ofArray(varCharValues), MemorySegment.ofArray(varCharLengths));
+    }
+
+    public void upsert(long keyHash, MemorySegment longValues, MemorySegment intValues,
+                       MemorySegment varCharValues, MemorySegment varCharLengths) {
         synchronized (lock) {
             awaitCapacityLocked();
             active.upsert(keyHash, longValues, intValues, varCharValues, varCharLengths);
@@ -120,34 +128,13 @@ public final class LakeTable implements AutoCloseable {
         if (count == 0) {
             return 0;
         }
-        validateVarChars(rows, count);
-        long[] longValues = new long[shape.longColumns()];
-        int[] intValues = new int[shape.intColumns()];
-        int[] starts = new int[shape.varCharColumns()];
-        int[] lengths = new int[shape.varCharColumns()];
-        byte[] bytes = new byte[0];
-        for (int row = 0; row < count; row++) {
-            for (int c = 0; c < longValues.length; c++) {
-                longValues[c] = rows.longValue(c, row);
+        validateVarChars(rows);
+        try (RowBuffer staged = new RowBuffer(shape)) {
+            for (int row = 0; row < count; row++) {
+                staged.load(rows, row);
+                long key = rows.keys().get(ValueLayout.JAVA_LONG_UNALIGNED, row * (long) Long.BYTES);
+                upsert(key, staged.longs(), staged.ints(), staged.bytes(), staged.lengths());
             }
-            for (int c = 0; c < intValues.length; c++) {
-                intValues[c] = rows.intValue(c, row);
-            }
-            int total = 0;
-            for (int c = 0; c < starts.length; c++) {
-                starts[c] = rows.varCharStart(c, row);
-                lengths[c] = rows.varCharStart(c, row + 1) - starts[c];
-                total = Math.addExact(total, lengths[c]);
-            }
-            if (total > bytes.length) {
-                bytes = new byte[Math.max(total, bytes.length * 2)];
-            }
-            int cursor = 0;
-            for (int c = 0; c < starts.length; c++) {
-                rows.copyVarChar(c, starts[c], lengths[c], bytes, cursor);
-                cursor += lengths[c];
-            }
-            upsert(rows.key(row), longValues, intValues, bytes, lengths);
         }
         return count;
     }
@@ -326,17 +313,24 @@ public final class LakeTable implements AutoCloseable {
         }
     }
 
-    private static void validateVarChars(ColumnarRows rows, int count) {
+    private static void validateVarChars(ColumnarRows rows) {
+        int count = rows.rowCount();
         for (int column = 0; column < rows.varCharColumnCount(); column++) {
-            int previous = rows.varCharStart(column, 0);
+            MemorySegment offsets = rows.varCharOffsets().get(column);
+            long dataBytes = rows.varCharData().get(column).byteSize();
+            int previous = offsets.get(ValueLayout.JAVA_INT_UNALIGNED, 0);
             if (previous < 0) {
                 throw new IllegalArgumentException("negative var-char offset in column " + column);
             }
             for (int row = 1; row <= count; row++) {
-                int next = rows.varCharStart(column, row);
+                int next = offsets.get(ValueLayout.JAVA_INT_UNALIGNED, row * (long) Integer.BYTES);
                 if (next < previous) {
                     throw new IllegalArgumentException(
                             "var-char offsets decrease in column " + column + " at row " + row);
+                }
+                if (next > dataBytes) {
+                    throw new IllegalArgumentException(
+                            "var-char offset " + next + " in column " + column + " exceeds " + dataBytes + " data bytes");
                 }
                 previous = next;
             }

@@ -4,8 +4,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -79,7 +81,7 @@ class ColumnarUpsertTest {
 
     @Test
     void rejectedOffsetsLeaveTheTableUnchanged() throws IOException {
-        ArrayRows rows = new ArrayRows(new long[] {1L, 2L, 3L},
+        ColumnarRows rows = ArrayRows.fromColumns(new long[] {1L, 2L, 3L},
                 new long[][] {{1L, 2L, 3L}, {0L, 0L, 0L}},
                 new int[][] {{1, 2, 3}},
                 new int[][] {{0, 3, 2, 5}},
@@ -94,7 +96,7 @@ class ColumnarUpsertTest {
 
     @Test
     void layoutThatDoesNotMatchTheSchemaIsRejected() throws IOException {
-        ArrayRows rows = new ArrayRows(new long[] {1L}, new long[][] {{1L}},
+        ColumnarRows rows = ArrayRows.fromColumns(new long[] {1L}, new long[][] {{1L}},
                 new int[][] {{1}}, new int[][] {{0, 0}}, new byte[][] {new byte[0]});
         try (LakeTable table = LakeTable.open(directory, SCHEMA, CONFIG)) {
             assertThrows(IllegalArgumentException.class, () -> table.upsertColumns(rows));
@@ -194,23 +196,12 @@ class ColumnarUpsertTest {
         assertEquals(want.sum(), got.sum(), 0.0);
     }
 
-    private static final class ArrayRows implements ColumnarRows {
+    private static final class ArrayRows {
 
-        private final long[] keys;
-        private final long[][] longs;
-        private final int[][] ints;
-        private final int[][] offsets;
-        private final byte[][] data;
-
-        ArrayRows(long[] keys, long[][] longs, int[][] ints, int[][] offsets, byte[][] data) {
-            this.keys = keys;
-            this.longs = longs;
-            this.ints = ints;
-            this.offsets = offsets;
-            this.data = data;
+        private ArrayRows() {
         }
 
-        static ArrayRows of(long[] keys, long[] amounts, long[] scoreBits, int[] statuses, byte[][] names) {
+        static ColumnarRows of(long[] keys, long[] amounts, long[] scoreBits, int[] statuses, byte[][] names) {
             int[] nameOffsets = new int[names.length + 1];
             int total = 0;
             for (int i = 0; i < names.length; i++) {
@@ -224,53 +215,29 @@ class ColumnarUpsertTest {
                 System.arraycopy(name, 0, nameBytes, cursor, name.length);
                 cursor += name.length;
             }
-            return new ArrayRows(keys, new long[][] {amounts, scoreBits}, new int[][] {statuses},
+            return fromColumns(keys, new long[][] {amounts, scoreBits}, new int[][] {statuses},
                     new int[][] {nameOffsets}, new byte[][] {nameBytes});
         }
 
-        @Override
-        public int rowCount() {
-            return keys.length;
-        }
-
-        @Override
-        public int longColumnCount() {
-            return longs.length;
-        }
-
-        @Override
-        public int intColumnCount() {
-            return ints.length;
-        }
-
-        @Override
-        public int varCharColumnCount() {
-            return offsets.length;
-        }
-
-        @Override
-        public long key(int row) {
-            return keys[row];
-        }
-
-        @Override
-        public long longValue(int column, int row) {
-            return longs[column][row];
-        }
-
-        @Override
-        public int intValue(int column, int row) {
-            return ints[column][row];
-        }
-
-        @Override
-        public int varCharStart(int column, int row) {
-            return offsets[column][row];
-        }
-
-        @Override
-        public void copyVarChar(int column, int start, int length, byte[] destination, int destinationOffset) {
-            System.arraycopy(data[column], start, destination, destinationOffset, length);
+        static ColumnarRows fromColumns(long[] keys, long[][] longs, int[][] ints, int[][] offsets, byte[][] data) {
+            List<MemorySegment> longSegments = new ArrayList<>();
+            for (long[] column : longs) {
+                longSegments.add(MemorySegment.ofArray(column));
+            }
+            List<MemorySegment> intSegments = new ArrayList<>();
+            for (int[] column : ints) {
+                intSegments.add(MemorySegment.ofArray(column));
+            }
+            List<MemorySegment> offsetSegments = new ArrayList<>();
+            for (int[] column : offsets) {
+                offsetSegments.add(MemorySegment.ofArray(column));
+            }
+            List<MemorySegment> dataSegments = new ArrayList<>();
+            for (byte[] column : data) {
+                dataSegments.add(MemorySegment.ofArray(column));
+            }
+            return new ColumnarRows(keys.length, MemorySegment.ofArray(keys), longSegments, intSegments,
+                    offsetSegments, dataSegments);
         }
     }
 }

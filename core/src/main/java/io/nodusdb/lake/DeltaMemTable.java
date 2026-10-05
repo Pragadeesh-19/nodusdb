@@ -35,6 +35,7 @@ public final class DeltaMemTable implements AutoCloseable {
     private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
+    private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
 
     public record Schema(int longColumns, int intColumns, int varCharColumns) {
 
@@ -92,21 +93,27 @@ public final class DeltaMemTable implements AutoCloseable {
 
     public boolean upsert(long keyHash, long[] longValues, int[] intValues,
                           byte[] varCharValues, int[] varCharValueLengths) {
+        return upsert(keyHash, MemorySegment.ofArray(longValues), MemorySegment.ofArray(intValues),
+                MemorySegment.ofArray(varCharValues), MemorySegment.ofArray(varCharValueLengths));
+    }
+
+    public boolean upsert(long keyHash, MemorySegment longValues, MemorySegment intValues,
+                          MemorySegment varCharValues, MemorySegment lengths) {
         Objects.requireNonNull(longValues, "longValues");
         Objects.requireNonNull(intValues, "intValues");
         Objects.requireNonNull(varCharValues, "varCharValues");
-        Objects.requireNonNull(varCharValueLengths, "varCharValueLengths");
-        checkArity(longValues.length, schema.longColumns(), "longValues");
-        checkArity(intValues.length, schema.intColumns(), "intValues");
-        checkArity(varCharValueLengths.length, schema.varCharColumns(), "varCharValueLengths");
-        int totalBytes = totalLength(varCharValueLengths, varCharValues.length);
+        Objects.requireNonNull(lengths, "lengths");
+        requireBytes(longValues, schema.longColumns() * (long) Long.BYTES, "longValues");
+        requireBytes(intValues, schema.intColumns() * (long) Integer.BYTES, "intValues");
+        requireBytes(lengths, schema.varCharColumns() * (long) Integer.BYTES, "lengths");
+        int totalBytes = totalLength(lengths, schema.varCharColumns(), varCharValues.byteSize());
 
         int row = index.find(keyHashes.segment(), keyHash);
         if (row != ABSENT) {
-            overwrite(row, longValues, intValues, varCharValues, varCharValueLengths, totalBytes);
+            overwrite(row, longValues, intValues, varCharValues, lengths, totalBytes);
             return false;
         }
-        insert(keyHash, longValues, intValues, varCharValues, varCharValueLengths, totalBytes);
+        insert(keyHash, longValues, intValues, varCharValues, lengths, totalBytes);
         return true;
     }
 
@@ -277,8 +284,8 @@ public final class DeltaMemTable implements AutoCloseable {
         }
     }
 
-    private void insert(long keyHash, long[] longValues, int[] intValues,
-                        byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
+    private void insert(long keyHash, MemorySegment longValues, MemorySegment intValues,
+                        MemorySegment varCharValues, MemorySegment lengths, int totalBytes) {
         checkRowCapacity();
         ensureSlabRoom(totalBytes);
         if (rowCount == rowCapacity) {
@@ -288,7 +295,7 @@ public final class DeltaMemTable implements AutoCloseable {
         keyHashes.segment().setAtIndex(LONG, row, keyHash);
         rowKinds.segment().set(BYTE, row, INSERT);
         writeFixedWidth(row, longValues, intValues);
-        writeVarChars(row, varCharValues, varCharValueLengths);
+        writeVarChars(row, varCharValues, lengths);
         index.insert(keyHashes.segment(), keyHash, row);
         rowCount++;
     }
@@ -311,13 +318,13 @@ public final class DeltaMemTable implements AutoCloseable {
         rowCount++;
     }
 
-    private void overwrite(int row, long[] longValues, int[] intValues,
-                           byte[] varCharValues, int[] varCharValueLengths, int totalBytes) {
+    private void overwrite(int row, MemorySegment longValues, MemorySegment intValues,
+                           MemorySegment varCharValues, MemorySegment lengths, int totalBytes) {
         ensureSlabRoom(totalBytes);
         clearVarChars(row);
         rowKinds.segment().set(BYTE, row, INSERT);
         writeFixedWidth(row, longValues, intValues);
-        writeVarChars(row, varCharValues, varCharValueLengths);
+        writeVarChars(row, varCharValues, lengths);
     }
 
     private void clearVarChars(int row) {
@@ -328,20 +335,22 @@ public final class DeltaMemTable implements AutoCloseable {
         }
     }
 
-    private void writeFixedWidth(int row, long[] longValues, int[] intValues) {
+    private void writeFixedWidth(int row, MemorySegment longValues, MemorySegment intValues) {
         for (int c = 0; c < longColumns.length; c++) {
-            longColumns[c].segment().setAtIndex(LONG, row, longValues[c]);
+            MemorySegment.copy(longValues, c * (long) Long.BYTES, longColumns[c].segment(),
+                    row * (long) Long.BYTES, Long.BYTES);
         }
         for (int c = 0; c < intColumns.length; c++) {
-            intColumns[c].segment().setAtIndex(INT, row, intValues[c]);
+            MemorySegment.copy(intValues, c * (long) Integer.BYTES, intColumns[c].segment(),
+                    row * (long) Integer.BYTES, Integer.BYTES);
         }
     }
 
-    private void writeVarChars(int row, byte[] varCharValues, int[] varCharValueLengths) {
-        int source = 0;
+    private void writeVarChars(int row, MemorySegment varCharValues, MemorySegment lengths) {
+        long source = 0;
         for (int c = 0; c < varCharLengths.length; c++) {
-            int length = varCharValueLengths[c];
-            MemorySegment.copy(varCharValues, source, slab.segment(), BYTE, slabUsed, length);
+            int length = lengths.get(INT_UNALIGNED, c * (long) Integer.BYTES);
+            MemorySegment.copy(varCharValues, source, slab.segment(), slabUsed, length);
             varCharOffsets[c].segment().setAtIndex(INT, row, slabUsed);
             varCharLengths[c].segment().setAtIndex(INT, row, length);
             slabUsed += length;
@@ -441,15 +450,16 @@ public final class DeltaMemTable implements AutoCloseable {
         }
     }
 
-    private static void checkArity(int actual, int expected, String name) {
-        if (actual != expected) {
-            throw new IllegalArgumentException(name + " has " + actual + " entries, schema expects " + expected);
+    private static void requireBytes(MemorySegment values, long bytes, String name) {
+        if (values.byteSize() != bytes) {
+            throw new IllegalArgumentException(name + " spans " + values.byteSize() + " bytes, schema needs " + bytes);
         }
     }
 
-    private static int totalLength(int[] lengths, int available) {
+    private static int totalLength(MemorySegment lengths, int columns, long available) {
         long total = 0;
-        for (int length : lengths) {
+        for (int c = 0; c < columns; c++) {
+            int length = lengths.get(INT_UNALIGNED, c * (long) Integer.BYTES);
             if (length < 0) {
                 throw new IllegalArgumentException("var-char length must be non-negative: " + length);
             }

@@ -1,6 +1,7 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.lake.Aggregate;
+import io.nodusdb.lake.ColumnarRows;
 import io.nodusdb.lake.DeltaMemTable;
 import io.nodusdb.lake.LakeRow;
 import io.nodusdb.lake.LakeSchema;
@@ -16,9 +17,12 @@ import org.graalvm.nativeimage.c.type.VoidPointer;
 import org.graalvm.word.WordFactory;
 
 import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 public final class LakeCApi {
@@ -31,6 +35,10 @@ public final class LakeCApi {
     private static final int AGGREGATE_VALUE = 1;
     private static final int CODEC_UNCOMPRESSED = 0;
     private static final int CODEC_SNAPPY = 1;
+    private static final long LONG_BYTES = Long.BYTES;
+    private static final long INT_BYTES = Integer.BYTES;
+    private static final ValueLayout.OfLong LONG_UNALIGNED = ValueLayout.JAVA_LONG_UNALIGNED;
+    private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
     private static final HandleTable<LakeTable> TABLES = new HandleTable<>();
 
     private LakeCApi() {
@@ -71,8 +79,11 @@ public final class LakeCApi {
         try {
             LakeTable table = TABLES.get(handle.rawValue());
             DeltaMemTable.Schema shape = table.schema().memtableSchema();
-            table.upsert(key, longArray(longs, shape.longColumns()), intArray(ints, shape.intColumns()),
-                    bytes(varBytes, varByteCount), intArray(varLengths, shape.varCharColumns()));
+            table.upsert(key,
+                    segment(longs.rawValue(), shape.longColumns() * LONG_BYTES),
+                    segment(ints.rawValue(), shape.intColumns() * INT_BYTES),
+                    segment(varBytes.rawValue(), varByteCount),
+                    segment(varLengths.rawValue(), shape.varCharColumns() * INT_BYTES));
             return true;
         } catch (RuntimeException e) {
             return false;
@@ -87,28 +98,26 @@ public final class LakeCApi {
             LakeTable table = TABLES.get(handle.rawValue());
             DeltaMemTable.Schema shape = table.schema().memtableSchema();
             int rowCount = Math.toIntExact(rows);
-            long[] keyValues = longArray(keys, rowCount);
-            long[] longValues = longArray(longs, Math.multiplyExact(rowCount, shape.longColumns()));
-            int[] intValues = intArray(ints, Math.multiplyExact(rowCount, shape.intColumns()));
-            int[] lengthValues = intArray(varLengths, Math.multiplyExact(rowCount, shape.varCharColumns()));
-            byte[] allBytes = bytes(varBytes, Math.toIntExact(varByteCount));
-            requireLengthsFit(lengthValues, allBytes.length);
+            MemorySegment keyValues = segment(keys.rawValue(), rows * LONG_BYTES);
+            MemorySegment longValues = segment(longs.rawValue(), rows * shape.longColumns() * LONG_BYTES);
+            MemorySegment intValues = segment(ints.rawValue(), rows * shape.intColumns() * INT_BYTES);
+            MemorySegment lengthValues = segment(varLengths.rawValue(), rows * shape.varCharColumns() * INT_BYTES);
+            MemorySegment allBytes = segment(varBytes.rawValue(), varByteCount);
+            requireLengthsFit(lengthValues, rowCount, shape.varCharColumns(), allBytes.byteSize());
 
-            long[] rowLongs = new long[shape.longColumns()];
-            int[] rowInts = new int[shape.intColumns()];
-            int[] rowLengths = new int[shape.varCharColumns()];
-            int cursor = 0;
+            long longWidth = shape.longColumns() * LONG_BYTES;
+            long intWidth = shape.intColumns() * INT_BYTES;
+            long lengthWidth = shape.varCharColumns() * INT_BYTES;
+            long cursor = 0;
             for (int row = 0; row < rowCount; row++) {
-                System.arraycopy(longValues, row * shape.longColumns(), rowLongs, 0, rowLongs.length);
-                System.arraycopy(intValues, row * shape.intColumns(), rowInts, 0, rowInts.length);
-                System.arraycopy(lengthValues, row * shape.varCharColumns(), rowLengths, 0, rowLengths.length);
-                int rowBytes = 0;
-                for (int length : rowLengths) {
-                    rowBytes += length;
-                }
-                byte[] rowVarBytes = Arrays.copyOfRange(allBytes, cursor, cursor + rowBytes);
+                long lengthOffset = row * lengthWidth;
+                int rowBytes = rowLength(lengthValues, lengthOffset, shape.varCharColumns());
+                table.upsert(keyValues.getAtIndex(LONG_UNALIGNED, row),
+                        longValues.asSlice(row * longWidth, longWidth),
+                        intValues.asSlice(row * intWidth, intWidth),
+                        allBytes.asSlice(cursor, rowBytes),
+                        lengthValues.asSlice(lengthOffset, lengthWidth));
                 cursor += rowBytes;
-                table.upsert(keyValues[row], rowLongs, rowInts, rowVarBytes, rowLengths);
             }
             return rowCount;
         } catch (RuntimeException e) {
@@ -180,9 +189,25 @@ public final class LakeCApi {
                                      int varCharCount, CLongPointer offsetAddresses, CLongPointer dataAddresses) {
         try {
             LakeTable table = TABLES.get(handle.rawValue());
-            return table.upsertColumns(new NativeColumns(Math.toIntExact(rows), keys,
-                    longCount, longAddresses, intCount, intAddresses,
-                    varCharCount, offsetAddresses, dataAddresses));
+            int rowCount = Math.toIntExact(rows);
+            List<MemorySegment> longColumns = new ArrayList<>(longCount);
+            for (int c = 0; c < longCount; c++) {
+                longColumns.add(segment(longAddresses.read(c), rows * LONG_BYTES));
+            }
+            List<MemorySegment> intColumns = new ArrayList<>(intCount);
+            for (int c = 0; c < intCount; c++) {
+                intColumns.add(segment(intAddresses.read(c), rows * INT_BYTES));
+            }
+            List<MemorySegment> offsets = new ArrayList<>(varCharCount);
+            List<MemorySegment> data = new ArrayList<>(varCharCount);
+            for (int c = 0; c < varCharCount; c++) {
+                MemorySegment columnOffsets = segment(offsetAddresses.read(c), (rows + 1) * INT_BYTES);
+                offsets.add(columnOffsets);
+                int end = columnOffsets.get(INT_UNALIGNED, rows * INT_BYTES);
+                data.add(segment(dataAddresses.read(c), end));
+            }
+            return table.upsertColumns(new ColumnarRows(rowCount, segment(keys.rawValue(), rows * LONG_BYTES),
+                    longColumns, intColumns, offsets, data));
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -220,9 +245,10 @@ public final class LakeCApi {
         };
     }
 
-    private static void requireLengthsFit(int[] lengths, int available) {
+    private static void requireLengthsFit(MemorySegment lengths, int rows, int columns, long available) {
         long total = 0;
-        for (int length : lengths) {
+        for (long i = 0; i < (long) rows * columns; i++) {
+            int length = lengths.getAtIndex(INT_UNALIGNED, i);
             if (length < 0) {
                 throw new IllegalArgumentException("negative var-char length: " + length);
             }
@@ -233,34 +259,26 @@ public final class LakeCApi {
         }
     }
 
-    private static long[] longArray(CLongPointer pointer, long count) {
-        int size = Math.toIntExact(count);
-        long[] values = new long[size];
-        for (int i = 0; i < size; i++) {
-            values[i] = pointer.read(i);
+    private static int rowLength(MemorySegment lengths, long offset, int columns) {
+        int total = 0;
+        for (int c = 0; c < columns; c++) {
+            total += lengths.get(INT_UNALIGNED, offset + c * INT_BYTES);
         }
-        return values;
+        return total;
     }
 
-    private static int[] intArray(CIntPointer pointer, long count) {
-        int size = Math.toIntExact(count);
-        int[] values = new int[size];
-        for (int i = 0; i < size; i++) {
-            values[i] = pointer.read(i);
+    private static MemorySegment segment(long address, long bytes) {
+        if (bytes < 0) {
+            throw new IllegalArgumentException("negative buffer size: " + bytes);
         }
-        return values;
-    }
-
-    private static byte[] bytes(CCharPointer pointer, long count) {
-        int size = Math.toIntExact(count);
-        byte[] values = new byte[size];
-        for (int i = 0; i < size; i++) {
-            values[i] = pointer.read(i);
+        if (address == 0 && bytes > 0) {
+            throw new IllegalArgumentException("null pointer for " + bytes + " bytes");
         }
-        return values;
+        return MemorySegment.ofAddress(address).reinterpret(bytes);
     }
 
     private static String text(CCharPointer pointer, int count) {
-        return new String(bytes(pointer, count), StandardCharsets.UTF_8);
+        return new String(segment(pointer.rawValue(), count).toArray(ValueLayout.JAVA_BYTE),
+                StandardCharsets.UTF_8);
     }
 }

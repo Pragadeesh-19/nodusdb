@@ -1,0 +1,76 @@
+package io.nodusdb.lake;
+
+import java.lang.foreign.MemorySegment;
+import java.lang.foreign.ValueLayout;
+
+/*
+ * Native staging area for one row of a columnar batch. The memtable reads the staged row
+ * directly, so a batch never costs a Java array per row. Staging is per call, which keeps
+ * concurrent batches independent.
+ */
+final class RowBuffer implements AutoCloseable {
+
+    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
+    private static final long LONG_BYTES = Long.BYTES;
+    private static final long INT_BYTES = Integer.BYTES;
+
+    private final DeltaMemTable.Schema shape;
+    private final NativeColumn longs;
+    private final NativeColumn ints;
+    private final NativeColumn lengths;
+    private final NativeColumn bytes;
+
+    RowBuffer(DeltaMemTable.Schema shape) {
+        this.shape = shape;
+        this.longs = new NativeColumn(Math.max(1, shape.longColumns() * LONG_BYTES));
+        this.ints = new NativeColumn(Math.max(1, shape.intColumns() * INT_BYTES));
+        this.lengths = new NativeColumn(Math.max(1, shape.varCharColumns() * INT_BYTES));
+        this.bytes = new NativeColumn(1);
+    }
+
+    void load(ColumnarRows rows, int row) {
+        for (int c = 0; c < shape.longColumns(); c++) {
+            MemorySegment.copy(rows.longColumns().get(c), row * LONG_BYTES, longs.segment(), c * LONG_BYTES,
+                    LONG_BYTES);
+        }
+        for (int c = 0; c < shape.intColumns(); c++) {
+            MemorySegment.copy(rows.intColumns().get(c), row * INT_BYTES, ints.segment(), c * INT_BYTES, INT_BYTES);
+        }
+        long cursor = 0;
+        for (int c = 0; c < shape.varCharColumns(); c++) {
+            MemorySegment offsets = rows.varCharOffsets().get(c);
+            int start = offsets.get(INT_UNALIGNED, row * INT_BYTES);
+            int end = offsets.get(INT_UNALIGNED, (row + 1) * INT_BYTES);
+            int length = end - start;
+            lengths.segment().setAtIndex(INT, c, length);
+            bytes.ensureCapacity(cursor + length);
+            MemorySegment.copy(rows.varCharData().get(c), start, bytes.segment(), cursor, length);
+            cursor += length;
+        }
+    }
+
+    MemorySegment longs() {
+        return longs.segment().asSlice(0, shape.longColumns() * LONG_BYTES);
+    }
+
+    MemorySegment ints() {
+        return ints.segment().asSlice(0, shape.intColumns() * INT_BYTES);
+    }
+
+    MemorySegment lengths() {
+        return lengths.segment().asSlice(0, shape.varCharColumns() * INT_BYTES);
+    }
+
+    MemorySegment bytes() {
+        return bytes.segment();
+    }
+
+    @Override
+    public void close() {
+        longs.close();
+        ints.close();
+        lengths.close();
+        bytes.close();
+    }
+}
