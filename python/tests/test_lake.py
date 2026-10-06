@@ -21,6 +21,8 @@ try:
 except ImportError:
     pa = None
     pq = None
+    if os.environ.get("NODUSDB_REQUIRE_PYARROW"):
+        raise
 
 def _native_has_lake_exports():
     try:
