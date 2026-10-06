@@ -9,7 +9,7 @@ NodusDB is an engine that runs inside your process. It has two parts, built from
 
 Neither part starts a server or makes a network call. Both keep their hot paths free of garbage collector work.
 
-The last CI run on `main` passed on Ubuntu, macOS (arm64), and Windows. It built the GraalVM native library, ran 254 Java tests and 43 Python tests against that library, and included the durability tests.
+The last CI run on `main` passed on Ubuntu, macOS (arm64), and Windows. It built the GraalVM native library, ran 426 Java tests and 96 Python tests against that library, and included the durability tests.
 
 ## The graph engine
 
@@ -78,7 +78,7 @@ Numbers from `LakeTableBench` and `DeltaMemTableBench` on the same laptop:
 
 The second row is the realistic figure under sustained load. Once two buffers are full and the previous flush is still running, the writer waits. The flush rate then sets the ingestion rate.
 
-The Parquet output matched PyArrow bit for bit on 100,000 mixed rows. The CI image does not install `pyarrow`, so that test skips there.
+The Parquet output matched PyArrow bit for bit on 100,000 mixed rows. CI installs `pyarrow`, so that comparison runs there too.
 
 Not built yet: Iceberg table metadata and Avro manifests (the manifest is Iceberg-shaped, but it is local), compaction, the Arrow C Data export, and reads that do not decode a whole file. [`docs/lake.md`](docs/lake.md) has the design and the open items.
 
@@ -380,19 +380,14 @@ Results are written into caller-supplied buffers, and the call returns the full 
 
 ## Verification
 
-The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. The last run on `main` before durability passed on all three:
+The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. The last run on `main` (commit `e5c0e4c`) passed on all three:
 
-- The Java suite ran 232 tests with assertions enabled.
-- The GraalVM native library built on each system and was packaged into the Python package.
-- The Python suite ran 38 tests against the native library. Four of them exercise the lake. The fifth lake test, which reads the output with PyArrow, skipped in CI because `pyarrow` is not installed there.
-
-The durability work passed the same CI run, and it was also checked locally on Windows:
-
-- The Java suite ran 254 tests, including 22 durability tests. Those cover clean restarts, crashes in both sync modes, torn and corrupted log tails, snapshot rolls, a crash between the snapshot rename and the log reset, corrupted and truncated snapshots, the directory lock, and the no-op rules.
-- The native library built with GraalVM CE 22.0.2 and the Python suite ran 43 tests against it.
+- The Java suite ran 426 tests with assertions enabled. They include the durability tests, which cover clean restarts, crashes in both sync modes, torn and corrupted log tails, snapshot rolls, a crash between the snapshot rename and the log reset, corrupted and truncated snapshots, the directory lock, and the no-op rules. They also include the memory limit tests.
+- The native library built on each system with Oracle GraalVM 25 and was packaged into the Python package.
+- `python -m pytest python/tests` ran 96 tests against that library on each system, with `pyarrow` installed so that none skipped. They cover the lake, the PyArrow comparison, the handle lifecycle, and the memory limit.
 - The Pokec run was checked by digest, as described above.
 
-The CI build targets JDK 22 with GraalVM CE 22. JDK 25 has not been tested.
+The Java sources compile for JDK 22. Locally, the suite also passes with a native library built by GraalVM CE 22.0.2.
 
 ## Building
 
@@ -400,7 +395,7 @@ Prerequisites:
 
 - JDK 22 and Maven 3.9 or newer.
 - Python 3.9 or newer. The tests ran on 3.12.
-- GraalVM CE 22.0.2 with `native-image`, for the native library only.
+- GraalVM with `native-image`, for the native library only: CE 22.0.2 locally, or Oracle GraalVM 25 as in CI. The toolchain changes the speed of the library. A local build with GraalVM CE 23 ran `add_edge` in about 1.2 ms where CE 22.0.2 took 9 microseconds, because memory-segment access was not optimized. Check a new toolchain with a timing before you trust it.
 - On Windows, Visual Studio 2022 with the C++ build tools.
 
 ```sh
@@ -412,6 +407,9 @@ GRAALVM_HOME=/path/to/graalvm-community-openjdk-22.0.2 mvn -Pnative -pl core pac
 
 # Python tests, which load the native library
 python -m unittest discover -s python/tests -v
+
+# The same tests under pytest, as CI runs them. Needs: pip install pytest pyarrow
+python -m pytest python/tests -ra
 
 # Wheel for the current platform, written to the current directory
 python -m pip wheel python/ --no-deps -w dist
