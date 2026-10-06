@@ -98,6 +98,19 @@ class GraphTest(unittest.TestCase):
         with self.assertRaises(NodusError):
             graph.has_edge(1, 2)
 
+    def test_context_manager_returns_the_graph_and_does_not_swallow_errors(self):
+        with self.assertRaises(KeyError):
+            with Graph() as graph:
+                self.assertIsInstance(graph, Graph)
+                raise KeyError("boom")
+        with self.assertRaises(NodusError):
+            graph.degree(1)
+
+    def test_close_is_idempotent(self):
+        graph = Graph()
+        graph.close()
+        graph.close()
+
 
 class CAbiBoundaryTest(unittest.TestCase):
     BOGUS_HANDLE = 0x1234_5678
@@ -133,7 +146,7 @@ class CAbiBoundaryTest(unittest.TestCase):
         handle = self.graph._handle
         self.assertEqual(0, self.lib.nodus_destroy(self.thread, handle))
         self.assertEqual(-1, self.lib.nodus_destroy(self.thread, handle))
-        self.graph._handle = None
+        self.graph._owned.value = None
 
         self.assertEqual(0, self.lib.nodus_has_edge(self.thread, handle, 1, 2))
 

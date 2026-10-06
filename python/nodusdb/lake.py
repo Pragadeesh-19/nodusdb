@@ -4,6 +4,7 @@ import hashlib
 import os
 import struct
 import threading
+import weakref
 
 from . import _native
 from ._native import NodusError, serialized
@@ -174,7 +175,10 @@ class LakeTable:
         )
         if not handle:
             raise NodusError(f"could not open lake table at {os.fspath(path)}")
-        self._handle = handle
+        self._owned = _native.OwnedHandle(
+            self._lib, self._isolate, handle, _closer(self._lib),
+            "lake close failed; the table is still open and close can be retried")
+        self._finalizer = weakref.finalize(self, _native.release_unclosed, self._owned, "LakeTable")
 
     @property
     def _thread(self):
@@ -184,7 +188,7 @@ class LakeTable:
     def upsert(self, key, row):
         keys, longs, ints, var_bytes, var_lengths = self._pack([(key, row)])
         ok = self._lib.nodus_lake_upsert(
-            self._thread, self._handle, keys[0],
+            self._thread, self._require_open(), keys[0],
             _pointer(longs, ctypes.c_int64), _pointer(ints, ctypes.c_int32),
             bytes(var_bytes), len(var_bytes), _pointer(var_lengths, ctypes.c_int32),
         )
@@ -233,7 +237,7 @@ class LakeTable:
         offset_table, offset_ptr = _address_table(offset_addresses)
         data_table, data_ptr = _address_table(data_addresses)
         applied = self._lib.nodus_lake_upsert_columns(
-            self._thread, self._handle, key_rows, key_address,
+            self._thread, self._require_open(), key_rows, key_address,
             len(long_addresses), long_ptr, len(int_addresses), int_ptr,
             len(offset_addresses), offset_ptr, data_ptr,
         )
@@ -253,7 +257,7 @@ class LakeTable:
     @serialized
     def sum(self, name):
         out = ctypes.c_double()
-        status = self._lib.nodus_lake_sum(self._thread, self._handle, self._numeric_index(name),
+        status = self._lib.nodus_lake_sum(self._thread, self._require_open(), self._numeric_index(name),
                                           ctypes.addressof(out))
         if status != _AGGREGATE_VALUE:
             raise NodusError("lake sum failed")
@@ -262,7 +266,7 @@ class LakeTable:
     @serialized
     def average(self, name):
         out = ctypes.c_double()
-        status = self._lib.nodus_lake_avg(self._thread, self._handle, self._numeric_index(name),
+        status = self._lib.nodus_lake_avg(self._thread, self._require_open(), self._numeric_index(name),
                                           ctypes.addressof(out))
         if status == _AGGREGATE_EMPTY:
             return None
@@ -272,7 +276,7 @@ class LakeTable:
 
     @serialized
     def delete(self, key):
-        if not self._lib.nodus_lake_delete(self._thread, self._handle, key_hash(key)):
+        if not self._lib.nodus_lake_delete(self._thread, self._require_open(), key_hash(key)):
             raise NodusError("lake delete failed")
 
     def _numeric_index(self, name):
@@ -294,7 +298,7 @@ class LakeTable:
             lengths = (ctypes.c_int32 * max(1, len(self._var_fields)))()
             var_buffer = ctypes.create_string_buffer(capacity)
             status = self._lib.nodus_lake_get(
-                self._thread, self._handle, keyed, longs, ints, var_buffer, capacity, lengths,
+                self._thread, self._require_open(), keyed, longs, ints, var_buffer, capacity, lengths,
             )
             if status == _GET_ABSENT:
                 return None
@@ -307,15 +311,13 @@ class LakeTable:
 
     @serialized
     def flush(self):
-        if not self._lib.nodus_lake_flush(self._thread, self._handle):
+        if not self._lib.nodus_lake_flush(self._thread, self._require_open()):
             raise NodusError("lake flush failed")
 
     @serialized
     def close(self):
-        if self._handle:
-            if not self._lib.nodus_lake_close(self._thread, self._handle):
-                raise NodusError("lake close failed; the table is still open and close can be retried")
-            self._handle = None
+        self._owned.close()
+        self._finalizer.detach()
 
     def __enter__(self):
         return self
@@ -323,10 +325,15 @@ class LakeTable:
     def __exit__(self, exc_type, exc, traceback):
         self.close()
 
+    def _require_open(self):
+        if not self._owned.value:
+            raise NodusError("lake table is closed")
+        return self._owned.value
+
     def _upsert_chunk(self, rows):
         keys, longs, ints, var_bytes, var_lengths = self._pack(rows)
         applied = self._lib.nodus_lake_upsert_batch(
-            self._thread, self._handle,
+            self._thread, self._require_open(),
             _pointer(keys, ctypes.c_int64), len(keys),
             _pointer(longs, ctypes.c_int64), _pointer(ints, ctypes.c_int32),
             bytes(var_bytes), len(var_bytes), _pointer(var_lengths, ctypes.c_int32),
@@ -372,6 +379,12 @@ class LakeTable:
             row[name] = var_bytes[offset:offset + length].decode("utf-8")
             offset += length
         return row
+
+
+def _closer(library):
+    def close(thread, handle):
+        return library.nodus_lake_close(thread, handle)
+    return close
 
 
 def _validate_schema(schema):

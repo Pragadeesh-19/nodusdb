@@ -3,6 +3,7 @@ import ctypes
 import os
 import threading
 import uuid
+import weakref
 
 from . import _native
 from ._native import ERROR, MEMORY_LIMIT, NodusError, NodusMemoryError, serialized
@@ -83,15 +84,27 @@ class Graph:
         self._lock = threading.RLock()
         self._bind_signatures()
         self._max_memory_mb = max_memory_mb
-        self._handle = self._open(path, sync_mode, limit)
-        self._kind = self._lib.nodus_key_kind(self._thread, self._handle)
-        if self._kind < 0:
-            raise NodusError("could not read the graph's key kind")
-        self._buffer = (ctypes.c_int64 * result_capacity)()
+        handle = self._open(path, sync_mode, limit)
+        self._owned = _native.OwnedHandle(
+            self._lib, self._isolate, handle, _destroyer(self._lib),
+            "graph close failed; the final checkpoint did not complete")
+        self._finalizer = weakref.finalize(self, _native.release_unclosed, self._owned, "Graph")
+        try:
+            self._kind = self._lib.nodus_key_kind(self._thread, handle)
+            if self._kind < 0:
+                raise NodusError("could not read the graph's key kind")
+            self._buffer = (ctypes.c_int64 * result_capacity)()
+        except BaseException:
+            self.close()
+            raise
 
     @property
     def _thread(self):
         return _native.current_thread(self._lib, self._isolate)
+
+    @property
+    def _handle(self):
+        return self._owned.value
 
     def _open(self, path, sync_mode, limit):
         if path is not None and sync_mode not in SYNC_MODES:
@@ -168,10 +181,8 @@ class Graph:
 
     @serialized
     def close(self):
-        if self._handle:
-            if self._lib.nodus_destroy(self._thread, self._handle) != 0:
-                raise NodusError("graph close failed; the final checkpoint did not complete")
-            self._handle = None
+        self._owned.close()
+        self._finalizer.detach()
 
     def __enter__(self):
         return self
@@ -392,6 +403,12 @@ def _memory_limit_bytes(megabytes):
     if not 1 <= megabytes <= MAX_MEMORY_MB:
         raise ValueError(f"max_memory_mb must be between 1 and {MAX_MEMORY_MB}, got {megabytes}")
     return megabytes << 20
+
+
+def _destroyer(library):
+    def destroy(thread, handle):
+        return library.nodus_destroy(thread, handle) == 0
+    return destroy
 
 
 def _is_node(value):

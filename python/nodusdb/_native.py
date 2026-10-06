@@ -4,6 +4,7 @@ import os
 import platform
 import sys
 import threading
+import warnings
 from pathlib import Path
 
 ENVIRONMENT_VARIABLE = "NODUSDB_LIBRARY"
@@ -113,6 +114,37 @@ def current_thread(library, isolate):
         thread = candidate
         attached[isolate.value] = thread
     return thread
+
+
+class OwnedHandle:
+    """A native handle and the call that releases it, shared by its owner and the owner's finalizer.
+
+    It must not refer to the owner, or the finalizer would keep the owner alive."""
+
+    def __init__(self, library, isolate, value, release, failure):
+        self._library = library
+        self._isolate = isolate
+        self._release = release
+        self._failure = failure
+        self.value = value
+
+    def close(self):
+        if not self.value:
+            return
+        if not self._release(current_thread(self._library, self._isolate), self.value):
+            raise NodusError(self._failure)
+        self.value = None
+
+
+def release_unclosed(owned, kind):
+    """Finalizer body: free a handle whose owner was collected without close()."""
+    if not owned.value:
+        return
+    warnings.warn(f"unclosed nodusdb {kind}; call close() or use a with block", ResourceWarning, stacklevel=2)
+    try:
+        owned.close()
+    except NodusError as error:
+        warnings.warn(f"nodusdb {kind} could not be closed: {error}", ResourceWarning, stacklevel=2)
 
 
 def load(explicit_path=None):
