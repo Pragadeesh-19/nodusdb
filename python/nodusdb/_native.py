@@ -8,6 +8,9 @@ from pathlib import Path
 
 ENVIRONMENT_VARIABLE = "NODUSDB_LIBRARY"
 
+ERROR = -1
+MEMORY_LIMIT = -3
+
 PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 REPOSITORY_ROOT = PACKAGE_DIRECTORY.parents[1]
 
@@ -25,6 +28,10 @@ _attached = threading.local()
 
 class NodusError(RuntimeError):
     pass
+
+
+class NodusMemoryError(NodusError, MemoryError):
+    """The graph's native memory limit would be exceeded. Existing data is unchanged."""
 
 
 def platform_tag():

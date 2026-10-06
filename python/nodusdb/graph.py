@@ -5,11 +5,11 @@ import threading
 import uuid
 
 from . import _native
-from ._native import NodusError, serialized
+from ._native import ERROR, MEMORY_LIMIT, NodusError, NodusMemoryError, serialized
 
 MAX_NODE_ID = 2**31 - 10
+MAX_MEMORY_MB = (2**63 - 1) >> 20
 DEFAULT_RESULT_CAPACITY = 1 << 16
-ERROR = -1
 LOOKUP_ABSENT = -1
 LOOKUP_ERROR = -2
 SYNC_MODES = {"async": 0, "sync": 1}
@@ -76,13 +76,14 @@ def _int32_pointer(column):
 
 
 class Graph:
-    def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async"):
+    def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async",
+                 max_memory_mb=None):
+        limit = _memory_limit_bytes(max_memory_mb)
         self._lib, self._isolate = _native.load(library_path)
         self._lock = threading.RLock()
         self._bind_signatures()
-        self._handle = self._open(path, sync_mode)
-        if not self._handle:
-            raise NodusError("failed to create graph handle")
+        self._max_memory_mb = max_memory_mb
+        self._handle = self._open(path, sync_mode, limit)
         self._kind = self._lib.nodus_key_kind(self._thread, self._handle)
         if self._kind < 0:
             raise NodusError("could not read the graph's key kind")
@@ -92,22 +93,32 @@ class Graph:
     def _thread(self):
         return _native.current_thread(self._lib, self._isolate)
 
-    def _open(self, path, sync_mode):
-        if path is None:
-            return self._lib.nodus_create(self._thread)
-        if sync_mode not in SYNC_MODES:
+    def _open(self, path, sync_mode, limit):
+        if path is not None and sync_mode not in SYNC_MODES:
             raise ValueError(f"sync_mode must be 'async' or 'sync', got {sync_mode!r}")
-        return self._lib.nodus_open_durable(self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode])
+        status = ctypes.c_int(0)
+        if path is None:
+            handle = self._lib.nodus_create_limited(self._thread, limit, ctypes.byref(status))
+        else:
+            handle = self._lib.nodus_open_durable_limited(
+                self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode], limit, ctypes.byref(status))
+        if handle:
+            return handle
+        if status.value == MEMORY_LIMIT:
+            raise NodusMemoryError(f"the graph does not fit in max_memory_mb={self._max_memory_mb}")
+        raise NodusError("failed to create graph handle")
 
     def _bind_signatures(self):
         lib = self._lib
         thread, handle, node = _native.THREAD, _native.HANDLE, _native.NODE
-        lib.nodus_create.restype = _native.HANDLE
-        lib.nodus_create.argtypes = [thread]
+        lib.nodus_create_limited.restype = _native.HANDLE
+        lib.nodus_create_limited.argtypes = [thread, ctypes.c_int64, ctypes.POINTER(ctypes.c_int)]
         lib.nodus_destroy.restype = ctypes.c_int
         lib.nodus_destroy.argtypes = [thread, handle]
-        lib.nodus_open_durable.restype = _native.HANDLE
-        lib.nodus_open_durable.argtypes = [thread, ctypes.c_char_p, ctypes.c_int]
+        lib.nodus_open_durable_limited.restype = _native.HANDLE
+        lib.nodus_open_durable_limited.argtypes = [
+            thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.POINTER(ctypes.c_int),
+        ]
         lib.nodus_checkpoint.restype = ctypes.c_int
         lib.nodus_checkpoint.argtypes = [thread, handle]
         lib.nodus_sync.restype = ctypes.c_int
@@ -176,9 +187,9 @@ class Graph:
     @serialized
     def add_edge(self, u, v):
         if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
-            return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), u, v))
+            return self._added(self._lib.nodus_add_edge(self._thread, self._require_open(), u, v))
         first, second = self._write_ids((u, v))
-        return bool(self._lib.nodus_add_edge(self._thread, self._require_open(), first, second))
+        return self._added(self._lib.nodus_add_edge(self._thread, self._require_open(), first, second))
 
     @serialized
     def remove_edge(self, u, v):
@@ -354,11 +365,33 @@ class Graph:
             total = self._checked(call(self._buffer, total), operation)
         return list(self._buffer[:total])
 
-    @staticmethod
-    def _checked(result, operation):
+    def _added(self, result):
+        if result == MEMORY_LIMIT:
+            raise NodusMemoryError(self._limit_message("add_edge"))
+        if result < 0:
+            raise NodusError("add_edge failed inside the native kernel")
+        return result == 1
+
+    def _checked(self, result, operation):
+        if result == MEMORY_LIMIT:
+            raise NodusMemoryError(self._limit_message(operation))
         if result == ERROR:
             raise NodusError(f"{operation} failed inside the native kernel")
         return result
+
+    def _limit_message(self, operation):
+        return (f"{operation} would exceed max_memory_mb={self._max_memory_mb}; the graph is unchanged, "
+                "except that a batch keeps the edges it applied before the limit")
+
+
+def _memory_limit_bytes(megabytes):
+    if megabytes is None:
+        return 0
+    if isinstance(megabytes, bool) or not isinstance(megabytes, int):
+        raise TypeError(f"max_memory_mb must be an int or None, got {type(megabytes).__name__}")
+    if not 1 <= megabytes <= MAX_MEMORY_MB:
+        raise ValueError(f"max_memory_mb must be between 1 and {MAX_MEMORY_MB}, got {megabytes}")
+    return megabytes << 20
 
 
 def _is_node(value):

@@ -115,7 +115,7 @@ class CAbiBoundaryTest(unittest.TestCase):
         handle = self.BOGUS_HANDLE
 
         self.assertEqual(0, self.lib.nodus_has_edge(self.thread, handle, 1, 2))
-        self.assertEqual(0, self.lib.nodus_add_edge(self.thread, handle, 1, 2))
+        self.assertEqual(-1, self.lib.nodus_add_edge(self.thread, handle, 1, 2))
         self.assertEqual(-1, self.lib.nodus_degree(self.thread, handle, 1))
         self.assertEqual(-1, self.lib.nodus_in_degree(self.thread, handle, 1))
         self.assertEqual(-1, self.lib.nodus_common_neighbors(self.thread, handle, 1, 2, self.buffer, 8))
@@ -140,7 +140,7 @@ class CAbiBoundaryTest(unittest.TestCase):
     def test_negative_node_ids_reach_the_kernel_and_fail_cleanly(self):
         handle = self.graph._handle
 
-        self.assertEqual(0, self.lib.nodus_add_edge(self.thread, handle, -1, 2))
+        self.assertEqual(-1, self.lib.nodus_add_edge(self.thread, handle, -1, 2))
         self.assertEqual(-1, self.lib.nodus_degree(self.thread, handle, -7))
         self.assertEqual(-1, self.lib.nodus_khop(self.thread, handle, -3, 2, self.buffer, 8))
 
