@@ -267,6 +267,7 @@ public final class LakeCApi {
         return total;
     }
 
+    @SuppressWarnings("restricted")
     private static MemorySegment segment(long address, long bytes) {
         if (bytes < 0) {
             throw new IllegalArgumentException("negative buffer size: " + bytes);
