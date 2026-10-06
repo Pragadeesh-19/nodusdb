@@ -41,7 +41,7 @@
           <artifactId>maven-surefire-plugin</artifactId>
           <version>3.5.0</version>
           <configuration>
-            <argLine>-ea -Xss2m</argLine>
+            <argLine>-ea -Xss2m -Xlog:deoptimization=debug</argLine>
           </configuration>
         </plugin>
       </plugins>

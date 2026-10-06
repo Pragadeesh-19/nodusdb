@@ -1,15 +1,9 @@
 package io.nodusdb.kernel;
 
-import jdk.jfr.Recording;
-import jdk.jfr.consumer.RecordedEvent;
-import jdk.jfr.consumer.RecordedFrame;
-import jdk.jfr.consumer.RecordingFile;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
 import java.lang.management.ManagementFactory;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -23,7 +17,7 @@ class GraphKernelAllocationTest {
     private static final int MEASURED_ROUNDS = 200_000;
 
     @Test
-    void primedSteadyStateQueriesAndInTierMutationsAllocateNothing() throws Exception {
+    void primedSteadyStateQueriesAndInTierMutationsAllocateNothing() {
         com.sun.management.ThreadMXBean bean =
                 (com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean();
         Assumptions.assumeTrue(bean.isThreadAllocatedMemorySupported());
@@ -33,42 +27,14 @@ class GraphKernelAllocationTest {
 
         runRounds(kernel, buffer, WARMUP_ROUNDS);
         long firstWindow = measuredAllocation(bean, threadId, kernel, buffer);
-        Recording recording = new Recording();
-        recording.enable("jdk.ObjectAllocationSample").with("throttle", "100000/s").withStackTrace();
-        recording.start();
+        long windowStart = ManagementFactory.getRuntimeMXBean().getUptime();
         long steadyState = measuredAllocation(bean, threadId, kernel, buffer);
-        recording.stop();
-        System.out.println("DIAG firstWindow=" + firstWindow + " steadyState=" + steadyState
-                + " vm=" + System.getProperty("java.vm.name") + " " + System.getProperty("java.vm.version")
+        long windowEnd = ManagementFactory.getRuntimeMXBean().getUptime();
+        System.out.println("DIAG window uptimeMs=" + windowStart + ".." + windowEnd + " firstWindow=" + firstWindow
+                + " steadyState=" + steadyState + " vm=" + System.getProperty("java.vm.version")
                 + " cpus=" + Runtime.getRuntime().availableProcessors());
-        dumpAllocations(recording);
 
         assertEquals(0L, steadyState, "bytes allocated in a primed steady-state window");
-    }
-
-    private static void dumpAllocations(Recording recording) throws Exception {
-        Path file = Files.createTempFile("alloc-diag", ".jfr");
-        recording.dump(file);
-        String thread = Thread.currentThread().getName();
-        try (RecordingFile events = new RecordingFile(file)) {
-            while (events.hasMoreEvents()) {
-                RecordedEvent event = events.readEvent();
-                if (!thread.equals(event.getThread().getJavaName())) {
-                    continue;
-                }
-                StringBuilder where = new StringBuilder();
-                int shown = 0;
-                for (RecordedFrame frame : event.getStackTrace().getFrames()) {
-                    if (shown++ == 5) {
-                        break;
-                    }
-                    where.append(frame.getMethod().getType().getName()).append('.')
-                            .append(frame.getMethod().getName()).append(':').append(frame.getLineNumber()).append(" <- ");
-                }
-                System.out.println("DIAG alloc class=" + event.getClass("objectClass").getName()
-                        + " weight=" + event.getLong("weight") + " at " + where);
-            }
-        }
     }
 
     private static long measuredAllocation(com.sun.management.ThreadMXBean bean, long threadId,
