@@ -206,13 +206,11 @@ Graph in memory:
 ```python
 import nodusdb
 
-g = nodusdb.Graph()
-g.add_edges_from([(1, 2), (2, 3), (3, 4), (1, 5), (5, 4)])
+with nodusdb.Graph() as g:
+    g.add_edges_from([(1, 2), (2, 3), (3, 4), (1, 5), (5, 4)])
 
-print("Reachable nodes:", g.khop(start=1, max_depth=3))
-print("Common neighbors:", g.common_neighbors(3, 5))
-
-g.close()
+    print("Reachable nodes:", g.khop(start=1, max_depth=3))
+    print("Common neighbors:", g.common_neighbors(3, 5))
 ```
 
 ```
@@ -220,19 +218,20 @@ Reachable nodes: [2, 5, 3, 4]
 Common neighbors: [4]
 ```
 
+A `Graph` and a `LakeTable` own native memory. Close them with a `with` block or `close()`, which can be called twice. If one is garbage collected while still open, a finalizer releases its native handle and emits a `ResourceWarning` that names the leak. A durable graph is closed the same way, so a final snapshot is written and the directory lock is released. The finalizer is a safety net: Python decides when it runs, and an unclosed object can hold a directory lock until then.
+
 Graph with durability. The graph recovers from the directory when it opens, and each edit is logged:
 
 ```python
 import nodusdb
 
-g = nodusdb.Graph(path="/data/graph", sync_mode="async")
-g.add_edges_from([(1, 2), (2, 3), (3, 4), (1, 5), (5, 4)])
-g.checkpoint()
-g.close()  # writes a final snapshot and releases the directory lock
+with nodusdb.Graph(path="/data/graph", sync_mode="async") as g:
+    g.add_edges_from([(1, 2), (2, 3), (3, 4), (1, 5), (5, 4)])
+    g.checkpoint()
+# leaving the block writes a final snapshot and releases the directory lock
 
-g = nodusdb.Graph(path="/data/graph")
-print("Reachable after restart:", g.khop(start=1, max_depth=3))
-g.close()
+with nodusdb.Graph(path="/data/graph") as g:
+    print("Reachable after restart:", g.khop(start=1, max_depth=3))
 ```
 
 `sync_mode="sync"` makes each single-edge call wait until its log entry is on disk. The default, `"async"`, batches writes every 10 milliseconds. Batch calls group-commit in either mode.
@@ -250,6 +249,22 @@ print(g.khop("user:alice", 1))  # ['role:admin']
 ```
 
 A graph uses one kind of key. The first key type written claims the graph, and a durable graph keeps the claim across restarts. Mixing kinds raises `TypeError`. Strings are stored once in a symbol table and mapped to dense integer ids, so the kernel still runs on integers. Reads never add a key: an unknown key answers as absent. The symbol table is forced to disk before any edge that uses a new key is written. A single call that adds new keys therefore costs one sync, and `add_edges_from` pays that cost once per batch.
+
+Memory limit. `max_memory_mb` caps the native memory that holds the graph's adjacency data. The default, `None`, sets no cap:
+
+```python
+import nodusdb
+
+with nodusdb.Graph(max_memory_mb=256) as g:
+    try:
+        g.add_edges_from(edges)
+    except nodusdb.NodusMemoryError:
+        ...  # the graph holds what fit and is still fully queryable
+```
+
+A write that would pass the limit raises `NodusMemoryError`, which is both a `NodusError` and a built-in `MemoryError`. It is raised before the graph changes, and a rejected edge is never written to the log of a durable graph. Edges already stored stay queryable. Removals always succeed, and a write that needs no new storage still works. `add_edges_from` applies edges in order and stops at the first one that does not fit, so the edges before it stay applied. The limit is a whole number of megabytes, at least 1.
+
+Native storage grows in chunks that double, so the limit can trip while part of the budget is unused. A large node id needs a large node table, and that counts too. The limit covers the adjacency storage only. The string symbol table and the query result buffers live on the Java heap and are not counted. A durable graph whose stored snapshot does not fit the limit fails to open with `NodusMemoryError`. Open it again with a larger limit, or none.
 
 Lakehouse writes:
 
@@ -359,7 +374,7 @@ The graph allocation test reads the thread's allocated-bytes counter. Across the
 
 ### Crossing into Python
 
-The Java code compiles to a native shared library with GraalVM Native Image, so Python does not need a JVM. Each exported function takes a GraalVM isolate thread, which GraalVM requires. Functions return sentinel values such as `false` or `-1` instead of throwing, so an exception cannot escape into the host process.
+The Java code compiles to a native shared library with GraalVM Native Image, so Python does not need a JVM. Each exported function takes a GraalVM isolate thread, which GraalVM requires. Functions return sentinel values such as `false` or `-1` instead of throwing, so an exception cannot escape into the host process. A write that a memory limit refuses returns `-3`, which the Python layer raises as `NodusMemoryError`.
 
 Results are written into caller-supplied buffers, and the call returns the full count. A caller that guessed too small can grow the buffer and retry. Batch calls validate the whole batch before they change anything, so one bad ID leaves the graph as it was.
 
