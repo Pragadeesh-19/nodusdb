@@ -30,11 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up GraalVM CE 23
+      - name: Set up GraalVM 23 (Oracle)
         uses: graalvm/setup-graalvm@v1
         with:
           java-version: "23"
-          distribution: graalvm-community
+          distribution: graalvm
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Expose GRAALVM_HOME
