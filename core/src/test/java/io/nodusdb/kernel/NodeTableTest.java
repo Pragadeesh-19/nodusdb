@@ -12,7 +12,7 @@ class NodeTableTest {
 
     @Test
     void unwrittenNodesAreEmptyWithNoBlockAndNoSet() {
-        NodeTable table = new NodeTable(Arena.ofAuto(), 16);
+        NodeTable table = new NodeTable(Arena.ofAuto(), MemoryBudget.unlimited(), 16);
         table.ensureCapacity(200);
 
         for (int node : new int[] {0, 15, 16, 199, 500}) {
@@ -25,7 +25,7 @@ class NodeTableTest {
 
     @Test
     void lowDegreeWritesRecoverDegreeAndBlock() {
-        NodeTable table = new NodeTable(Arena.ofAuto(), 16);
+        NodeTable table = new NodeTable(Arena.ofAuto(), MemoryBudget.unlimited(), 16);
         table.write(3, 15, 7);
         table.write(4, 0, NodeTable.NO_BLOCK);
 
@@ -37,7 +37,7 @@ class NodeTableTest {
 
     @Test
     void setWritesCarryTheFlagAndTheHandle() {
-        NodeTable table = new NodeTable(Arena.ofAuto(), 16);
+        NodeTable table = new NodeTable(Arena.ofAuto(), MemoryBudget.unlimited(), 16);
         table.writeSet(5, Integer.MAX_VALUE, 1_234_567);
 
         long slot = table.read(5);
@@ -48,7 +48,7 @@ class NodeTableTest {
 
     @Test
     void growthKeepsEarlierWrites() {
-        NodeTable table = new NodeTable(Arena.ofAuto(), 16);
+        NodeTable table = new NodeTable(Arena.ofAuto(), MemoryBudget.unlimited(), 16);
         table.write(9, 4, 2);
         table.writeSet(10, 20, 77);
 

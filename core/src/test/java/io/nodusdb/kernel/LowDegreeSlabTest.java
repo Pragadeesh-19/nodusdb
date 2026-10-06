@@ -16,7 +16,7 @@ class LowDegreeSlabTest {
 
     @Test
     void allocatedBlocksAreDistinctAndIndependent() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 2);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
         int a = slab.allocateBlock();
         int b = slab.allocateBlock();
 
@@ -34,7 +34,7 @@ class LowDegreeSlabTest {
 
     @Test
     void freedBlockIsReusedBeforeFreshBlocks() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 4);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 4);
         int a = slab.allocateBlock();
         slab.allocateBlock();
 
@@ -48,7 +48,7 @@ class LowDegreeSlabTest {
 
     @Test
     void churnWithinCapacityNeverGrows() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 8);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 8);
         List<Integer> live = new ArrayList<>();
         for (int i = 0; i < 8; i++) {
             live.add(slab.allocateBlock());
@@ -65,7 +65,7 @@ class LowDegreeSlabTest {
 
     @Test
     void rejectsDoubleFreeFreeOfNeverAllocatedAndOutOfRange() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 4);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 4);
         int a = slab.allocateBlock();
         slab.freeBlock(a);
 
@@ -77,7 +77,7 @@ class LowDegreeSlabTest {
 
     @Test
     void growthPreservesExistingContents() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 2);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
         int count = 100;
         int[] blocks = new int[count];
         for (int i = 0; i < count; i++) {
@@ -95,7 +95,7 @@ class LowDegreeSlabTest {
 
     @Test
     void freeingAfterGrowthStillReusesBlocks() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 2);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
         int first = slab.allocateBlock();
         for (int i = 0; i < 10; i++) {
             slab.allocateBlock();
@@ -108,7 +108,7 @@ class LowDegreeSlabTest {
 
     @Test
     void offsetOutsideBlockIsRejectedByAssertion() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 2);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
         int block = slab.allocateBlock();
 
         assertThrows(AssertionError.class, () -> slab.set(block, LowDegreeSlab.BLOCK_SIZE, 1L));
@@ -117,7 +117,7 @@ class LowDegreeSlabTest {
 
     @Test
     void everyBlockStartsOnA64ByteBoundaryAcrossChunks() {
-        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), 2);
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
         for (int i = 0; i < 300; i++) {
             int block = slab.allocateBlock();
             assertEquals(0L, slab.addressOf(block) % 64, "block " + block + " is not 64-byte aligned");

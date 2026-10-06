@@ -12,7 +12,7 @@ class NativeLongArrayTest {
 
     @Test
     void unwrittenElementsReadAsTheDefaultAcrossChunks() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 4, -1L);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 4, -1L);
         array.ensureCapacity(100);
 
         for (int i = 0; i < 100; i++) {
@@ -22,7 +22,7 @@ class NativeLongArrayTest {
 
     @Test
     void writesRoundTripAcrossEveryChunkBoundary() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 4, 0);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 4, 0);
         array.ensureCapacity(500);
 
         for (int i = 0; i < 500; i++) {
@@ -35,7 +35,7 @@ class NativeLongArrayTest {
 
     @Test
     void growthPreservesWrittenContents() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 16, 0);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 16, 0);
         array.ensureCapacity(16);
         for (int i = 0; i < 16; i++) {
             array.set(i, -i - 2L);
@@ -50,7 +50,7 @@ class NativeLongArrayTest {
 
     @Test
     void capacityIsAtLeastTheRequestedSizeAndNeverShrinks() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 16, 0);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 16, 0);
         assertEquals(16, array.capacity());
 
         array.ensureCapacity(17);
@@ -63,7 +63,7 @@ class NativeLongArrayTest {
 
     @Test
     void readsOutsideTheAllocatedRangeReturnTheDefault() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 8, 9L);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 8, 9L);
 
         assertEquals(9L, array.get(-1));
         assertEquals(9L, array.get(8));
@@ -72,7 +72,7 @@ class NativeLongArrayTest {
 
     @Test
     void writesOutsideTheAllocatedRangeAreRejected() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 8, 0);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 8, 0);
 
         assertThrows(IndexOutOfBoundsException.class, () -> array.set(8, 1L));
         assertThrows(IndexOutOfBoundsException.class, () -> array.set(-1, 1L));
@@ -80,7 +80,7 @@ class NativeLongArrayTest {
 
     @Test
     void sizesBeyondTheNodeLimitAreRejected() {
-        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), 16, 0);
+        NativeLongArray array = new NativeLongArray(Arena.ofAuto(), MemoryBudget.unlimited(), 16, 0);
 
         assertThrows(IllegalArgumentException.class,
                 () -> array.ensureCapacity(NativeLongArray.MAX_CAPACITY + 1));

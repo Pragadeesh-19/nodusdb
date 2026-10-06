@@ -34,8 +34,8 @@ final class NativeBlockPool {
     private final int[] freeHeads = new int[CLASS_COUNT];
     private int top;
 
-    NativeBlockPool(Arena arena) {
-        this.words = new NativeLongArray(Objects.requireNonNull(arena, "arena"), INITIAL_WORDS, 0L);
+    NativeBlockPool(Arena arena, MemoryBudget budget) {
+        this.words = new NativeLongArray(Objects.requireNonNull(arena, "arena"), budget, INITIAL_WORDS, 0L);
     }
 
     int allocate(int logWords) {
@@ -47,15 +47,19 @@ final class NativeBlockPool {
             clear(head, logWords);
             return head;
         }
-        int handle = (top + LINE_WORDS) & -LINE_WORDS;
-        long end = (long) handle + (1L << logWords);
-        if (end > NativeLongArray.MAX_CAPACITY) {
-            throw new IllegalStateException("native block pool is full");
-        }
-        words.ensureCapacity((int) end);
+        int handle = nextHandle();
+        int end = endOfBlock(handle, logWords);
+        words.ensureCapacity(end);
         words.set(handle - 1, logWords);
-        top = (int) end;
+        top = end;
         return handle;
+    }
+
+    void reserve(int logWords) {
+        checkLogWords(logWords);
+        if (freeHeads[logWords] == 0) {
+            words.ensureCapacity(endOfBlock(nextHandle(), logWords));
+        }
     }
 
     void release(int handle) {
@@ -82,6 +86,18 @@ final class NativeBlockPool {
 
     void set(int handle, int offset, long value) {
         words.set(handle + offset, value);
+    }
+
+    private int nextHandle() {
+        return (top + LINE_WORDS) & -LINE_WORDS;
+    }
+
+    private static int endOfBlock(int handle, int logWords) {
+        long end = (long) handle + (1L << logWords);
+        if (end > NativeLongArray.MAX_CAPACITY) {
+            throw new IllegalStateException("native block pool is full");
+        }
+        return (int) end;
     }
 
     private void clear(int handle, int logWords) {

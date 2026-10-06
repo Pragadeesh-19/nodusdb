@@ -16,11 +16,11 @@ final class AdjacencyTable {
     private final NativeSparseSet sets;
     private final NodeTable nodes;
 
-    AdjacencyTable(Arena arena) {
-        this.slab = new LowDegreeSlab(arena, INITIAL_NODES);
-        this.pool = new NativeBlockPool(arena);
+    AdjacencyTable(Arena arena, MemoryBudget budget) {
+        this.slab = new LowDegreeSlab(arena, budget, INITIAL_NODES);
+        this.pool = new NativeBlockPool(arena, budget);
         this.sets = new NativeSparseSet(pool);
-        this.nodes = new NodeTable(arena, INITIAL_NODES);
+        this.nodes = new NodeTable(arena, budget, INITIAL_NODES);
     }
 
     int capacity() {
@@ -29,6 +29,29 @@ final class AdjacencyTable {
 
     void ensureCapacity(int nodeCount) {
         nodes.ensureCapacity(nodeCount);
+    }
+
+    long bytesToHold(int nodeCount) {
+        return nodes.bytesToHold(nodeCount);
+    }
+
+    /*
+     * Reserves what the next add to node may allocate, so a budget refusal surfaces
+     * before the graph changes. It mirrors the three places add allocates.
+     */
+    void reserveForAdd(long node) {
+        long slot = nodes.read(slotOf(node));
+        int degree = NodeTable.degreeOf(slot);
+        if (NodeTable.isSet(slot)) {
+            int handle = NodeTable.handleOf(slot);
+            if (degree == sets.capacityOf(handle)) {
+                sets.reserve(2 * degree);
+            }
+        } else if (degree == MAX_LOW_DEGREE) {
+            sets.reserve(PROMOTED_CAPACITY);
+        } else if (NodeTable.blockOf(slot) == NodeTable.NO_BLOCK) {
+            slab.reserveBlock();
+        }
     }
 
     int degreeOf(long node) {
@@ -121,7 +144,7 @@ final class AdjacencyTable {
             }
             sets.remove(handle, degree, neighbor);
             int remaining = degree - 1;
-            if (remaining == DEMOTION_DEGREE) {
+            if (remaining == DEMOTION_DEGREE && slab.canAllocateBlock()) {
                 demote(n, handle, remaining);
             } else {
                 nodes.writeSet(n, remaining, handle);

@@ -14,7 +14,7 @@ class NativeBlockPoolTest {
 
     @Test
     void blocksOfTheSameClassAreDisjointAndKeepTheirContents() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         List<Integer> handles = new ArrayList<>();
         for (int i = 0; i < 200; i++) {
             int handle = pool.allocate(3);
@@ -32,7 +32,7 @@ class NativeBlockPoolTest {
 
     @Test
     void everyPayloadStartsOnACacheLine() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         for (int log = NativeBlockPool.MIN_LOG_WORDS; log <= 9; log++) {
             for (int i = 0; i < 20; i++) {
                 int handle = pool.allocate(log);
@@ -44,7 +44,7 @@ class NativeBlockPoolTest {
 
     @Test
     void misalignedHandlesAreNotBlocks() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         int handle = pool.allocate(NativeBlockPool.MIN_LOG_WORDS);
 
         assertEquals(-1, pool.logWordsOf(handle + 1));
@@ -53,7 +53,7 @@ class NativeBlockPoolTest {
 
     @Test
     void releasedBlockIsReusedForTheSameClassOnly() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         int small = pool.allocate(3);
         pool.release(small);
 
@@ -63,7 +63,7 @@ class NativeBlockPoolTest {
 
     @Test
     void logWordsReportsLiveBlocksOnly() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         int handle = pool.allocate(4);
 
         assertEquals(4, pool.logWordsOf(handle));
@@ -75,7 +75,7 @@ class NativeBlockPoolTest {
 
     @Test
     void doubleReleaseAndForeignHandlesAreRejected() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
         int handle = pool.allocate(3);
         pool.release(handle);
 
@@ -86,7 +86,7 @@ class NativeBlockPoolTest {
 
     @Test
     void sizeClassesOutsideTheSupportedRangeAreRejected() {
-        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
 
         assertThrows(IllegalArgumentException.class, () -> pool.allocate(0));
         assertThrows(IllegalArgumentException.class, () -> pool.allocate(NativeBlockPool.MIN_LOG_WORDS - 1));

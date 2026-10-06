@@ -19,17 +19,25 @@ public final class RecoveryManager {
     }
 
     public static Recovery recover(Path directory, WalConfig config) throws IOException {
-        Opened opened = open(directory, config);
+        return recover(directory, config, GraphKernel.NO_MEMORY_LIMIT);
+    }
+
+    public static Recovery recover(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
+        Opened opened = open(directory, config, maxMemoryBytes);
         return new Recovery(opened.kernel(), opened.framesApplied(), opened.truncatedBytes());
     }
 
     static Opened open(Path directory, WalConfig config) throws IOException {
+        return open(directory, config, GraphKernel.NO_MEMORY_LIMIT);
+    }
+
+    static Opened open(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
         Files.createDirectories(directory);
         DirectoryLock lock = DirectoryLock.acquire(directory);
         try {
             Files.deleteIfExists(directory.resolve(DurableStore.SNAPSHOT_TEMP));
             Files.deleteIfExists(directory.resolve(DurableStore.LOG_TEMP));
-            GraphKernel kernel = new GraphKernel();
+            GraphKernel kernel = new GraphKernel(maxMemoryBytes);
             Path snapshot = directory.resolve(DurableStore.SNAPSHOT);
             if (Files.exists(snapshot)) {
                 SnapshotFile.load(snapshot, kernel);

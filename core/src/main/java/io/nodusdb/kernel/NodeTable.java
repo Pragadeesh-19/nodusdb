@@ -17,12 +17,16 @@ final class NodeTable {
 
     private final NativeLongArray slots;
 
-    NodeTable(Arena arena, int initialNodes) {
-        this.slots = new NativeLongArray(arena, initialNodes, EMPTY);
+    NodeTable(Arena arena, MemoryBudget budget, int initialNodes) {
+        this.slots = new NativeLongArray(arena, budget, initialNodes, EMPTY);
     }
 
     int capacity() {
         return slots.capacity();
+    }
+
+    long bytesToHold(int nodeCount) {
+        return slots.bytesToReach(nodeCount);
     }
 
     void ensureCapacity(int nodeCount) {

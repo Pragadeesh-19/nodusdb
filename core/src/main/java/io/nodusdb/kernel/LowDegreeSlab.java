@@ -33,6 +33,7 @@ final class LowDegreeSlab {
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
 
     private final Arena arena;
+    private final MemoryBudget budget;
     private final ChunkLayout layout;
     private MemorySegment[] words = new MemorySegment[0];
     private MemorySegment[] flags = new MemorySegment[0];
@@ -42,8 +43,9 @@ final class LowDegreeSlab {
     private int freeHead;
     private int freeCount;
 
-    LowDegreeSlab(Arena arena, int initialBlocks) {
+    LowDegreeSlab(Arena arena, MemoryBudget budget, int initialBlocks) {
         this.arena = arena;
+        this.budget = budget;
         this.layout = new ChunkLayout(initialBlocks);
     }
 
@@ -124,6 +126,18 @@ final class LowDegreeSlab {
         ensureCapacity(blocks);
     }
 
+    void reserveBlock() {
+        if (freeHead == 0) {
+            ensureCapacity(nextFresh + 1);
+        }
+    }
+
+    boolean canAllocateBlock() {
+        return freeHead != 0
+                || nextFresh < capacity
+                || (capacity < MAX_BLOCKS && budget.canCharge(bytesOfChunk(layout.chunkSize(chunkCount))));
+    }
+
     int allocatedBlocks() {
         return nextFresh - freeCount;
     }
@@ -133,15 +147,39 @@ final class LowDegreeSlab {
     }
 
     private void ensureCapacity(int blocks) {
+        if (capacity >= blocks) {
+            return;
+        }
+        budget.charge(bytesToReach(blocks));
         while (capacity < blocks) {
             appendChunk();
         }
     }
 
-    private void appendChunk() {
-        if (capacity >= MAX_BLOCKS) {
+    private long bytesToReach(int blocks) {
+        long bytes = 0;
+        long filled = capacity;
+        for (int next = chunkCount; filled < blocks; next++) {
+            checkBlockLimit(filled);
+            int chunkBlocks = layout.chunkSize(next);
+            bytes += bytesOfChunk(chunkBlocks);
+            filled += chunkBlocks;
+        }
+        return bytes;
+    }
+
+    private static long bytesOfChunk(int chunkBlocks) {
+        return (long) chunkBlocks * BLOCK_BYTES + chunkBlocks;
+    }
+
+    private static void checkBlockLimit(long filled) {
+        if (filled >= MAX_BLOCKS) {
             throw new IllegalStateException("slab block limit reached: " + MAX_BLOCKS);
         }
+    }
+
+    private void appendChunk() {
+        checkBlockLimit(capacity);
         int blocks = layout.chunkSize(chunkCount);
         words = Arrays.copyOf(words, chunkCount + 1);
         flags = Arrays.copyOf(flags, chunkCount + 1);

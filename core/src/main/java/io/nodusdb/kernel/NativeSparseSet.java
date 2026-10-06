@@ -31,9 +31,11 @@ final class NativeSparseSet {
     }
 
     int allocate(int capacity) {
-        checkCapacity(capacity);
-        int padded = Math.max(capacity, MIN_CAPACITY);
-        return pool.allocate(Integer.numberOfTrailingZeros(padded) + 1);
+        return pool.allocate(logWordsFor(capacity));
+    }
+
+    void reserve(int capacity) {
+        pool.reserve(logWordsFor(capacity));
     }
 
     int capacityOf(int handle) {
@@ -179,6 +181,11 @@ final class NativeSparseSet {
         long mask = 0xFFFF_FFFFL << shift;
         long current = pool.get(handle, word);
         pool.set(handle, word, (current & ~mask) | ((position + 1L & 0xFFFF_FFFFL) << shift));
+    }
+
+    private static int logWordsFor(int capacity) {
+        checkCapacity(capacity);
+        return Integer.numberOfTrailingZeros(Math.max(capacity, MIN_CAPACITY)) + 1;
     }
 
     private static void checkCapacity(int capacity) {

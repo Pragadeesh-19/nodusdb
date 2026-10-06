@@ -11,6 +11,10 @@ import java.util.Objects;
  * moves one, so a reader holding a segment stays valid while the arena is reachable.
  * Reads past the allocated range return the default value, so a reader racing a
  * writer never throws.
+ *
+ * Every chunk is charged to the memory budget. A growth request charges the bytes of
+ * all the chunks it needs in one step before it allocates any, so a request that
+ * does not fit leaves both the array and the budget as they were.
  */
 final class NativeLongArray {
 
@@ -20,17 +24,19 @@ final class NativeLongArray {
     private static final int ALIGNMENT = 64;
 
     private final Arena arena;
+    private final MemoryBudget budget;
     private final ChunkLayout layout;
     private final long defaultValue;
     private MemorySegment[] chunks = new MemorySegment[0];
     private int chunkCount;
     private int capacity;
 
-    NativeLongArray(Arena arena, int initialCapacity, long defaultValue) {
+    NativeLongArray(Arena arena, MemoryBudget budget, int initialCapacity, long defaultValue) {
         this.arena = Objects.requireNonNull(arena, "arena");
+        this.budget = Objects.requireNonNull(budget, "budget");
         this.layout = new ChunkLayout(initialCapacity);
         this.defaultValue = defaultValue;
-        appendChunk();
+        growTo(1);
     }
 
     int capacity() {
@@ -59,13 +65,32 @@ final class NativeLongArray {
         if (size > MAX_CAPACITY) {
             throw new IllegalArgumentException("native long array size " + size + " exceeds " + MAX_CAPACITY);
         }
+        growTo(size);
+    }
+
+    long bytesToReach(int size) {
+        long bytes = 0;
+        long filled = capacity;
+        for (int next = chunkCount; filled < size; next++) {
+            int elements = elementsOfChunk(next, filled);
+            bytes += (long) elements * Long.BYTES;
+            filled += elements;
+        }
+        return bytes;
+    }
+
+    private void growTo(int size) {
+        if (capacity >= size) {
+            return;
+        }
+        budget.charge(bytesToReach(size));
         while (capacity < size) {
             appendChunk();
         }
     }
 
     private void appendChunk() {
-        int elements = Math.min(layout.chunkSize(chunkCount), MAX_CAPACITY - capacity);
+        int elements = elementsOfChunk(chunkCount, capacity);
         MemorySegment segment = arena.allocate((long) elements * Long.BYTES, ALIGNMENT);
         if (defaultValue != 0) {
             for (int i = 0; i < elements; i++) {
@@ -76,5 +101,9 @@ final class NativeLongArray {
         chunks[chunkCount] = segment;
         capacity += elements;
         chunkCount++;
+    }
+
+    private int elementsOfChunk(int chunk, long filled) {
+        return (int) Math.min(layout.chunkSize(chunk), MAX_CAPACITY - filled);
     }
 }

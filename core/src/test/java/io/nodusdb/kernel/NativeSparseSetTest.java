@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class NativeSparseSetTest {
 
-    private final NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto());
+    private final NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
     private final NativeSparseSet set = new NativeSparseSet(pool);
 
     @Test

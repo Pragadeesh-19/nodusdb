@@ -22,15 +22,32 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
+    public static final long NO_MEMORY_LIMIT = 0L;
+
     private final Arena arena = Arena.ofAuto();
-    private final AdjacencyTable outgoing = new AdjacencyTable(arena);
-    private final AdjacencyTable incoming = new AdjacencyTable(arena);
+    private final MemoryBudget budget;
+    private final AdjacencyTable outgoing;
+    private final AdjacencyTable incoming;
     private boolean closed;
     private final ThreadLocal<KHopTraversal> traversals = ThreadLocal.withInitial(KHopTraversal::new);
     private Persistence persistence = Persistence.NONE;
     private long sequence;
 
     public GraphKernel() {
+        this(NO_MEMORY_LIMIT);
+    }
+
+    /*
+     * maxMemoryBytes caps the native memory the graph storage allocates, or is NO_MEMORY_LIMIT.
+     * A write that would pass the cap throws MemoryLimitExceededException and changes nothing.
+     */
+    public GraphKernel(long maxMemoryBytes) {
+        if (maxMemoryBytes < NO_MEMORY_LIMIT) {
+            throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
+        }
+        this.budget = maxMemoryBytes == NO_MEMORY_LIMIT ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
+        this.outgoing = new AdjacencyTable(arena, budget);
+        this.incoming = new AdjacencyTable(arena, budget);
     }
 
     public static GraphKernel openInMemory() {
@@ -38,7 +55,19 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public static GraphKernel open(Path directory, WalConfig config) throws IOException {
-        return RecoveryManager.recover(directory, config).kernel();
+        return open(directory, config, NO_MEMORY_LIMIT);
+    }
+
+    public static GraphKernel open(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
+        return RecoveryManager.recover(directory, config, maxMemoryBytes).kernel();
+    }
+
+    public long memoryUsedBytes() {
+        return budget.used();
+    }
+
+    public long memoryLimitBytes() {
+        return budget.isLimited() ? budget.limit() : NO_MEMORY_LIMIT;
     }
 
     public void attachPersistence(Persistence persistence) {
@@ -78,8 +107,9 @@ public final class GraphKernel implements AutoCloseable {
             if (outgoing.contains(u, v)) {
                 return false;
             }
-            persistence.recordAdd(u, v);
             ensureCapacity(Math.max(u, v) + 1);
+            reserveHeadroom(u, v);
+            persistence.recordAdd(u, v);
             return insert(u, v);
         } finally {
             endWrite();
@@ -113,6 +143,7 @@ public final class GraphKernel implements AutoCloseable {
                     long u = pairs[2 * i];
                     long v = pairs[2 * i + 1];
                     if (!outgoing.contains(u, v)) {
+                        reserveHeadroom(u, v);
                         persistence.recordAdd(u, v);
                         insert(u, v);
                         added++;
@@ -367,11 +398,17 @@ public final class GraphKernel implements AutoCloseable {
         return largest;
     }
 
+    private void reserveHeadroom(long u, long v) {
+        outgoing.reserveForAdd(u);
+        incoming.reserveForAdd(v);
+    }
+
     private void ensureCapacity(long requiredNodes) {
-        if (requiredNodes <= outgoing.capacity()) {
+        if (requiredNodes <= Math.min(outgoing.capacity(), incoming.capacity())) {
             return;
         }
         int nodes = (int) requiredNodes;
+        budget.require(outgoing.bytesToHold(nodes) + incoming.bytesToHold(nodes));
         outgoing.ensureCapacity(nodes);
         incoming.ensureCapacity(nodes);
     }
