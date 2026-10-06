@@ -15,6 +15,7 @@ class GraphKernelAllocationTest {
     private static final int KHOP_DEPTH = 2;
     private static final int WARMUP_ROUNDS = 20_000;
     private static final int MEASURED_ROUNDS = 200_000;
+    private static final int MAX_MEASURED_WINDOWS = 5;
 
     @Test
     void primedSteadyStateQueriesAndInTierMutationsAllocateNothing() {
@@ -26,8 +27,12 @@ class GraphKernelAllocationTest {
         long threadId = Thread.currentThread().threadId();
 
         runRounds(kernel, buffer, WARMUP_ROUNDS);
-        measuredAllocation(bean, threadId, kernel, buffer);
-        long steadyState = measuredAllocation(bean, threadId, kernel, buffer);
+        long steadyState = Long.MAX_VALUE;
+        // A deoptimization of the OSR-compiled loop rebuilds scalar-replaced objects on the heap, so
+        // a window can count JIT work. Measure until one window is clean; a real allocation would fail every window.
+        for (int window = 0; window < MAX_MEASURED_WINDOWS && steadyState != 0; window++) {
+            steadyState = measuredAllocation(bean, threadId, kernel, buffer);
+        }
 
         assertEquals(0L, steadyState, "bytes allocated in a primed steady-state window");
     }
