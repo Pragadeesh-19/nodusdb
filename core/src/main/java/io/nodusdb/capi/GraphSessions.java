@@ -13,11 +13,19 @@ public final class GraphSessions {
     private final HandleTable<GraphSession> table = new HandleTable<>();
 
     public long open() {
-        return table.open(new GraphSession(new GraphKernel()));
+        return open(GraphKernel.NO_MEMORY_LIMIT);
+    }
+
+    public long open(long maxMemoryBytes) {
+        return table.open(new GraphSession(new GraphKernel(maxMemoryBytes)));
     }
 
     public long openDurable(Path directory, WalConfig config) throws IOException {
-        GraphKernel kernel = GraphKernel.open(directory, config);
+        return openDurable(directory, config, GraphKernel.NO_MEMORY_LIMIT);
+    }
+
+    public long openDurable(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
+        GraphKernel kernel = GraphKernel.open(directory, config, maxMemoryBytes);
         SymbolLog symbols = null;
         try {
             StringInterner strings = new StringInterner();

@@ -1,6 +1,7 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.kernel.KeyKind;
+import io.nodusdb.kernel.MemoryLimitExceededException;
 import io.nodusdb.kernel.wal.SyncMode;
 import io.nodusdb.kernel.wal.WalConfig;
 import org.graalvm.nativeimage.IsolateThread;
@@ -17,8 +18,10 @@ import java.nio.file.Path;
 
 public final class NodusCApi {
 
+    private static final int OK = 0;
     private static final int ERROR = -1;
     private static final int LOOKUP_ERROR = -2;
+    private static final int MEMORY_LIMIT = -3;
     private static final long MAX_STRING_BYTES = Integer.MAX_VALUE - 8;
     private static final int MAX_PATH_BYTES = 32_768;
     private static final GraphSessions SESSIONS = new GraphSessions();
@@ -33,6 +36,20 @@ public final class NodusCApi {
         } catch (RuntimeException e) {
             return WordFactory.nullPointer();
         }
+    }
+
+    @CEntryPoint(name = "nodus_create_limited")
+    public static VoidPointer createLimited(IsolateThread thread, long maxMemoryBytes, CIntPointer status) {
+        try {
+            VoidPointer handle = WordFactory.pointer(SESSIONS.open(maxMemoryBytes));
+            report(status, OK);
+            return handle;
+        } catch (MemoryLimitExceededException e) {
+            report(status, MEMORY_LIMIT);
+        } catch (RuntimeException e) {
+            report(status, ERROR);
+        }
+        return WordFactory.nullPointer();
     }
 
     @CEntryPoint(name = "nodus_destroy")
@@ -53,6 +70,23 @@ public final class NodusCApi {
         } catch (IOException | RuntimeException e) {
             return WordFactory.nullPointer();
         }
+    }
+
+    @CEntryPoint(name = "nodus_open_durable_limited")
+    public static VoidPointer openDurableLimited(IsolateThread thread, CCharPointer directory, int syncMode,
+                                                 long maxMemoryBytes, CIntPointer status) {
+        try {
+            WalConfig config = WalConfig.withSyncMode(SyncMode.fromCode(syncMode));
+            VoidPointer handle = WordFactory.pointer(
+                    SESSIONS.openDurable(Path.of(cString(directory)), config, maxMemoryBytes));
+            report(status, OK);
+            return handle;
+        } catch (MemoryLimitExceededException e) {
+            report(status, MEMORY_LIMIT);
+        } catch (IOException | RuntimeException e) {
+            report(status, ERROR);
+        }
+        return WordFactory.nullPointer();
     }
 
     @CEntryPoint(name = "nodus_checkpoint")
@@ -91,11 +125,13 @@ public final class NodusCApi {
     }
 
     @CEntryPoint(name = "nodus_add_edge")
-    public static boolean addEdge(IsolateThread thread, VoidPointer handle, long u, long v) {
+    public static int addEdge(IsolateThread thread, VoidPointer handle, long u, long v) {
         try {
-            return session(handle).addEdge(u, v);
+            return session(handle).addEdge(u, v) ? 1 : 0;
+        } catch (MemoryLimitExceededException e) {
+            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
-            return false;
+            return ERROR;
         }
     }
 
@@ -144,6 +180,8 @@ public final class NodusCApi {
                 stageEdges(session, uArr, vArr, count);
                 return session.addEdges(count);
             }
+        } catch (MemoryLimitExceededException e) {
+            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -260,6 +298,8 @@ public final class NodusCApi {
             }
             byte[] bytes = readBytes(utf8, total);
             return session(handle).addStringEdges(bytes, lengthValues, pairCount);
+        } catch (MemoryLimitExceededException e) {
+            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
             return ERROR;
         }
@@ -286,6 +326,12 @@ public final class NodusCApi {
 
     private static GraphSession session(VoidPointer handle) {
         return SESSIONS.get(handle.rawValue());
+    }
+
+    private static void report(CIntPointer status, int code) {
+        if (status.isNonNull()) {
+            status.write(code);
+        }
     }
 
     private static void stageEdges(GraphSession session, CLongPointer uArr, CLongPointer vArr, int count) {
