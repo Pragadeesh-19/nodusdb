@@ -62,10 +62,12 @@ public final class LogTailReader implements AutoCloseable {
     }
 
     public long unreadBytes() throws IOException {
+        if (cursorBase == NOT_LOCATED) {
+            locate();
+        }
         long total = 0;
-        long first = cursorBase == NOT_LOCATED ? firstSegmentToRead() : cursorBase;
         for (long base : segmentBases()) {
-            if (base < first) {
+            if (base < cursorBase) {
                 continue;
             }
             long size = sizeOf(base);

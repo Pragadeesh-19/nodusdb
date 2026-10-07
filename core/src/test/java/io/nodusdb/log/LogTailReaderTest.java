@@ -360,6 +360,34 @@ class LogTailReaderTest {
     }
 
     @Test
+    void theUnreadBytesOfAFreshReaderStartAtItsPositionInsideASegment() throws IOException {
+        SimulatedDisk disk = new SimulatedDisk();
+        byte[] first = transactionBytes(1, 3);
+        byte[] second = transactionBytes(5, 3);
+        byte[] third = transactionBytes(9, 3);
+        segment(disk, 1, first, second, third);
+
+        try (LogTailReader reader = new LogTailReader(disk, 8)) {
+            assertEquals(third.length, reader.unreadBytes());
+            assertEquals(third.length, reader.read(12, NO_LIMIT).records().length);
+            assertEquals(0, reader.unreadBytes());
+        }
+        try (LogTailReader reader = new LogTailReader(disk, 12)) {
+            assertEquals(0, reader.unreadBytes());
+        }
+    }
+
+    @Test
+    void theUnreadBytesOfAReaderPositionedBeyondTheLogAreRefused() throws IOException {
+        SimulatedDisk disk = new SimulatedDisk();
+        segment(disk, 1, transactionBytes(1, 3));
+
+        try (LogTailReader reader = new LogTailReader(disk, 9)) {
+            assertThrows(CorruptLogException.class, reader::unreadBytes);
+        }
+    }
+
+    @Test
     void theUnreadBytesCoverEverySegmentFromTheCursorOn() throws IOException {
         SimulatedDisk disk = new SimulatedDisk();
         byte[] a = transactionBytes(1, 3);
