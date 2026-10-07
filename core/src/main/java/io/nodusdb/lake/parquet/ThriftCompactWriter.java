@@ -6,6 +6,8 @@ import java.util.Deque;
 
 public final class ThriftCompactWriter {
 
+    static final int TYPE_BOOL_TRUE = 1;
+    static final int TYPE_BOOL_FALSE = 2;
     static final int TYPE_I32 = 5;
     static final int TYPE_I64 = 6;
     static final int TYPE_BINARY = 8;
@@ -29,6 +31,10 @@ public final class ThriftCompactWriter {
     void structField(int id) {
         header(id, TYPE_STRUCT);
         beginStruct();
+    }
+
+    void boolField(int id, boolean value) {
+        header(id, value ? TYPE_BOOL_TRUE : TYPE_BOOL_FALSE);
     }
 
     void i32Field(int id, int value) {
