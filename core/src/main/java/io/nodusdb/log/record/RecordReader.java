@@ -82,6 +82,10 @@ public final class RecordReader {
         position += length();
     }
 
+    public void copyRecordTo(ByteBuffer destination, int offset) {
+        buffer.get(position, destination.array(), destination.arrayOffset() + offset, length());
+    }
+
     public void seek(int newPosition) {
         position = newPosition;
     }
