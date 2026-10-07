@@ -21,8 +21,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public final class GraphKernel implements AutoCloseable {
 
     public static final long NO_MEMORY_LIMIT = 0L;
-
-    private static final long NO_CHANGE = -1L;
+    public static final long UNCHANGED = -1L;
 
     private final GraphState state;
     private final WriteSequence sequence;
@@ -187,13 +186,25 @@ public final class GraphKernel implements AutoCloseable {
     public boolean addEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
-        return writeSingle(RecordType.TUPLE_ADD, (int) u, 0, 0, (int) v, true) != NO_CHANGE;
+        return writeSingle(RecordType.TUPLE_ADD, (int) u, 0, 0, (int) v, true) != UNCHANGED;
     }
 
     public boolean removeEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
-        return writeSingle(RecordType.TUPLE_REMOVE, (int) u, 0, 0, (int) v, true) != NO_CHANGE;
+        return writeSingle(RecordType.TUPLE_REMOVE, (int) u, 0, 0, (int) v, true) != UNCHANGED;
+    }
+
+    public long addTuple(int object, int relation, int subjectRelation, int subject) {
+        NodeIds.checkValid(object);
+        NodeIds.checkValid(subject);
+        return writeSingle(RecordType.TUPLE_ADD, object, relation, subjectRelation, subject, true);
+    }
+
+    public long removeTuple(int object, int relation, int subjectRelation, int subject) {
+        NodeIds.checkValid(object);
+        NodeIds.checkValid(subject);
+        return writeSingle(RecordType.TUPLE_REMOVE, object, relation, subjectRelation, subject, true);
     }
 
     public int addEdges(long[] pairs, int pairCount) {
@@ -402,7 +413,7 @@ public final class GraphKernel implements AutoCloseable {
             requireOpen();
             boolean add = type == RecordType.TUPLE_ADD;
             if (add == probeTuple(object, relation, subjectRelation, subject)) {
-                return NO_CHANGE;
+                return UNCHANGED;
             }
             scratch.clear();
             scratch.autocommitTuple(type, object, relation, subjectRelation, subject);
@@ -417,7 +428,7 @@ public final class GraphKernel implements AutoCloseable {
         try {
             requireOpen();
             int changed = 0;
-            long lastLsn = NO_CHANGE;
+            long lastLsn = UNCHANGED;
             RuntimeException failure = null;
             try {
                 if (type == RecordType.TUPLE_ADD) {
@@ -425,7 +436,7 @@ public final class GraphKernel implements AutoCloseable {
                 }
                 for (int i = 0; i < pairCount; i++) {
                     long lsn = writeSingle(type, (int) pairs[2 * i], 0, 0, (int) pairs[2 * i + 1], false);
-                    if (lsn != NO_CHANGE) {
+                    if (lsn != UNCHANGED) {
                         changed++;
                         lastLsn = lsn;
                     }
@@ -460,7 +471,7 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     private RuntimeException awaitDurability(long lsn, RuntimeException failure) {
-        if (lsn == NO_CHANGE) {
+        if (lsn == UNCHANGED) {
             return failure;
         }
         try {
