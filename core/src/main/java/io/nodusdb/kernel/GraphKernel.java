@@ -1,42 +1,42 @@
 package io.nodusdb.kernel;
 
 import io.nodusdb.kernel.adjacency.AdjacencyTable;
+import io.nodusdb.kernel.adjacency.EdgeKey;
+import io.nodusdb.kernel.adjacency.EdgeTables;
+import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.kernel.memory.MemoryBudget;
-import io.nodusdb.kernel.memory.MemoryLimitExceededException;
+import io.nodusdb.kernel.symbols.SymbolTable;
 import io.nodusdb.kernel.traversal.KHopTraversal;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
-import io.nodusdb.kernel.wal.RecoveryManager;
-import io.nodusdb.kernel.wal.WalConfig;
+import io.nodusdb.log.LogStore;
+import io.nodusdb.log.VolatileLog;
+import io.nodusdb.log.record.RecordBatch;
+import io.nodusdb.log.record.RecordReader;
+import io.nodusdb.log.record.RecordType;
 
-import java.io.IOException;
-import java.lang.foreign.Arena;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
-import java.nio.file.Path;
 import java.util.Objects;
+import java.util.concurrent.locks.ReentrantLock;
 
 public final class GraphKernel implements AutoCloseable {
 
-    private static final VarHandle SEQUENCE;
-
-    static {
-        try {
-            SEQUENCE = MethodHandles.lookup().findVarHandle(GraphKernel.class, "sequence", long.class);
-        } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError(e);
-        }
-    }
-
     public static final long NO_MEMORY_LIMIT = 0L;
 
-    private final Arena arena = Arena.ofAuto();
-    private final MemoryBudget budget;
-    private final AdjacencyTable outgoing;
-    private final AdjacencyTable incoming;
-    private boolean closed;
+    private static final long NO_CHANGE = -1L;
+
+    private final GraphState state;
+    private final WriteSequence sequence;
+    private final RecordApplier applier;
+    private final WriteReservation reservation;
+    private final ReentrantLock writer = new ReentrantLock();
+    private final RecordBatch scratch = new RecordBatch();
+    private final RecordReader applyReader = new RecordReader();
     private final ThreadLocal<KHopTraversal> traversals = ThreadLocal.withInitial(KHopTraversal::new);
-    private Persistence persistence = Persistence.NONE;
-    private long sequence;
+    private LogStore log = new VolatileLog();
+    private DurableStorage storage;
+    private volatile long appliedLsn;
+    private boolean closed;
+    private boolean faulted;
 
     public GraphKernel() {
         this(NO_MEMORY_LIMIT);
@@ -46,151 +46,173 @@ public final class GraphKernel implements AutoCloseable {
         if (maxMemoryBytes < NO_MEMORY_LIMIT) {
             throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
         }
-        this.budget = maxMemoryBytes == NO_MEMORY_LIMIT ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
-        this.outgoing = new AdjacencyTable(arena, budget);
-        this.incoming = new AdjacencyTable(arena, budget);
+        MemoryBudget budget = maxMemoryBytes == NO_MEMORY_LIMIT
+                ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
+        this.state = new GraphState(budget);
+        this.sequence = state.sequence();
+        this.applier = new RecordApplier(state);
+        this.reservation = new WriteReservation(state);
     }
 
     public static GraphKernel openInMemory() {
         return new GraphKernel();
     }
 
-    public static GraphKernel open(Path directory, WalConfig config) throws IOException {
-        return open(directory, config, NO_MEMORY_LIMIT);
-    }
-
-    public static GraphKernel open(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
-        return RecoveryManager.recover(directory, config, maxMemoryBytes).kernel();
-    }
-
     public long memoryUsedBytes() {
-        return budget.used();
+        return state.budget().used();
     }
 
     public long memoryLimitBytes() {
-        return budget.isLimited() ? budget.limit() : NO_MEMORY_LIMIT;
+        return state.budget().isLimited() ? state.budget().limit() : NO_MEMORY_LIMIT;
     }
 
-    public void attachPersistence(Persistence persistence) {
-        Objects.requireNonNull(persistence, "persistence");
-        if (this.persistence != Persistence.NONE) {
-            throw new IllegalStateException("a persistence store is already attached");
+    public void attachLog(LogStore log, DurableStorage storage) {
+        Objects.requireNonNull(log, "log");
+        Objects.requireNonNull(storage, "storage");
+        writer.lock();
+        try {
+            if (this.storage != null) {
+                throw new IllegalStateException("a durable store is already attached");
+            }
+            this.log = log;
+            this.storage = storage;
+            this.appliedLsn = log.lastLsn();
+        } finally {
+            writer.unlock();
         }
-        this.persistence = persistence;
     }
 
     public boolean isDurable() {
-        return persistence != Persistence.NONE;
+        return storage != null;
+    }
+
+    public long epoch() {
+        return log.epoch();
+    }
+
+    public long appliedLsn() {
+        return appliedLsn;
+    }
+
+    public Token token() {
+        return new Token(log.epoch(), appliedLsn);
+    }
+
+    public KeyKind keyKind() {
+        return state.keyKind();
+    }
+
+    public RelationCatalog catalog() {
+        return state.catalog();
+    }
+
+    public SymbolTable symbols() {
+        return state.symbols();
+    }
+
+    public EpochHistory epochHistory() {
+        return state.epochs();
     }
 
     public void checkpoint() {
-        persistence.checkpoint();
+        writer.lock();
+        try {
+            requireOpen();
+            requireDurable("checkpoint");
+            checkpointLocked();
+        } finally {
+            writer.unlock();
+        }
     }
 
     public void sync() {
-        persistence.sync();
+        writer.lock();
+        try {
+            requireOpen();
+            requireDurable("sync");
+            log.force();
+        } finally {
+            writer.unlock();
+        }
     }
 
     @Override
     public void close() {
-        if (closed) {
-            return;
+        writer.lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            if (storage != null) {
+                closeStorage();
+            }
+        } finally {
+            writer.unlock();
         }
-        closed = true;
-        persistence.close();
+    }
+
+    public long commit(RecordBatch batch) {
+        if (batch.isEmpty() || !batch.isCommitted()) {
+            throw new IllegalArgumentException("a transaction must hold records and end with a commit");
+        }
+        writer.lock();
+        try {
+            requireOpen();
+            return commitLocked(batch, true);
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public long claimKeyKind(KeyKind kind) {
+        if (kind == KeyKind.UNSET) {
+            throw new IllegalArgumentException("a graph cannot be claimed as unset");
+        }
+        writer.lock();
+        try {
+            requireOpen();
+            if (state.keyKind() == kind) {
+                return appliedLsn;
+            }
+            RecordBatch claim = new RecordBatch();
+            claim.graphConfig(kind.code());
+            claim.commit();
+            return commitLocked(claim, true);
+        } finally {
+            writer.unlock();
+        }
     }
 
     public boolean addEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
-        beginWrite();
-        try {
-            if (outgoing.contains(u, v)) {
-                return false;
-            }
-            ensureCapacity(Math.max(u, v) + 1);
-            reserveHeadroom(u, v);
-            persistence.recordAdd(u, v);
-            return insert(u, v);
-        } finally {
-            endWrite();
-        }
+        return writeSingle(RecordType.TUPLE_ADD, (int) u, 0, 0, (int) v, true) != NO_CHANGE;
     }
 
     public boolean removeEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
-        beginWrite();
-        try {
-            if (!outgoing.contains(u, v)) {
-                return false;
-            }
-            persistence.recordRemove(u, v);
-            return delete(u, v);
-        } finally {
-            endWrite();
-        }
+        return writeSingle(RecordType.TUPLE_REMOVE, (int) u, 0, 0, (int) v, true) != NO_CHANGE;
     }
 
     public int addEdges(long[] pairs, int pairCount) {
-        long largest = validatePairs(pairs, pairCount);
-        beginWrite();
-        try {
-            ensureCapacity(largest + 1);
-            int added = 0;
-            persistence.beginBatch();
-            try {
-                for (int i = 0; i < pairCount; i++) {
-                    long u = pairs[2 * i];
-                    long v = pairs[2 * i + 1];
-                    if (!outgoing.contains(u, v)) {
-                        reserveHeadroom(u, v);
-                        persistence.recordAdd(u, v);
-                        insert(u, v);
-                        added++;
-                    }
-                }
-            } finally {
-                persistence.endBatch();
-            }
-            return added;
-        } finally {
-            endWrite();
-        }
+        validatePairs(pairs, pairCount);
+        return writePairs(RecordType.TUPLE_ADD, pairs, pairCount);
     }
 
     public int removeEdges(long[] pairs, int pairCount) {
         validatePairs(pairs, pairCount);
-        beginWrite();
-        try {
-            int removed = 0;
-            persistence.beginBatch();
-            try {
-                for (int i = 0; i < pairCount; i++) {
-                    long u = pairs[2 * i];
-                    long v = pairs[2 * i + 1];
-                    if (outgoing.contains(u, v)) {
-                        persistence.recordRemove(u, v);
-                        delete(u, v);
-                        removed++;
-                    }
-                }
-            } finally {
-                persistence.endBatch();
-            }
-            return removed;
-        } finally {
-            endWrite();
-        }
+        return writePairs(RecordType.TUPLE_REMOVE, pairs, pairCount);
     }
 
     public boolean hasEdge(long u, long v) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
         while (true) {
-            long started = beginRead();
-            boolean present = outgoing.contains(u, v);
-            if (endRead(started)) {
+            long started = sequence.beginRead();
+            boolean present = state.direct().contains(u, v);
+            if (sequence.validate(started)) {
                 return present;
             }
         }
@@ -199,9 +221,9 @@ public final class GraphKernel implements AutoCloseable {
     public int getDegree(long u) {
         NodeIds.checkValid(u);
         while (true) {
-            long started = beginRead();
-            int degree = outgoing.degreeOf(u);
-            if (endRead(started)) {
+            long started = sequence.beginRead();
+            int degree = state.direct().degree(u);
+            if (sequence.validate(started)) {
                 return degree;
             }
         }
@@ -210,9 +232,9 @@ public final class GraphKernel implements AutoCloseable {
     public int getInDegree(long v) {
         NodeIds.checkValid(v);
         while (true) {
-            long started = beginRead();
-            int degree = incoming.degreeOf(v);
-            if (endRead(started)) {
+            long started = sequence.beginRead();
+            int degree = state.direct().inDegree(v);
+            if (sequence.validate(started)) {
                 return degree;
             }
         }
@@ -230,49 +252,69 @@ public final class GraphKernel implements AutoCloseable {
 
     public int nodeCapacity() {
         while (true) {
-            long started = beginRead();
-            int capacity = outgoing.capacity();
-            if (endRead(started)) {
+            long started = sequence.beginRead();
+            int capacity = state.nodeCapacity();
+            if (sequence.validate(started)) {
                 return capacity;
             }
         }
     }
 
     public long outgoingNeighbor(long u, int index) {
-        return neighborAt(outgoing, u, index);
+        return neighborAt(true, u, index);
     }
 
     public long incomingNeighbor(long v, int index) {
-        return neighborAt(incoming, v, index);
+        return neighborAt(false, v, index);
     }
 
-    public void prepareBulkLoad(int[] forwardDegrees, int[] backwardDegrees) {
-        if (forwardDegrees.length != backwardDegrees.length) {
-            throw new IllegalArgumentException("degree arrays differ in length");
-        }
-        if (hasEdges()) {
-            throw new IllegalStateException("bulk load needs an empty graph");
-        }
-        ensureCapacity(forwardDegrees.length);
-        outgoing.prepareBulkLoad(forwardDegrees);
-        incoming.prepareBulkLoad(backwardDegrees);
+    public long readStart() {
+        return sequence.beginRead();
     }
 
-    public void loadBulkNode(boolean forward, long node, long[] neighbors, int degree) {
-        if (degree <= 0 || degree > neighbors.length) {
-            throw new IllegalArgumentException("degree " + degree + " does not fit " + neighbors.length + " neighbors");
+    public boolean readStillValid(long started) {
+        return sequence.validate(started);
+    }
+
+    public boolean probeTuple(int object, int relation, int subjectRelation, int subject) {
+        EdgeTables tables = state.tables(state.partitionOf(relation, subjectRelation));
+        return tables != null && tables.contains(object, EdgeKey.pack(relation, subjectRelation, subject));
+    }
+
+    public int probeDegree(Partition partition, int object) {
+        EdgeTables tables = state.tables(partition);
+        return tables == null ? 0 : tables.degree(object);
+    }
+
+    public long probeKey(Partition partition, int object, int index) {
+        EdgeTables tables = state.tables(partition);
+        return tables == null ? NodeIds.NONE : tables.outgoingKeyAt(object, index);
+    }
+
+    public int degree(Partition partition, boolean outgoing, int node) {
+        EdgeTables tables = state.tables(partition);
+        if (tables == null) {
+            return 0;
         }
-        AdjacencyTable table = forward ? outgoing : incoming;
-        table.fillBulkNode((int) node, neighbors, degree);
+        return outgoing ? tables.degree(node) : tables.inDegree(node);
+    }
+
+    public long keyAt(Partition partition, boolean outgoing, int node, int index) {
+        EdgeTables tables = state.tables(partition);
+        return outgoing ? tables.outgoingKeyAt(node, index) : tables.incomingKeyAt(node, index);
+    }
+
+    public boolean hasPartition(Partition partition) {
+        return state.tables(partition) != null;
     }
 
     public int commonNeighbors(long u, long v, long[] out) {
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
         while (true) {
-            long started = beginRead();
+            long started = sequence.beginRead();
             int count = commonNeighborsOnce(u, v, out);
-            if (endRead(started)) {
+            if (sequence.validate(started)) {
                 if (count == KHopTraversal.OVERFLOW) {
                     throw new OutputBufferTooSmallException("output buffer too small for common neighbors");
                 }
@@ -285,10 +327,11 @@ public final class GraphKernel implements AutoCloseable {
         NodeIds.checkValid(start);
         KHopTraversal traversal = traversals.get();
         while (true) {
-            long started = beginRead();
-            traversal.ensureCapacity(outgoing.capacity());
-            int count = traversal.kHop(outgoing, start, maxDepth, out);
-            if (endRead(started)) {
+            long started = sequence.beginRead();
+            AdjacencyTable table = state.direct().outgoingTable();
+            traversal.ensureCapacity(table.capacity());
+            int count = traversal.kHop(table, start, maxDepth, out);
+            if (sequence.validate(started)) {
                 if (count == KHopTraversal.OVERFLOW) {
                     throw new OutputBufferTooSmallException("output buffer too small for k-hop result");
                 }
@@ -297,18 +340,236 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
+    public void replay(RecordReader record) {
+        applier.apply(record);
+    }
+
+    public void restoreSymbol(int id, byte[] utf8) {
+        state.symbols().append(id, utf8, 0, utf8.length);
+    }
+
+    public void restoreCatalog(RelationCatalog catalog) {
+        state.catalog(catalog);
+    }
+
+    public void restoreKeyKind(KeyKind kind) {
+        state.keyKind(kind);
+    }
+
+    public void recordEpoch(long epoch, long firstLsn, long handoffLsn) {
+        state.epochs().record(epoch, firstLsn, handoffLsn);
+    }
+
+    public void prepareBulkLoad(int[] forwardDegrees, int[] backwardDegrees) {
+        prepareBulkLoad(Partition.DIRECT, forwardDegrees, backwardDegrees);
+    }
+
+    public void prepareBulkLoad(Partition partition, int[] forwardDegrees, int[] backwardDegrees) {
+        if (forwardDegrees.length != backwardDegrees.length) {
+            throw new IllegalArgumentException("degree arrays differ in length");
+        }
+        if (partition == Partition.DIRECT && hasEdges()) {
+            throw new IllegalStateException("bulk load needs an empty graph");
+        }
+        state.ensureNodes(forwardDegrees.length);
+        EdgeTables tables = partition == Partition.DIRECT ? state.direct() : state.ensureIndirect();
+        tables.prepareBulkLoad(forwardDegrees, backwardDegrees);
+    }
+
+    public void loadBulkNode(boolean forward, long node, long[] neighbors, int degree) {
+        loadBulkNode(Partition.DIRECT, forward, node, neighbors, degree);
+    }
+
+    public void loadBulkNode(Partition partition, boolean forward, long node, long[] neighbors, int degree) {
+        if (degree <= 0 || degree > neighbors.length) {
+            throw new IllegalArgumentException("degree " + degree + " does not fit " + neighbors.length + " neighbors");
+        }
+        state.tables(partition).fillBulkNode(forward, (int) node, neighbors, degree);
+    }
+
+    boolean isHighDegree(long u) {
+        return state.direct().isHighDegree(u);
+    }
+
+    boolean hasIncoming(long v, long u) {
+        return state.direct().containsIncoming(v, u);
+    }
+
+    private long writeSingle(RecordType type, int object, int relation, int subjectRelation, int subject,
+                             boolean awaitDurable) {
+        writer.lock();
+        try {
+            requireOpen();
+            boolean add = type == RecordType.TUPLE_ADD;
+            if (add == probeTuple(object, relation, subjectRelation, subject)) {
+                return NO_CHANGE;
+            }
+            scratch.clear();
+            scratch.autocommitTuple(type, object, relation, subjectRelation, subject);
+            return commitLocked(scratch, awaitDurable);
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    private int writePairs(RecordType type, long[] pairs, int pairCount) {
+        writer.lock();
+        try {
+            requireOpen();
+            int changed = 0;
+            long lastLsn = NO_CHANGE;
+            RuntimeException failure = null;
+            try {
+                if (type == RecordType.TUPLE_ADD) {
+                    reserveNodes(pairs, pairCount);
+                }
+                for (int i = 0; i < pairCount; i++) {
+                    long lsn = writeSingle(type, (int) pairs[2 * i], 0, 0, (int) pairs[2 * i + 1], false);
+                    if (lsn != NO_CHANGE) {
+                        changed++;
+                        lastLsn = lsn;
+                    }
+                }
+            } catch (RuntimeException e) {
+                failure = e;
+            }
+            failure = awaitDurability(lastLsn, failure);
+            if (failure != null) {
+                throw failure;
+            }
+            return changed;
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    private void reserveNodes(long[] pairs, int pairCount) {
+        long largest = -1;
+        for (int i = 0; i < 2 * pairCount; i++) {
+            largest = Math.max(largest, pairs[i]);
+        }
+        if (largest < 0) {
+            return;
+        }
+        sequence.beginWrite();
+        try {
+            state.ensureNodes(largest + 1);
+        } finally {
+            sequence.endWrite();
+        }
+    }
+
+    private RuntimeException awaitDurability(long lsn, RuntimeException failure) {
+        if (lsn == NO_CHANGE) {
+            return failure;
+        }
+        try {
+            log.awaitDurable(lsn);
+            return failure;
+        } catch (RuntimeException e) {
+            if (failure == null) {
+                return e;
+            }
+            failure.addSuppressed(e);
+            return failure;
+        }
+    }
+
+    private long commitLocked(RecordBatch batch, boolean awaitDurable) {
+        reservation.prepare(batch);
+        sequence.beginWrite();
+        try {
+            reservation.reserve();
+        } finally {
+            sequence.endWrite();
+        }
+        long lsn = log.append(batch);
+        if (awaitDurable) {
+            log.awaitDurable(lsn);
+        }
+        sequence.beginWrite();
+        try {
+            applyBatch(batch);
+            appliedLsn = lsn;
+        } catch (RuntimeException | Error e) {
+            faulted = true;
+            throw e;
+        } finally {
+            sequence.endWrite();
+        }
+        return lsn;
+    }
+
+    private void applyBatch(RecordBatch batch) {
+        applyReader.wrap(batch.bytes(), 0, batch.size());
+        while (applyReader.hasRecord()) {
+            applier.apply(applyReader);
+            applyReader.advance();
+        }
+    }
+
+    private void checkpointLocked() {
+        log.force();
+        storage.checkpoint(this, log);
+    }
+
+    private void closeStorage() {
+        RuntimeException failure = null;
+        try {
+            checkpointLocked();
+        } catch (RuntimeException e) {
+            failure = e;
+        }
+        failure = closeQuietly(log::close, failure);
+        failure = closeQuietly(storage::close, failure);
+        if (failure != null) {
+            throw failure;
+        }
+    }
+
+    private static RuntimeException closeQuietly(Runnable action, RuntimeException failure) {
+        try {
+            action.run();
+            return failure;
+        } catch (RuntimeException e) {
+            if (failure == null) {
+                return e;
+            }
+            failure.addSuppressed(e);
+            return failure;
+        }
+    }
+
+    private long neighborAt(boolean outgoing, long node, int index) {
+        NodeIds.checkValid(node);
+        while (true) {
+            long started = sequence.beginRead();
+            EdgeTables tables = state.direct();
+            int degree = outgoing ? tables.degree(node) : tables.inDegree(node);
+            long key = NodeIds.NONE;
+            if (index >= 0 && index < degree) {
+                key = outgoing ? tables.outgoingKeyAt(node, index) : tables.incomingKeyAt(node, index);
+            }
+            if (sequence.validate(started)) {
+                Objects.checkIndex(index, degree);
+                return key;
+            }
+        }
+    }
+
     private int commonNeighborsOnce(long u, long v, long[] out) {
-        boolean uIsSmaller = outgoing.degreeOf(u) <= outgoing.degreeOf(v);
+        EdgeTables tables = state.direct();
+        boolean uIsSmaller = tables.degree(u) <= tables.degree(v);
         long smaller = uIsSmaller ? u : v;
         long larger = uIsSmaller ? v : u;
-        int smallerDegree = outgoing.degreeOf(smaller);
+        int smallerDegree = tables.degree(smaller);
         if (out.length < smallerDegree) {
             return KHopTraversal.OVERFLOW;
         }
         int count = 0;
         for (int i = 0; i < smallerDegree; i++) {
-            long candidate = outgoing.neighborAt(smaller, i);
-            if (outgoing.contains(larger, candidate)) {
+            long candidate = tables.outgoingKeyAt(smaller, i);
+            if (tables.contains(larger, candidate)) {
                 if (count == out.length) {
                     return KHopTraversal.OVERFLOW;
                 }
@@ -318,93 +579,28 @@ public final class GraphKernel implements AutoCloseable {
         return count;
     }
 
-    boolean isHighDegree(long u) {
-        return outgoing.isHighDegree(u);
-    }
-
-    boolean hasIncoming(long v, long u) {
-        return incoming.contains(v, u);
-    }
-
-    private long neighborAt(AdjacencyTable table, long node, int index) {
-        NodeIds.checkValid(node);
-        while (true) {
-            long started = beginRead();
-            int degree = table.degreeOf(node);
-            long neighbor = index >= 0 && index < degree ? table.neighborAt(node, index) : NodeIds.NONE;
-            if (endRead(started)) {
-                Objects.checkIndex(index, degree);
-                return neighbor;
-            }
+    private void requireOpen() {
+        if (closed) {
+            throw new IllegalStateException("graph is closed");
+        }
+        if (faulted) {
+            throw new IllegalStateException("the graph state is inconsistent with its log; reopen the graph");
         }
     }
 
-    private void beginWrite() {
-        SEQUENCE.set(this, (long) SEQUENCE.get(this) + 1);
-        VarHandle.releaseFence();
-    }
-
-    private void endWrite() {
-        VarHandle.releaseFence();
-        SEQUENCE.setRelease(this, (long) SEQUENCE.get(this) + 1);
-    }
-
-    private long beginRead() {
-        long started;
-        while (((started = (long) SEQUENCE.getAcquire(this)) & 1L) != 0) {
-            Thread.onSpinWait();
+    private void requireDurable(String operation) {
+        if (storage == null) {
+            throw new IllegalStateException("graph is in memory only and has nothing to " + operation);
         }
-        return started;
     }
 
-    private boolean endRead(long started) {
-        VarHandle.acquireFence();
-        return (long) SEQUENCE.get(this) == started;
-    }
-
-    private boolean insert(long u, long v) {
-        boolean added = outgoing.add(u, v);
-        if (added) {
-            boolean mirrored = incoming.add(v, u);
-            assert mirrored : "forward and backward tables diverged on add";
-        }
-        return added;
-    }
-
-    private boolean delete(long u, long v) {
-        boolean removed = outgoing.remove(u, v);
-        if (removed) {
-            boolean mirrored = incoming.remove(v, u);
-            assert mirrored : "forward and backward tables diverged on remove";
-        }
-        return removed;
-    }
-
-    private static long validatePairs(long[] pairs, int pairCount) {
+    private static void validatePairs(long[] pairs, int pairCount) {
         if (pairCount < 0 || 2L * pairCount > pairs.length) {
             throw new IllegalArgumentException(
                     "pair count " + pairCount + " does not fit a buffer of " + pairs.length + " longs");
         }
-        long largest = 0;
         for (int i = 0; i < 2 * pairCount; i++) {
             NodeIds.checkValid(pairs[i]);
-            largest = Math.max(largest, pairs[i]);
         }
-        return largest;
-    }
-
-    private void reserveHeadroom(long u, long v) {
-        outgoing.reserveForAdd(u);
-        incoming.reserveForAdd(v);
-    }
-
-    private void ensureCapacity(long requiredNodes) {
-        if (requiredNodes <= Math.min(outgoing.capacity(), incoming.capacity())) {
-            return;
-        }
-        int nodes = (int) requiredNodes;
-        budget.require(outgoing.bytesToHold(nodes) + incoming.bytesToHold(nodes));
-        outgoing.ensureCapacity(nodes);
-        incoming.ensureCapacity(nodes);
     }
 }

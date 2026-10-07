@@ -2,12 +2,7 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.symbols.StringInterner;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
-import io.nodusdb.kernel.wal.SymbolLog;
-
-import java.io.IOException;
-import java.io.UncheckedIOException;
 
 public final class GraphSession implements AutoCloseable {
 
@@ -15,26 +10,17 @@ public final class GraphSession implements AutoCloseable {
     private static final int MAX_BATCH_PAIRS = Integer.MAX_VALUE / 4;
 
     private final GraphKernel kernel;
-    private final StringInterner strings;
-    private final SymbolLog symbols;
-    private KeyKind keyKind;
-    private boolean symbolsFailed;
+    private final StringKeys strings;
     private boolean closed;
     private long[] results = new long[INITIAL_RESULT_CAPACITY];
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
     private long[] keyIds = new long[INITIAL_RESULT_CAPACITY];
 
     public GraphSession(GraphKernel kernel) {
-        this(kernel, new StringInterner(), null);
-    }
-
-    public GraphSession(GraphKernel kernel, StringInterner strings, SymbolLog symbols) {
         this.kernel = kernel;
-        this.strings = strings;
-        this.symbols = symbols;
-        this.keyKind = symbols == null ? KeyKind.UNSET : symbols.kind();
-        if (keyKind == KeyKind.UNSET && kernel.hasEdges()) {
-            claimKeys(KeyKind.INTEGER);
+        this.strings = new StringKeys(kernel);
+        if (kernel.keyKind() == KeyKind.UNSET && kernel.hasEdges()) {
+            kernel.claimKeyKind(KeyKind.INTEGER);
         }
     }
 
@@ -54,41 +40,31 @@ public final class GraphSession implements AutoCloseable {
             return;
         }
         closed = true;
-        try {
-            kernel.close();
-        } finally {
-            closeSymbols();
-        }
+        kernel.close();
     }
 
     public synchronized KeyKind keyKind() {
         requireOpen();
-        return keyKind;
+        return kernel.keyKind();
     }
 
     public synchronized KeyKind claimKeys(KeyKind wanted) {
         requireOpen();
-        if (keyKind == KeyKind.UNSET) {
-            if (symbols != null) {
-                persistKind(wanted);
-            }
-            keyKind = wanted;
+        if (kernel.keyKind() == KeyKind.UNSET) {
+            kernel.claimKeyKind(wanted);
         }
-        return keyKind;
+        return kernel.keyKind();
     }
 
     public synchronized long intern(byte[] utf8, int offset, int length) {
         requireOpen();
         requireStringKeys();
-        long before = strings.size();
-        long id = strings.intern(utf8, offset, length);
-        persistStrings(before);
-        return id;
+        return strings.intern(utf8, offset, length);
     }
 
     public synchronized long lookup(byte[] utf8, int offset, int length) {
         requireOpen();
-        if (keyKind == KeyKind.INTEGER) {
+        if (kernel.keyKind() == KeyKind.INTEGER) {
             throw new IllegalStateException("graph is keyed by integers");
         }
         return strings.lookup(utf8, offset, length);
@@ -109,17 +85,7 @@ public final class GraphSession implements AutoCloseable {
         if (keyIds.length < keys) {
             keyIds = new long[Math.max(keys, keyIds.length << 1)];
         }
-        long before = strings.size();
-        int cursor = 0;
-        for (int i = 0; i < keys; i++) {
-            int length = lengths[i];
-            if (length < 0 || length > utf8.length - cursor) {
-                throw new IllegalArgumentException("string lengths exceed the supplied bytes");
-            }
-            keyIds[i] = strings.intern(utf8, cursor, length);
-            cursor += length;
-        }
-        persistStrings(before);
+        strings.internAll(utf8, lengths, keys, keyIds);
         long[] staged = edgeBuffer(pairCount);
         System.arraycopy(keyIds, 0, staged, 0, keys);
         return kernel.addEdges(staged, pairCount);
@@ -205,43 +171,8 @@ public final class GraphSession implements AutoCloseable {
     }
 
     private void requireStringKeys() {
-        if (symbolsFailed) {
-            throw new IllegalStateException("the string table could not be saved; reopen the graph");
-        }
         if (claimKeys(KeyKind.STRING) != KeyKind.STRING) {
             throw new IllegalStateException("graph is keyed by integers");
-        }
-    }
-
-    private void persistStrings(long before) {
-        long after = strings.size();
-        if (symbols == null || after == before) {
-            return;
-        }
-        try {
-            symbols.append(strings, before, after);
-        } catch (IOException e) {
-            symbolsFailed = true;
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private void persistKind(KeyKind wanted) {
-        try {
-            symbols.setKind(wanted);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private void closeSymbols() {
-        if (symbols == null) {
-            return;
-        }
-        try {
-            symbols.close();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
         }
     }
 

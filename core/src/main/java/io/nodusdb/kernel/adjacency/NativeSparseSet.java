@@ -21,10 +21,6 @@ public final class NativeSparseSet {
         return pool.allocate(logWordsFor(capacity));
     }
 
-    void reserve(int capacity) {
-        pool.reserve(logWordsFor(capacity));
-    }
-
     int capacityOf(int handle) {
         int log = pool.logWordsOf(handle);
         return log < 0 ? 0 : 1 << (log - 1);
@@ -170,7 +166,7 @@ public final class NativeSparseSet {
         pool.set(handle, word, (current & ~mask) | ((position + 1L & 0xFFFF_FFFFL) << shift));
     }
 
-    private static int logWordsFor(int capacity) {
+    static int logWordsFor(int capacity) {
         checkCapacity(capacity);
         return Integer.numberOfTrailingZeros(Math.max(capacity, MIN_CAPACITY)) + 1;
     }

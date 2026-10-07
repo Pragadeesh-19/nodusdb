@@ -2,8 +2,8 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.memory.MemoryLimitExceededException;
-import io.nodusdb.kernel.wal.SyncMode;
-import io.nodusdb.kernel.wal.WalConfig;
+import io.nodusdb.log.LogConfig;
+import io.nodusdb.log.SyncMode;
 
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
@@ -66,7 +66,7 @@ public final class NodusCApi {
     @CEntryPoint(name = "nodus_open_durable")
     public static VoidPointer openDurable(IsolateThread thread, CCharPointer directory, int syncMode) {
         try {
-            WalConfig config = WalConfig.withSyncMode(SyncMode.fromCode(syncMode));
+            LogConfig config = LogConfig.withSyncMode(SyncMode.fromCode(syncMode));
             return WordFactory.pointer(SESSIONS.openDurable(Path.of(cString(directory)), config));
         } catch (IOException | RuntimeException e) {
             return WordFactory.nullPointer();
@@ -77,7 +77,7 @@ public final class NodusCApi {
     public static VoidPointer openDurableLimited(IsolateThread thread, CCharPointer directory, int syncMode,
                                                  long maxMemoryBytes, CIntPointer status) {
         try {
-            WalConfig config = WalConfig.withSyncMode(SyncMode.fromCode(syncMode));
+            LogConfig config = LogConfig.withSyncMode(SyncMode.fromCode(syncMode));
             VoidPointer handle = WordFactory.pointer(
                     SESSIONS.openDurable(Path.of(cString(directory)), config, maxMemoryBytes));
             report(status, OK);

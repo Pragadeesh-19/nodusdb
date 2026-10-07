@@ -9,11 +9,13 @@ public final class NativeBlockPool {
     static final int MIN_LOG_WORDS = Integer.numberOfTrailingZeros(LINE_WORDS);
     static final int MAX_LOG_WORDS = 30;
 
-    private static final int CLASS_COUNT = MAX_LOG_WORDS + 1;
+    public static final int CLASS_COUNT = MAX_LOG_WORDS + 1;
+
     private static final int INITIAL_WORDS = 1 << 10;
 
     private final NativeLongArray words;
     private final int[] freeHeads = new int[CLASS_COUNT];
+    private final int[] freeCounts = new int[CLASS_COUNT];
     private int top;
 
     public NativeBlockPool(Arena arena, MemoryBudget budget) {
@@ -25,6 +27,7 @@ public final class NativeBlockPool {
         int head = freeHeads[logWords];
         if (head != 0) {
             freeHeads[logWords] = (int) words.get(head);
+            freeCounts[logWords]--;
             words.set(head - 1, logWords);
             clear(head, logWords);
             return head;
@@ -37,10 +40,15 @@ public final class NativeBlockPool {
         return handle;
     }
 
-    public void reserve(int logWords) {
-        checkLogWords(logWords);
-        if (freeHeads[logWords] == 0) {
-            words.ensureCapacity(endOfBlock(nextHandle(), logWords));
+    public long bytesToReserveBlocks(int[] blocksByLogWords) {
+        long extraWords = freshWordsFor(blocksByLogWords);
+        return extraWords == 0 ? 0 : words.bytesToReach(wordsNeeded(extraWords));
+    }
+
+    public void reserveBlocks(int[] blocksByLogWords) {
+        long extraWords = freshWordsFor(blocksByLogWords);
+        if (extraWords > 0) {
+            words.ensureCapacity(wordsNeeded(extraWords));
         }
     }
 
@@ -52,6 +60,7 @@ public final class NativeBlockPool {
         words.set(handle - 1, ~log);
         words.set(handle, freeHeads[log]);
         freeHeads[log] = handle;
+        freeCounts[log]++;
     }
 
     public int logWordsOf(int handle) {
@@ -68,6 +77,25 @@ public final class NativeBlockPool {
 
     public void set(int handle, int offset, long value) {
         words.set(handle + offset, value);
+    }
+
+    private long freshWordsFor(int[] blocksByLogWords) {
+        long extraWords = 0;
+        for (int log = MIN_LOG_WORDS; log < blocksByLogWords.length && log <= MAX_LOG_WORDS; log++) {
+            int fresh = blocksByLogWords[log] - freeCounts[log];
+            if (fresh > 0) {
+                extraWords += (long) fresh * ((1L << log) + LINE_WORDS);
+            }
+        }
+        return extraWords;
+    }
+
+    private int wordsNeeded(long extraWords) {
+        long needed = (long) top + extraWords + LINE_WORDS;
+        if (needed > NativeLongArray.MAX_CAPACITY) {
+            throw new IllegalStateException("native block pool is full");
+        }
+        return (int) needed;
     }
 
     private int nextHandle() {

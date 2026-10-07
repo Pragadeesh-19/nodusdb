@@ -51,7 +51,7 @@ class AdjacencyTableDemotionBudgetTest {
         assertEquals(0, table.degreeOf(HUB));
         assertEquals(0, table.neighborsOf(HUB, new long[HUB_DEGREE]).length);
         for (int i = 0; i < HUB_DEGREE; i++) {
-            table.reserveForAdd(HUB);
+            reserveFor(table, HUB);
             assertTrue(table.add(HUB, FIRST_TARGET + i));
         }
 
@@ -59,6 +59,12 @@ class AdjacencyTableDemotionBudgetTest {
         for (int i = 0; i < HUB_DEGREE; i++) {
             assertTrue(table.contains(HUB, FIRST_TARGET + i));
         }
+    }
+
+    private static void reserveFor(AdjacencyTable table, long node) {
+        Headroom headroom = new Headroom();
+        table.accumulateHeadroom(node, 1, headroom);
+        table.reserve(headroom);
     }
 
     private static int DEMOTION_DEGREE() {
@@ -69,11 +75,11 @@ class AdjacencyTableDemotionBudgetTest {
         AdjacencyTable table = new AdjacencyTable(Arena.ofAuto(), budget);
         table.ensureCapacity(20);
         for (int i = 0; i < HUB_DEGREE; i++) {
-            table.reserveForAdd(HUB);
+            reserveFor(table, HUB);
             table.add(HUB, FIRST_TARGET + i);
         }
         for (int node = 1; node <= 16; node++) {
-            table.reserveForAdd(node);
+            reserveFor(table, node);
             table.add(node, 500 + node);
         }
         return table;

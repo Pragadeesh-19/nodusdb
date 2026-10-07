@@ -1,4 +1,4 @@
-package io.nodusdb.kernel.wal;
+package io.nodusdb.storage;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -9,8 +9,6 @@ import java.nio.file.StandardOpenOption;
 
 final class DirectoryLock implements AutoCloseable {
 
-    static final String FILE_NAME = "nodus.lock";
-
     private final FileChannel channel;
     private final FileLock lock;
 
@@ -19,8 +17,31 @@ final class DirectoryLock implements AutoCloseable {
         this.lock = lock;
     }
 
+    @FunctionalInterface
+    interface Action<T> {
+
+        T run() throws IOException;
+    }
+
+    static <T> T whileHeld(Path directory, Action<T> action) throws IOException {
+        DirectoryLock lock = acquire(directory);
+        T result;
+        try {
+            result = action.run();
+        } catch (IOException | RuntimeException e) {
+            try {
+                lock.close();
+            } catch (IOException suppressed) {
+                e.addSuppressed(suppressed);
+            }
+            throw e;
+        }
+        lock.close();
+        return result;
+    }
+
     static DirectoryLock acquire(Path directory) throws IOException {
-        FileChannel channel = FileChannel.open(directory.resolve(FILE_NAME),
+        FileChannel channel = FileChannel.open(directory.resolve(GraphFiles.LOCK),
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE);
         FileLock lock;
         try {

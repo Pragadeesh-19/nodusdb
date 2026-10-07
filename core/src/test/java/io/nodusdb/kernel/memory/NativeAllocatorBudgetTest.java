@@ -105,13 +105,13 @@ class NativeAllocatorBudgetTest {
     }
 
     @Test
-    void slabReserveBlockPreventsAChargeOnTheNextAllocation() {
+    void slabReservationPreventsAChargeOnTheNextAllocation() {
         MemoryBudget budget = MemoryBudget.unlimited();
         LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), budget, 2);
         slab.allocateBlock();
         slab.allocateBlock();
 
-        slab.reserveBlock();
+        slab.reserveAdditional(1);
         long reserved = budget.used();
         slab.allocateBlock();
 
@@ -119,25 +119,25 @@ class NativeAllocatorBudgetTest {
     }
 
     @Test
-    void slabReserveBlockIsRefusedWhenTheChunkDoesNotFit() {
+    void slabReservationIsRefusedWhenTheChunkDoesNotFit() {
         long firstChunk = 2L * LowDegreeSlab.BLOCK_SIZE * Long.BYTES + 2;
         MemoryBudget budget = MemoryBudget.limitedTo(firstChunk);
         LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), budget, 2);
         slab.allocateBlock();
         slab.allocateBlock();
 
-        assertThrows(MemoryLimitExceededException.class, slab::reserveBlock);
+        assertThrows(MemoryLimitExceededException.class, () -> slab.reserveAdditional(1));
 
         assertEquals(firstChunk, budget.used());
         assertEquals(2, slab.allocatedBlocks());
     }
 
     @Test
-    void poolReserveMakesTheNextAllocationFreeOfCharge() {
+    void poolReservationMakesTheNextAllocationFreeOfCharge() {
         MemoryBudget budget = MemoryBudget.unlimited();
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), budget);
 
-        pool.reserve(12);
+        pool.reserveBlocks(blocks(12));
         long reserved = budget.used();
         int handle = pool.allocate(12);
 
@@ -146,26 +146,39 @@ class NativeAllocatorBudgetTest {
     }
 
     @Test
-    void poolReserveWithAFreeBlockOfThatClassChargesNothing() {
+    void poolReservationCoversEveryAllocationWithinTheReservedWords() {
         MemoryBudget budget = MemoryBudget.unlimited();
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), budget);
-        int handle = pool.allocate(10);
-        pool.release(handle);
-        long before = budget.used();
+        int[] needed = blocks(12, 11, 5);
 
-        pool.reserve(10);
+        pool.reserveBlocks(needed);
+        long reserved = budget.used();
+        pool.allocate(12);
+        pool.allocate(11);
+        pool.allocate(5);
 
-        assertEquals(before, budget.used());
-        assertEquals(handle, pool.allocate(10));
+        assertEquals(reserved, budget.used());
     }
 
     @Test
-    void poolReserveIsRefusedWhenTheNextChunkDoesNotFit() {
+    void poolReservationIsPricedBeforeItIsMade() {
+        MemoryBudget budget = MemoryBudget.unlimited();
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), budget);
+        int[] needed = blocks(14);
+
+        long priced = pool.bytesToReserveBlocks(needed);
+        pool.reserveBlocks(needed);
+
+        assertEquals(priced, budget.used() - (1L << 10) * Long.BYTES);
+    }
+
+    @Test
+    void poolReservationIsRefusedWhenTheNextChunkDoesNotFit() {
         MemoryBudget budget = MemoryBudget.limitedTo(1_024L * Long.BYTES);
         NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), budget);
         int small = pool.allocate(3);
 
-        assertThrows(MemoryLimitExceededException.class, () -> pool.reserve(12));
+        assertThrows(MemoryLimitExceededException.class, () -> pool.reserveBlocks(blocks(12)));
         assertThrows(MemoryLimitExceededException.class, () -> pool.allocate(12));
 
         assertEquals(3, pool.logWordsOf(small));
@@ -182,5 +195,47 @@ class NativeAllocatorBudgetTest {
         table.ensureCapacity(10_000);
 
         assertEquals(predicted, budget.used() - before);
+    }
+
+    @Test
+    void poolReservationIsSatisfiedByFreeBlocksOfTheSameClass() {
+        MemoryBudget budget = MemoryBudget.unlimited();
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), budget);
+        int handle = pool.allocate(10);
+        pool.release(handle);
+        long before = budget.used();
+
+        assertEquals(0, pool.bytesToReserveBlocks(blocks(10)));
+        pool.reserveBlocks(blocks(10));
+
+        assertEquals(before, budget.used());
+        assertEquals(handle, pool.allocate(10));
+    }
+
+    @Test
+    void poolReservationOfNothingPricesNothing() {
+        NativeBlockPool pool = new NativeBlockPool(Arena.ofAuto(), MemoryBudget.unlimited());
+        pool.allocate(10);
+
+        assertEquals(0, pool.bytesToReserveBlocks(blocks()));
+    }
+
+    @Test
+    void slabReservationCountsFreeBlocksBeforeFreshOnes() {
+        LowDegreeSlab slab = new LowDegreeSlab(Arena.ofAuto(), MemoryBudget.unlimited(), 2);
+        int first = slab.allocateBlock();
+        slab.allocateBlock();
+        slab.freeBlock(first);
+
+        assertEquals(0, slab.bytesToReserve(1));
+        assertTrue(slab.bytesToReserve(2) > 0);
+    }
+
+    private static int[] blocks(int... logWords) {
+        int[] counts = new int[NativeBlockPool.CLASS_COUNT];
+        for (int log : logWords) {
+            counts[log]++;
+        }
+        return counts;
     }
 }

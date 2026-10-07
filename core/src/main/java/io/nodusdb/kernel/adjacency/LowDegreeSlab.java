@@ -114,10 +114,17 @@ public final class LowDegreeSlab {
         ensureCapacity(blocks);
     }
 
-    public void reserveBlock() {
-        if (freeHead == 0) {
-            ensureCapacity(nextFresh + 1);
-        }
+    public long bytesToReserve(int additionalBlocks) {
+        int target = nextFresh + freshBlocksFor(additionalBlocks);
+        return capacity >= target ? 0 : bytesToReach(target);
+    }
+
+    public void reserveAdditional(int additionalBlocks) {
+        ensureCapacity(nextFresh + freshBlocksFor(additionalBlocks));
+    }
+
+    private int freshBlocksFor(int additionalBlocks) {
+        return Math.max(0, additionalBlocks - freeCount);
     }
 
     public boolean canAllocateBlock() {

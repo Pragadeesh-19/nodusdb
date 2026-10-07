@@ -1,6 +1,7 @@
 package io.nodusdb.kernel.traversal;
 
 import io.nodusdb.kernel.adjacency.AdjacencyTable;
+import io.nodusdb.kernel.adjacency.EdgeKey;
 
 import java.util.Arrays;
 
@@ -50,7 +51,7 @@ public final class KHopTraversal {
                     continue;
                 }
                 for (int i = 0; i < degree; i++) {
-                    long neighbor = neighbors[i];
+                    long neighbor = EdgeKey.id(neighbors[i]);
                     if (neighbor < 0 || neighbor >= limit) {
                         continue;
                     }

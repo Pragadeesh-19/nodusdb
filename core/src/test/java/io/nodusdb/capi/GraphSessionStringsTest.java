@@ -2,7 +2,7 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.wal.WalConfig;
+import io.nodusdb.log.LogConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -76,7 +76,7 @@ class GraphSessionStringsTest {
     @Test
     void durableGraphRestoresStringIdsAndEdgesAfterReopen() throws IOException {
         GraphSessions sessions = new GraphSessions();
-        long handle = sessions.openDurable(directory, WalConfig.DEFAULT);
+        long handle = sessions.openDurable(directory, LogConfig.DEFAULT);
         GraphSession session = sessions.get(handle);
         long alice = session.intern(bytes("user:alice"), 0, 10);
         long admin = session.intern(bytes("role:admin"), 0, 10);
@@ -84,7 +84,7 @@ class GraphSessionStringsTest {
         sessions.close(handle);
 
         GraphSessions reopenedSessions = new GraphSessions();
-        long reopenedHandle = reopenedSessions.openDurable(directory, WalConfig.DEFAULT);
+        long reopenedHandle = reopenedSessions.openDurable(directory, LogConfig.DEFAULT);
         GraphSession reopened = reopenedSessions.get(reopenedHandle);
 
         assertEquals(KeyKind.STRING, reopened.keyKind());
@@ -97,12 +97,12 @@ class GraphSessionStringsTest {
     @Test
     void integerGraphKeepsItsKindAcrossReopen() throws IOException {
         GraphSessions sessions = new GraphSessions();
-        long handle = sessions.openDurable(directory, WalConfig.DEFAULT);
+        long handle = sessions.openDurable(directory, LogConfig.DEFAULT);
         sessions.get(handle).claimKeys(KeyKind.INTEGER);
         sessions.close(handle);
 
         GraphSessions reopenedSessions = new GraphSessions();
-        long reopenedHandle = reopenedSessions.openDurable(directory, WalConfig.DEFAULT);
+        long reopenedHandle = reopenedSessions.openDurable(directory, LogConfig.DEFAULT);
         GraphSession reopened = reopenedSessions.get(reopenedHandle);
 
         assertEquals(KeyKind.INTEGER, reopened.keyKind());
@@ -123,7 +123,7 @@ class GraphSessionStringsTest {
     @Test
     void hundredThousandStringsSurviveReopen() throws IOException {
         GraphSessions sessions = new GraphSessions();
-        long handle = sessions.openDurable(directory, WalConfig.DEFAULT);
+        long handle = sessions.openDurable(directory, LogConfig.DEFAULT);
         GraphSession session = sessions.get(handle);
         Set<Long> ids = new HashSet<>();
         for (int i = 0; i < 100_000; i++) {
@@ -133,7 +133,7 @@ class GraphSessionStringsTest {
         sessions.close(handle);
 
         GraphSessions reopenedSessions = new GraphSessions();
-        long reopenedHandle = reopenedSessions.openDurable(directory, WalConfig.DEFAULT);
+        long reopenedHandle = reopenedSessions.openDurable(directory, LogConfig.DEFAULT);
         GraphSession reopened = reopenedSessions.get(reopenedHandle);
         assertEquals(100_000, ids.size());
         for (int i = 0; i < 100_000; i++) {

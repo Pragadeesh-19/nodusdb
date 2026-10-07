@@ -1,4 +1,4 @@
-package io.nodusdb.kernel.wal;
+package io.nodusdb.storage;
 
 import io.nodusdb.kernel.GraphKernel;
 

@@ -10,6 +10,7 @@ public final class AdjacencyTable {
     public static final int MAX_LOW_DEGREE = 15;
     public static final int PROMOTED_CAPACITY = 16;
     public static final int DEMOTION_DEGREE = 8;
+    private static final long MAX_SET_CAPACITY = 1L << 29;
 
     private static final int INITIAL_NODES = 16;
     private static final long[] NO_NEIGHBORS = new long[0];
@@ -38,19 +39,28 @@ public final class AdjacencyTable {
         return nodes.bytesToHold(nodeCount);
     }
 
-    public void reserveForAdd(long node) {
+    public void accumulateHeadroom(long node, int additions, Headroom headroom) {
         long slot = nodes.read(slotOf(node));
-        int degree = NodeTable.degreeOf(slot);
+        long finalDegree = (long) NodeTable.degreeOf(slot) + additions;
         if (NodeTable.isSet(slot)) {
-            int handle = NodeTable.handleOf(slot);
-            if (degree == sets.capacityOf(handle)) {
-                sets.reserve(2 * degree);
+            int capacity = sets.capacityOf(NodeTable.handleOf(slot));
+            if (finalDegree > capacity) {
+                addGrowth(headroom, capacity * 2L, finalDegree);
             }
-        } else if (degree == MAX_LOW_DEGREE) {
-            sets.reserve(PROMOTED_CAPACITY);
-        } else if (NodeTable.blockOf(slot) == NodeTable.NO_BLOCK) {
-            slab.reserveBlock();
+        } else if (finalDegree > MAX_LOW_DEGREE) {
+            addGrowth(headroom, PROMOTED_CAPACITY, finalDegree);
+        } else if (NodeTable.blockOf(slot) == NodeTable.NO_BLOCK && additions > 0) {
+            headroom.addSlabBlocks(1);
         }
+    }
+
+    public long bytesToReserve(Headroom headroom) {
+        return pool.bytesToReserveBlocks(headroom.poolBlocks()) + slab.bytesToReserve(headroom.slabBlocks());
+    }
+
+    public void reserve(Headroom headroom) {
+        pool.reserveBlocks(headroom.poolBlocks());
+        slab.reserveAdditional(headroom.slabBlocks());
     }
 
     public int degreeOf(long node) {
@@ -190,6 +200,18 @@ public final class AdjacencyTable {
             return;
         }
         sets.fill(NodeTable.handleOf(slot), neighbors, degree);
+    }
+
+    private static void addGrowth(Headroom headroom, long firstCapacity, long finalDegree) {
+        for (long capacity = firstCapacity; ; capacity *= 2) {
+            if (capacity > MAX_SET_CAPACITY) {
+                throw new IllegalStateException("native block pool is full");
+            }
+            headroom.addPoolBlock(NativeSparseSet.logWordsFor((int) capacity));
+            if (capacity >= finalDegree) {
+                return;
+            }
+        }
     }
 
     private int promote(int block, long neighbor) {

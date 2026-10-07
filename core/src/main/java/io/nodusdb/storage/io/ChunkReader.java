@@ -1,18 +1,18 @@
-package io.nodusdb.kernel.wal;
+package io.nodusdb.storage.io;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 
-final class ChunkReader {
+public final class ChunkReader {
 
     private final FileChannel channel;
     private final long end;
     private final ByteBuffer buffer;
     private long bufferStart;
 
-    ChunkReader(FileChannel channel, long start, long end, int chunkBytes) {
+    public ChunkReader(FileChannel channel, long start, long end, int chunkBytes) {
         this.channel = channel;
         this.end = end;
         this.buffer = ByteBuffer.allocateDirect(chunkBytes).order(ByteOrder.BIG_ENDIAN);
@@ -20,15 +20,15 @@ final class ChunkReader {
         this.bufferStart = start;
     }
 
-    long offset() {
+    public long offset() {
         return bufferStart + buffer.position();
     }
 
-    ByteBuffer readable() {
+    public ByteBuffer readable() {
         return buffer;
     }
 
-    void skip(long bytes) {
+    public void skip(long bytes) {
         long target = offset() + bytes;
         if (target <= bufferStart + buffer.limit()) {
             buffer.position((int) (target - bufferStart));
@@ -39,7 +39,7 @@ final class ChunkReader {
         buffer.limit(0);
     }
 
-    boolean ensure(int bytes) throws IOException {
+    public boolean ensure(int bytes) throws IOException {
         if (buffer.remaining() < bytes) {
             refill(bytes);
         }

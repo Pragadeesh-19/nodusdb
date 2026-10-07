@@ -1,9 +1,8 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
-import io.nodusdb.kernel.symbols.StringInterner;
-import io.nodusdb.kernel.wal.SymbolLog;
-import io.nodusdb.kernel.wal.WalConfig;
+import io.nodusdb.log.LogConfig;
+import io.nodusdb.storage.DurableGraph;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -20,33 +19,13 @@ public final class GraphSessions {
         return table.open(new GraphSession(new GraphKernel(maxMemoryBytes)));
     }
 
-    public long openDurable(Path directory, WalConfig config) throws IOException {
+    public long openDurable(Path directory, LogConfig config) throws IOException {
         return openDurable(directory, config, GraphKernel.NO_MEMORY_LIMIT);
     }
 
-    public long openDurable(Path directory, WalConfig config, long maxMemoryBytes) throws IOException {
-        GraphKernel kernel = GraphKernel.open(directory, config, maxMemoryBytes);
-        SymbolLog symbols = null;
-        try {
-            StringInterner strings = new StringInterner();
-            symbols = SymbolLog.open(directory.resolve(SymbolLog.FILE), strings);
-            return table.open(new GraphSession(kernel, strings, symbols));
-        } catch (IOException | RuntimeException e) {
-            releaseQuietly(symbols, kernel, e);
-            throw e;
-        }
-    }
-
-    private static void releaseQuietly(SymbolLog symbols, GraphKernel kernel, Exception cause) {
-        try {
-            if (symbols != null) {
-                symbols.close();
-            }
-        } catch (IOException e) {
-            cause.addSuppressed(e);
-        } finally {
-            kernel.close();
-        }
+    public long openDurable(Path directory, LogConfig config, long maxMemoryBytes) throws IOException {
+        GraphKernel kernel = DurableGraph.open(directory, config, maxMemoryBytes).kernel();
+        return table.open(new GraphSession(kernel));
     }
 
     public GraphSession get(long handle) {
