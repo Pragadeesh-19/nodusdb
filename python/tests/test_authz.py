@@ -148,11 +148,14 @@ class AuthzTest(unittest.TestCase):
         for index in range(50):
             self.graph.add_tuple(f"document:d{index}", "viewer", "user:alice")
         failures = []
+        readers = 4
         writing = threading.Event()
         writing.set()
+        started = threading.Barrier(readers + 1, timeout=60)
 
         def writer():
             try:
+                started.wait()
                 for round_number in range(300):
                     self.graph.add_tuple(f"document:w{round_number % 20}", "viewer", "user:bob")
                     self.graph.remove_tuple(f"document:w{round_number % 20}", "viewer", "user:bob")
@@ -161,18 +164,24 @@ class AuthzTest(unittest.TestCase):
             finally:
                 writing.clear()
 
+        def check_everything():
+            for index in range(50):
+                if not self.graph.check(f"document:d{index}", "view", "user:alice"):
+                    raise AssertionError(f"alice lost access to document:d{index}")
+                if self.graph.check(f"document:d{index}", "view", "user:mallory"):
+                    raise AssertionError("mallory gained access")
+
         def reader():
             try:
+                check_everything()
+                started.wait()
                 while writing.is_set():
-                    for index in range(50):
-                        if not self.graph.check(f"document:d{index}", "view", "user:alice"):
-                            raise AssertionError(f"alice lost access to document:d{index}")
-                        if self.graph.check(f"document:d{index}", "view", "user:mallory"):
-                            raise AssertionError("mallory gained access")
+                    check_everything()
             except Exception as error:
                 failures.append(error)
+                started.abort()
 
-        threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(4)]
+        threads = [threading.Thread(target=writer)] + [threading.Thread(target=reader) for _ in range(readers)]
         for thread in threads:
             thread.start()
         for thread in threads:

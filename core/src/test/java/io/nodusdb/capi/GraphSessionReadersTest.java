@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -36,18 +37,21 @@ class GraphSessionReadersTest {
             }
         }
         AtomicBoolean stop = new AtomicBoolean();
+        CountDownLatch writing = new CountDownLatch(1);
         ExecutorService pool = Executors.newFixedThreadPool(READERS + 1);
         try {
             Future<?> writer = pool.submit(() -> {
                 for (long i = 0; !stop.get(); i++) {
                     session.addEdge(900_000L + (i % 500), 900_001L + (i % 500));
                     session.removeEdge(900_000L + (i % 500), 900_001L + (i % 500));
+                    writing.countDown();
                 }
             });
             List<Future<Integer>> readers = new ArrayList<>();
             for (int r = 0; r < READERS; r++) {
                 int chain = r;
                 readers.add(pool.submit(() -> {
+                    assertTrue(writing.await(TIMEOUT_SECONDS, TimeUnit.SECONDS), "the writer never started");
                     long[] expected = new long[CHAIN_LENGTH];
                     for (int position = 0; position < CHAIN_LENGTH; position++) {
                         expected[position] = chainNode(chain, position + 1);
