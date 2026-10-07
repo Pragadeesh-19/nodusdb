@@ -19,6 +19,8 @@ final class WriteReservation {
     private final Headroom directInHeadroom = new Headroom();
     private final Headroom indirectOutHeadroom = new Headroom();
     private final Headroom indirectInHeadroom = new Headroom();
+    private final Headroom singleOutgoing = new Headroom();
+    private final Headroom singleIncoming = new Headroom();
     private long largestNode;
     private int newSymbols;
     private long newSymbolBytes;
@@ -26,6 +28,19 @@ final class WriteReservation {
 
     WriteReservation(GraphState state) {
         this.state = state;
+    }
+
+    boolean needsNoGrowth(int object, int relation, int subjectRelation, int subject) {
+        EdgeTables tables = state.tables(state.partitionOf(relation, subjectRelation));
+        if (tables == null || Math.max(object, subject) >= tables.capacity()) {
+            return false;
+        }
+        singleOutgoing.clear();
+        singleIncoming.clear();
+        tables.accumulateOutgoing(object, 1, singleOutgoing);
+        tables.accumulateIncoming(subject, 1, singleIncoming);
+        return singleOutgoing.isEmpty() && singleIncoming.isEmpty()
+                || tables.bytesToReserve(singleOutgoing, singleIncoming) == 0;
     }
 
     void prepare(RecordBatch batch) {

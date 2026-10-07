@@ -411,16 +411,39 @@ public final class GraphKernel implements AutoCloseable {
         writer.lock();
         try {
             requireOpen();
-            boolean add = type == RecordType.TUPLE_ADD;
-            if (add == probeTuple(object, relation, subjectRelation, subject)) {
-                return UNCHANGED;
-            }
-            scratch.clear();
-            scratch.autocommitTuple(type, object, relation, subjectRelation, subject);
-            return commitLocked(scratch, awaitDurable);
+            return writeSingleLocked(type, object, relation, subjectRelation, subject, awaitDurable);
         } finally {
             writer.unlock();
         }
+    }
+
+    private long writeSingleLocked(RecordType type, int object, int relation, int subjectRelation, int subject,
+                                   boolean awaitDurable) {
+        boolean add = type == RecordType.TUPLE_ADD;
+        if (add == probeTuple(object, relation, subjectRelation, subject)) {
+            return UNCHANGED;
+        }
+        scratch.clear();
+        scratch.autocommitTuple(type, object, relation, subjectRelation, subject);
+        if (add && !reservation.needsNoGrowth(object, relation, subjectRelation, subject)) {
+            return commitLocked(scratch, awaitDurable);
+        }
+        long lsn = journal(scratch, awaitDurable);
+        sequence.beginWrite();
+        try {
+            if (add) {
+                applier.applyAbsentAddition(object, relation, subjectRelation, subject);
+            } else {
+                applier.applyTuple(false, object, relation, subjectRelation, subject);
+            }
+            appliedLsn = lsn;
+        } catch (RuntimeException | Error e) {
+            faulted = true;
+            throw e;
+        } finally {
+            sequence.endWrite();
+        }
+        return lsn;
     }
 
     private int writePairs(RecordType type, long[] pairs, int pairCount) {
@@ -435,7 +458,7 @@ public final class GraphKernel implements AutoCloseable {
                     reserveNodes(pairs, pairCount);
                 }
                 for (int i = 0; i < pairCount; i++) {
-                    long lsn = writeSingle(type, (int) pairs[2 * i], 0, 0, (int) pairs[2 * i + 1], false);
+                    long lsn = writeSingleLocked(type, (int) pairs[2 * i], 0, 0, (int) pairs[2 * i + 1], false);
                     if (lsn != UNCHANGED) {
                         changed++;
                         lastLsn = lsn;
@@ -494,10 +517,7 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
-        long lsn = log.append(batch);
-        if (awaitDurable) {
-            log.awaitDurable(lsn);
-        }
+        long lsn = journal(batch, awaitDurable);
         sequence.beginWrite();
         try {
             applyBatch(batch);
@@ -507,6 +527,14 @@ public final class GraphKernel implements AutoCloseable {
             throw e;
         } finally {
             sequence.endWrite();
+        }
+        return lsn;
+    }
+
+    private long journal(RecordBatch batch, boolean awaitDurable) {
+        long lsn = log.append(batch);
+        if (awaitDurable) {
+            log.awaitDurable(lsn);
         }
         return lsn;
     }

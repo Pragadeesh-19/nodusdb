@@ -56,12 +56,16 @@ public final class EdgeTables {
     }
 
     public boolean add(long object, long objectKey, long subject, long subjectKey) {
-        boolean added = outgoing.add(object, objectKey);
-        if (added) {
-            boolean mirrored = incoming.add(subject, subjectKey);
-            assert mirrored : "outgoing and incoming tables diverged on add";
+        if (!outgoing.add(object, objectKey)) {
+            return false;
         }
-        return added;
+        incoming.addAbsent(subject, subjectKey);
+        return true;
+    }
+
+    public void addAbsent(long object, long objectKey, long subject, long subjectKey) {
+        outgoing.addAbsent(object, objectKey);
+        incoming.addAbsent(subject, subjectKey);
     }
 
     public boolean remove(long object, long objectKey, long subject, long subjectKey) {

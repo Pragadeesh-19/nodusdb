@@ -112,6 +112,12 @@ public final class AdjacencyTable {
         if (contains(node, neighbor)) {
             return false;
         }
+        addAbsent(node, neighbor);
+        return true;
+    }
+
+    public void addAbsent(long node, long neighbor) {
+        assert !contains(node, neighbor) : "the neighbor is already present";
         int n = (int) node;
         long slot = nodes.read(n);
         int degree = NodeTable.degreeOf(slot);
@@ -122,19 +128,18 @@ public final class AdjacencyTable {
             }
             sets.append(handle, degree, neighbor);
             nodes.writeSet(n, degree + 1, handle);
-            return true;
+            return;
         }
         int block = NodeTable.blockOf(slot);
         if (degree == MAX_LOW_DEGREE) {
             nodes.writeSet(n, degree + 1, promote(block, neighbor));
-            return true;
+            return;
         }
         if (block == NodeTable.NO_BLOCK) {
             block = slab.allocateBlock();
         }
         slab.set(block, degree, neighbor);
         nodes.write(n, degree + 1, block);
-        return true;
     }
 
     public boolean remove(long node, long neighbor) {

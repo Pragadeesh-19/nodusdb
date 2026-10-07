@@ -31,10 +31,10 @@ final class RecordApplier {
     }
 
     private void applyTuple(RecordReader record, boolean add) {
-        int object = record.object();
-        int relation = record.relation();
-        int subjectRelation = record.subjectRelation();
-        int subject = record.subject();
+        applyTuple(add, record.object(), record.relation(), record.subjectRelation(), record.subject());
+    }
+
+    void applyTuple(boolean add, int object, int relation, int subjectRelation, int subject) {
         long objectKey = EdgeKey.pack(relation, subjectRelation, subject);
         long subjectKey = EdgeKey.pack(relation, subjectRelation, object);
         Partition partition = state.partitionOf(relation, subjectRelation);
@@ -48,6 +48,13 @@ final class RecordApplier {
         if (tables != null) {
             tables.remove(object, objectKey, subject, subjectKey);
         }
+    }
+
+    void applyAbsentAddition(int object, int relation, int subjectRelation, int subject) {
+        EdgeTables tables = state.tables(state.partitionOf(relation, subjectRelation));
+        assert tables != null && Math.max(object, subject) < tables.capacity() : "the nodes were not reserved";
+        tables.addAbsent(object, EdgeKey.pack(relation, subjectRelation, subject), subject,
+                EdgeKey.pack(relation, subjectRelation, object));
     }
 
     private void applySymbol(RecordReader record) {
