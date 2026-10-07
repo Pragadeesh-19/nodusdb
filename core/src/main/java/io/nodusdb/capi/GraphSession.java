@@ -2,8 +2,8 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.OutputBufferTooSmallException;
-import io.nodusdb.kernel.StringInterner;
+import io.nodusdb.kernel.symbols.StringInterner;
+import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.kernel.wal.SymbolLog;
 
 import java.io.IOException;

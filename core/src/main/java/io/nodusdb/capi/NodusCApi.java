@@ -1,9 +1,10 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.MemoryLimitExceededException;
+import io.nodusdb.kernel.memory.MemoryLimitExceededException;
 import io.nodusdb.kernel.wal.SyncMode;
 import io.nodusdb.kernel.wal.WalConfig;
+
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;

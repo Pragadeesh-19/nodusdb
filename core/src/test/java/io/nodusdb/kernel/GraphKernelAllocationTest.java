@@ -28,8 +28,6 @@ class GraphKernelAllocationTest {
 
         runRounds(kernel, buffer, WARMUP_ROUNDS);
         long steadyState = Long.MAX_VALUE;
-        // A deoptimization of the OSR-compiled loop rebuilds scalar-replaced objects on the heap, so
-        // a window can count JIT work. Measure until one window is clean; a real allocation would fail every window.
         for (int window = 0; window < MAX_MEASURED_WINDOWS && steadyState != 0; window++) {
             steadyState = measuredAllocation(bean, threadId, kernel, buffer);
         }

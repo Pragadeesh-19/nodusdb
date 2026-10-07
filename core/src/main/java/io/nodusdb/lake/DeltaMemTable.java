@@ -4,22 +4,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.util.Objects;
 
-/*
- * Columnar write absorber keyed by a 64-bit key hash. Rows 0..rowCount-1 are always dense.
- *
- *   keyHashes          [k0 k1 k2 ... k(n-1) | free ]     native, 64-byte aligned
- *   rowKinds           [INSERT/TOMBSTONE per row | free ]
- *   longColumns[c]     [v0 v1 v2 ... v(n-1) | free ]     doubles are stored as raw bits
- *   intColumns[c]      [i0 i1 i2 ... i(n-1) | free ]
- *   varCharOffsets[c]  [o0 o1 o2 ... o(n-1) | free ]     -> position in varCharSlab
- *   varCharLengths[c]  [l0 l1 l2 ... l(n-1) | free ]
- *   varCharSlab        [ live bytes ... | dead bytes | free ]
- *   index              keyHash -> row, the only structure that maps keys to rows
- *
- * upsert writes an INSERT row. tombstone marks a key as deleted without removing it, so that
- * the deletion can be written to a delete file if an older committed row exists. delete removes
- * the row outright, with swap-and-pop across every column.
- */
 public final class DeltaMemTable implements AutoCloseable {
 
     public static final int ABSENT = -1;

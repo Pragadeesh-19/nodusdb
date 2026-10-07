@@ -1,7 +1,7 @@
 package io.nodusdb.kernel.wal;
 
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.StringInterner;
+import io.nodusdb.kernel.symbols.StringInterner;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -16,16 +16,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.zip.CRC32C;
 
-/*
- * Durable record of the string table, kept beside the graph log.
- *
- *   header   [ "NSYM" | version u8 | key kind u8 | reserved u16 ]     8 bytes
- *   record   [ length u32 | crc32c u32 | utf8 bytes ]                  repeated
- *
- * Records are written in id order, so replaying them rebuilds the same ids. A record is forced to
- * disk before any edge that uses its id is written, so an edge never refers to a string that is not
- * on disk. A torn final record is truncated, because no edge can depend on it.
- */
 public final class SymbolLog implements AutoCloseable {
 
     public static final String FILE = "symbols.nodus";

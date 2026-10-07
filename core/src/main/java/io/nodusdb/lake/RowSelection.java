@@ -3,9 +3,6 @@ package io.nodusdb.lake;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/*
- * The memtable rows a flush writes, as native 32-bit row numbers in the order they are written.
- */
 final class RowSelection implements AutoCloseable {
 
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;

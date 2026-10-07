@@ -1,17 +1,18 @@
 package io.nodusdb.kernel.wal;
 
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.StringInterner;
+import io.nodusdb.kernel.symbols.StringInterner;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.zip.CRC32C;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;

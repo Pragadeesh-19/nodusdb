@@ -4,12 +4,6 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.nio.ByteOrder;
 
-/*
- * Snappy block compressor over native memory. Input is a segment and output is appended to a
- * NativeSink. The match table lives in native memory and is reused across calls, so
- * compressing a page allocates no Java memory. Table entries hold position + 1, so a zeroed
- * table means no candidate.
- */
 final class SnappyCompressor implements AutoCloseable {
 
     private static final int MIN_MATCH = 4;

@@ -5,20 +5,6 @@ import java.lang.foreign.ValueLayout;
 import java.util.ArrayList;
 import java.util.List;
 
-/*
- * One column chunk: an optional dictionary page, then one data page, each compressed with the codec.
- *
- *   chunk := [dictionary page header][dictionary body]   (only when dictionary-encoded)
- *            [data page header][data body]
- *   dictionary payload := PLAIN distinct values
- *   data payload       := RLE_DICTIONARY indices, or PLAIN values
- *
- * Inputs and payloads are native segments. Values are little-endian in memory, which holds on
- * every platform the writer supports. A column is dictionary-encoded only when the dictionary and
- * its indices are smaller than the plain values, and it has at most MAX_DICTIONARY_VALUES distinct
- * entries. Pages stay valid until the next encode call on the same encoder, so the caller writes a
- * chunk before encoding the next one.
- */
 final class ColumnChunkEncoder implements AutoCloseable {
 
     static final int MAX_DICTIONARY_VALUES = 1 << 16;

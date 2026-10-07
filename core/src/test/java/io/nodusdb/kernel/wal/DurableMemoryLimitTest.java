@@ -1,7 +1,8 @@
 package io.nodusdb.kernel.wal;
 
 import io.nodusdb.kernel.GraphKernel;
-import io.nodusdb.kernel.MemoryLimitExceededException;
+import io.nodusdb.kernel.memory.MemoryLimitExceededException;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

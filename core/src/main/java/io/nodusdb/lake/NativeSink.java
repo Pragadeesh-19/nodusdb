@@ -3,11 +3,6 @@ package io.nodusdb.lake;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/*
- * Append-only byte output in native memory. Encoders write their pages here, and the file
- * writer reads them back as a segment without copying. reset keeps the buffer for reuse, so
- * a segment returned by segment() is valid until the next reset or append that grows it.
- */
 final class NativeSink implements AutoCloseable {
 
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;

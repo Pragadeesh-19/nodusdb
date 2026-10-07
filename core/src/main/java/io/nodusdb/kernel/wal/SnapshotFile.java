@@ -17,19 +17,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.zip.CRC32;
 
-/*
- * Snapshot layout, version 2. Each section lists every node in id order:
- *
- *   header    magic "NODS" | version 2 | reserved | nodeCapacity | edgeCount | created
- *   forward   for node in [0, nodeCapacity):  degree (int) | neighbors (long x degree)
- *   backward  for node in [0, nodeCapacity):  degree (int) | neighbors (long x degree)
- *   trailer   CRC32 over every byte before it
- *
- * Both sections are written from the live kernel, so the loader builds each
- * node at its exact degree and never has to scatter edges into place.
- * Version 1 files hold only the forward section and still load through the
- * edge-by-edge path.
- */
 final class SnapshotFile {
 
     static final int MAGIC = 0x4E4F4453;

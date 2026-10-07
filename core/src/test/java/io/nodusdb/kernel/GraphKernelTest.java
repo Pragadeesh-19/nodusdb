@@ -1,5 +1,7 @@
 package io.nodusdb.kernel;
 
+import io.nodusdb.kernel.adjacency.AdjacencyTable;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Set;

@@ -1,6 +1,7 @@
 package io.nodusdb.lake;
 
-import io.nodusdb.kernel.OpenAddressing;
+import io.nodusdb.kernel.index.OpenAddressing;
+
 import org.junit.jupiter.api.Test;
 
 import java.lang.foreign.ValueLayout;

@@ -3,11 +3,6 @@ package io.nodusdb.lake;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/*
- * Native staging area for one row of a columnar batch. The memtable reads the staged row
- * directly, so a batch never costs a Java array per row. Staging is per call, which keeps
- * concurrent batches independent.
- */
 final class RowBuffer implements AutoCloseable {
 
     private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;

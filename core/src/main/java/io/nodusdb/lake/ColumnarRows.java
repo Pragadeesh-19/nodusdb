@@ -4,13 +4,6 @@ import java.lang.foreign.MemorySegment;
 import java.util.List;
 import java.util.Objects;
 
-/*
- * Column-oriented input for LakeTable.upsertColumns, as segments the caller owns. Each
- * variable-width column follows Arrow's layout: value i of a column spans bytes
- * [offsets[i], offsets[i + 1]) of its data segment. Offsets are absolute positions in that
- * data, so a slice of a larger buffer needs no copy. Segments may be native memory, so the
- * table reads them in place and never builds a Java array from them.
- */
 public record ColumnarRows(int rowCount, MemorySegment keys, List<MemorySegment> longColumns,
                            List<MemorySegment> intColumns, List<MemorySegment> varCharOffsets,
                            List<MemorySegment> varCharData) {

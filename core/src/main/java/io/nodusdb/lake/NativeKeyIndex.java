@@ -1,21 +1,10 @@
 package io.nodusdb.lake;
 
-import io.nodusdb.kernel.OpenAddressing;
+import io.nodusdb.kernel.index.OpenAddressing;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/*
- * Membership index from key hash to row, stored in native memory. The index holds row
- * positions only. Keys live in the memtable's key column, so a probe reads the slot's row
- * and compares keys[row] with the key. Slots store row + 1 so zeroed memory is an empty table.
- *
- *   keys    [ k0 | k1 | k2 | ... ]                   owned by the memtable
- *   slots   [ 0 | 2 | 0 | 1 | ... ]                  slot -> row + 1, 0 when empty
- *
- * Deletion uses backward shift, so the table never holds tombstones. The load factor stays
- * at or below one half, and the table doubles on insert when it would exceed that.
- */
 final class NativeKeyIndex implements AutoCloseable {
 
     static final int ABSENT = -1;

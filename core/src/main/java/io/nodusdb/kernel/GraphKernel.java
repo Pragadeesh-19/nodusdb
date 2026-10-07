@@ -1,5 +1,10 @@
 package io.nodusdb.kernel;
 
+import io.nodusdb.kernel.adjacency.AdjacencyTable;
+import io.nodusdb.kernel.memory.MemoryBudget;
+import io.nodusdb.kernel.memory.MemoryLimitExceededException;
+import io.nodusdb.kernel.traversal.KHopTraversal;
+import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.kernel.wal.RecoveryManager;
 import io.nodusdb.kernel.wal.WalConfig;
 
@@ -37,10 +42,6 @@ public final class GraphKernel implements AutoCloseable {
         this(NO_MEMORY_LIMIT);
     }
 
-    /*
-     * maxMemoryBytes caps the native memory the graph storage allocates, or is NO_MEMORY_LIMIT.
-     * A write that would pass the cap throws MemoryLimitExceededException and changes nothing.
-     */
     public GraphKernel(long maxMemoryBytes) {
         if (maxMemoryBytes < NO_MEMORY_LIMIT) {
             throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
@@ -245,12 +246,6 @@ public final class GraphKernel implements AutoCloseable {
         return neighborAt(incoming, v, index);
     }
 
-    /*
-     * Bulk load, in two steps. prepareBulkLoad runs once on one thread and sizes
-     * every node. loadBulkNode then fills nodes, and calls for distinct nodes may
-     * run in parallel. Neither step takes the write sequence, so the kernel must
-     * not be shared with readers until every fill has returned.
-     */
     public void prepareBulkLoad(int[] forwardDegrees, int[] backwardDegrees) {
         if (forwardDegrees.length != backwardDegrees.length) {
             throw new IllegalArgumentException("degree arrays differ in length");

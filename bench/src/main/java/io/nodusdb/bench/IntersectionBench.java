@@ -1,6 +1,7 @@
 package io.nodusdb.bench;
 
-import io.nodusdb.kernel.IndexedSparseSet;
+import io.nodusdb.kernel.index.IndexedSparseSet;
+
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;

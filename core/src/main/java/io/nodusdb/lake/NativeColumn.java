@@ -4,17 +4,6 @@ import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-/*
- * A growable byte buffer in native memory. Capacity is a power of two and the first byte
- * sits on a 64-byte cache line. Growth copies the live contents into a new buffer, so a
- * segment read before a growth must not be used after it.
- *
- * Memory comes from GC-managed arenas and is reclaimed once no segment refers to it. Shared
- * arenas cannot be used because GraalVM native image does not support closing them. close()
- * drops the segment, so any later access fails instead of reading freed memory.
- *
- *   segment   [ ... contents ... | zeroed spare ]   byteSize() == capacity()
- */
 final class NativeColumn implements AutoCloseable {
 
     static final long ALIGNMENT = 64;

@@ -1,7 +1,7 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
-import io.nodusdb.kernel.StringInterner;
+import io.nodusdb.kernel.symbols.StringInterner;
 import io.nodusdb.kernel.wal.SymbolLog;
 import io.nodusdb.kernel.wal.WalConfig;
 
