@@ -7,6 +7,8 @@ import threading
 import warnings
 from pathlib import Path
 
+from .errors import NodusError, NodusMemoryError, error_for  # noqa: F401
+
 ENVIRONMENT_VARIABLE = "NODUSDB_LIBRARY"
 
 ERROR = -1
@@ -25,14 +27,6 @@ _ARCHITECTURES = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "arm64", "aarc
 
 _loaded = {}
 _attached = threading.local()
-
-
-class NodusError(RuntimeError):
-    pass
-
-
-class NodusMemoryError(NodusError, MemoryError):
-    """The graph's native memory limit would be exceeded. Existing data is unchanged."""
 
 
 def platform_tag():
@@ -114,6 +108,19 @@ def current_thread(library, isolate):
         thread = candidate
         attached[isolate.value] = thread
     return thread
+
+
+def last_error_message(library, thread):
+    """The message of the failure this thread's last native call reported."""
+    function = library.nodus_last_error
+    function.restype = ctypes.c_int
+    function.argtypes = [THREAD, ctypes.c_char_p, ctypes.c_int]
+    buffer = ctypes.create_string_buffer(512)
+    length = function(thread, buffer, len(buffer))
+    if length > len(buffer):
+        buffer = ctypes.create_string_buffer(length)
+        length = function(thread, buffer, len(buffer))
+    return buffer.raw[:max(length, 0)].decode("utf-8", "replace")
 
 
 class OwnedHandle:

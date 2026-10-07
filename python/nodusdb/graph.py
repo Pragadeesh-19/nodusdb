@@ -2,11 +2,12 @@ import array
 import ctypes
 import os
 import threading
+import typing
 import uuid
 import weakref
 
 from . import _native
-from ._native import ERROR, MEMORY_LIMIT, NodusError, NodusMemoryError, serialized
+from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
 
 MAX_NODE_ID = 2**31 - 10
 MAX_MEMORY_MB = (2**63 - 1) >> 20
@@ -18,6 +19,56 @@ KIND_UNSET = 0
 KIND_INTEGER = 1
 KIND_STRING = 2
 KIND_NAMES = {KIND_UNSET: "no keys yet", KIND_INTEGER: "integer keys", KIND_STRING: "string keys"}
+DURABILITY = {"local": 0, "lake": 1}
+NO_TOKEN = -1
+CHECK_ABSENT = 0
+CHECK_GRANTED = 1
+
+
+class Token(typing.NamedTuple):
+    """The position of a write: the epoch of the writer tenure and the log sequence number."""
+
+    epoch: int
+    lsn: int
+
+
+class Transaction:
+    """Tuple writes that commit together or not at all."""
+
+    def __init__(self):
+        self._operations = []
+
+    def add(self, object, relation, subject, subject_relation=None):
+        self._operations.append((1, object, relation, subject, subject_relation))
+        return self
+
+    def remove(self, object, relation, subject, subject_relation=None):
+        self._operations.append((0, object, relation, subject, subject_relation))
+        return self
+
+    def __len__(self):
+        return len(self._operations)
+
+    def _encode(self):
+        kinds = array.array("i")
+        lengths = array.array("i")
+        blob = bytearray()
+        for kind, *fields in self._operations:
+            kinds.append(kind)
+            for position, field in enumerate(fields):
+                if field is None and position == 3:
+                    lengths.append(-1)
+                    continue
+                encoded = _text(field)
+                lengths.append(len(encoded))
+                blob.extend(encoded)
+        return bytes(blob), lengths, kinds
+
+
+def _text(value):
+    if not isinstance(value, str):
+        raise TypeError(f"expected a str, got {type(value).__name__}")
+    return value.encode("utf-8")
 
 
 def _check_node(node):
@@ -93,7 +144,9 @@ class Graph:
             self._kind = self._lib.nodus_key_kind(self._thread, handle)
             if self._kind < 0:
                 raise NodusError("could not read the graph's key kind")
-            self._buffer = (ctypes.c_int64 * result_capacity)()
+            self._result_capacity = result_capacity
+            self._local = threading.local()
+            self._local.buffer = (ctypes.c_int64 * result_capacity)()
         except BaseException:
             self.close()
             raise
@@ -119,7 +172,9 @@ class Graph:
             return handle
         if status.value == MEMORY_LIMIT:
             raise NodusMemoryError(f"the graph does not fit in max_memory_mb={self._max_memory_mb}")
-        raise NodusError("failed to create graph handle")
+        detail = _native.last_error_message(self._lib, self._thread)
+        raise error_for(status.value, f"failed to create graph handle: {detail}" if detail
+                        else "failed to create graph handle")
 
     def _bind_signatures(self):
         lib = self._lib
@@ -166,18 +221,100 @@ class Graph:
         lib.nodus_common_neighbors.argtypes = [thread, handle, node, node, _native.RESULT_BUFFER, ctypes.c_int]
         lib.nodus_khop.restype = ctypes.c_int
         lib.nodus_khop.argtypes = [thread, handle, node, ctypes.c_int, _native.RESULT_BUFFER, ctypes.c_int]
+        token_out = ctypes.POINTER(ctypes.c_int64)
+        lib.nodus_token.restype = ctypes.c_int
+        lib.nodus_token.argtypes = [thread, handle, token_out]
+        lib.nodus_schema_version.restype = ctypes.c_int
+        lib.nodus_schema_version.argtypes = [thread, handle]
+        lib.nodus_schema_apply.restype = ctypes.c_int
+        lib.nodus_schema_apply.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int, token_out]
+        lib.nodus_tuple_write.restype = ctypes.c_int
+        lib.nodus_tuple_write.argtypes = [
+            thread, handle, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int32),
+            ctypes.c_int, ctypes.c_int, token_out,
+        ]
+        lib.nodus_check.restype = ctypes.c_int
+        lib.nodus_check.argtypes = [
+            thread, handle, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_int64, ctypes.c_int64,
+        ]
 
     @serialized
     def checkpoint(self):
         self._require_open()
-        if self._lib.nodus_checkpoint(self._thread, self._handle) != 0:
-            raise NodusError("checkpoint failed; the graph is not durable up to this point")
+        self._require_success(self._lib.nodus_checkpoint(self._thread, self._handle),
+                              "checkpoint failed; the graph is not durable up to this point")
 
     @serialized
     def sync(self):
         self._require_open()
-        if self._lib.nodus_sync(self._thread, self._handle) != 0:
-            raise NodusError("sync failed; accepted writes may not be on disk yet")
+        self._require_success(self._lib.nodus_sync(self._thread, self._handle),
+                              "sync failed; accepted writes may not be on disk yet")
+
+    @property
+    def token(self):
+        """The position of the last write this graph has applied."""
+        out = (ctypes.c_int64 * 2)()
+        self._require_success(self._lib.nodus_token(self._thread, self._require_open(), out), "token failed")
+        return Token(out[0], out[1])
+
+    @property
+    def schema_version(self):
+        version = self._lib.nodus_schema_version(self._thread, self._require_open())
+        if version < 0:
+            raise self._failure(version, "schema_version failed")
+        return version
+
+    @serialized
+    def apply_schema(self, document):
+        """Apply the next version of the schema. Nothing changes if the document or a stored tuple conflicts."""
+        encoded = _text(document)
+        out = (ctypes.c_int64 * 2)()
+        code = self._lib.nodus_schema_apply(self._thread, self._require_open(), encoded, len(encoded), out)
+        self._refresh_kind()
+        self._require_success(code, "apply_schema failed")
+        return Token(out[0], out[1])
+
+    @serialized
+    def write(self, transaction, durability="local"):
+        """Commit a Transaction. Every tuple applies or none does. Returns the token of the commit."""
+        if durability not in DURABILITY:
+            raise ValueError(f"durability must be one of {sorted(DURABILITY)}, got {durability!r}")
+        if not isinstance(transaction, Transaction):
+            raise TypeError(f"expected a Transaction, got {type(transaction).__name__}")
+        if not len(transaction):
+            return self.token
+        blob, lengths, kinds = transaction._encode()
+        out = (ctypes.c_int64 * 2)()
+        code = self._lib.nodus_tuple_write(
+            self._thread, self._require_open(), blob, _int32_pointer(lengths), _int32_pointer(kinds),
+            len(transaction), DURABILITY[durability], out)
+        self._refresh_kind()
+        self._require_success(code, "write failed")
+        return Token(out[0], out[1])
+
+    def add_tuple(self, object, relation, subject, subject_relation=None):
+        return self.write(Transaction().add(object, relation, subject, subject_relation))
+
+    def remove_tuple(self, object, relation, subject, subject_relation=None):
+        return self.write(Transaction().remove(object, relation, subject, subject_relation))
+
+    def check(self, object, permission, subject, *, at_least=None):
+        """Whether the subject holds the relation or permission on the object.
+
+        With at_least, the answer reflects at least the write the token names."""
+        parts = [_text(object), _text(permission), _text(subject)]
+        lengths = array.array("i", [len(part) for part in parts])
+        if at_least is None:
+            epoch, lsn = NO_TOKEN, 0
+        else:
+            epoch, lsn = int(at_least[0]), int(at_least[1])
+            if epoch < 0 or lsn < 0:
+                raise ValueError("a token has a non-negative epoch and lsn")
+        result = self._lib.nodus_check(
+            self._thread, self._require_open(), b"".join(parts), _int32_pointer(lengths), epoch, lsn)
+        if result < 0:
+            raise self._failure(result, "check failed")
+        return result == CHECK_GRANTED
 
     @serialized
     def close(self):
@@ -228,7 +365,6 @@ class Graph:
             items = [pair for pair in ids if pair is not None]
         return self._batch(self._lib.nodus_remove_edges_batch, items, "remove_edges_from")
 
-    @serialized
     def has_edge(self, u, v):
         if self._kind == KIND_INTEGER and _is_node(u) and _is_node(v):
             return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), u, v))
@@ -237,7 +373,6 @@ class Graph:
             return False
         return bool(self._lib.nodus_has_edge(self._thread, self._require_open(), ids[0], ids[1]))
 
-    @serialized
     def degree(self, u):
         ids = self._read_ids((u,))
         if ids is None:
@@ -245,7 +380,6 @@ class Graph:
         result = self._lib.nodus_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "degree")
 
-    @serialized
     def in_degree(self, v):
         ids = self._read_ids((v,))
         if ids is None:
@@ -253,7 +387,6 @@ class Graph:
         result = self._lib.nodus_in_degree(self._thread, self._require_open(), ids[0])
         return self._checked(result, "in_degree")
 
-    @serialized
     def common_neighbors(self, u, v):
         ids = self._read_ids((u, v))
         if ids is None:
@@ -265,7 +398,6 @@ class Graph:
         )
         return self._to_keys(found)
 
-    @serialized
     def khop(self, start, max_depth):
         _check_depth(max_depth)
         ids = self._read_ids((start,))
@@ -369,26 +501,42 @@ class Graph:
         )
         return self._checked(result, operation)
 
+    def _result_buffer(self):
+        buffer = getattr(self._local, "buffer", None)
+        if buffer is None:
+            buffer = self._local.buffer = (ctypes.c_int64 * self._result_capacity)()
+        return buffer
+
     def _collect(self, call, operation):
-        total = self._checked(call(self._buffer, len(self._buffer)), operation)
-        if total > len(self._buffer):
-            self._buffer = (ctypes.c_int64 * total)()
-            total = self._checked(call(self._buffer, total), operation)
-        return list(self._buffer[:total])
+        buffer = self._result_buffer()
+        total = self._checked(call(buffer, len(buffer)), operation)
+        if total > len(buffer):
+            buffer = self._local.buffer = (ctypes.c_int64 * total)()
+            total = self._checked(call(buffer, total), operation)
+        return list(buffer[:total])
 
     def _added(self, result):
-        if result == MEMORY_LIMIT:
-            raise NodusMemoryError(self._limit_message("add_edge"))
-        if result < 0:
-            raise NodusError("add_edge failed inside the native kernel")
-        return result == 1
+        return self._checked(result, "add_edge") == 1
 
     def _checked(self, result, operation):
-        if result == MEMORY_LIMIT:
-            raise NodusMemoryError(self._limit_message(operation))
-        if result == ERROR:
-            raise NodusError(f"{operation} failed inside the native kernel")
+        if result < 0:
+            raise self._failure(result, f"{operation} failed inside the native kernel", operation)
         return result
+
+    def _require_success(self, code, message):
+        if code != 0:
+            raise self._failure(code, message)
+
+    def _refresh_kind(self):
+        kind = self._lib.nodus_key_kind(self._thread, self._handle)
+        if kind >= 0:
+            self._kind = kind
+
+    def _failure(self, code, message, operation=None):
+        if code == MEMORY_LIMIT and operation is not None:
+            return NodusMemoryError(self._limit_message(operation))
+        detail = _native.last_error_message(self._lib, self._thread)
+        return error_for(code, f"{message}: {detail}" if detail else message)
 
     def _limit_message(self, operation):
         return (f"{operation} would exceed max_memory_mb={self._max_memory_mb}; the graph is unchanged, "
