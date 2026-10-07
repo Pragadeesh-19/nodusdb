@@ -1,8 +1,14 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.authz.Durability;
+import io.nodusdb.authz.TupleStore;
+import io.nodusdb.authz.TupleTransaction;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
+import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
+
+import java.util.Arrays;
 
 public final class GraphSession implements AutoCloseable {
 
@@ -11,8 +17,9 @@ public final class GraphSession implements AutoCloseable {
 
     private final GraphKernel kernel;
     private final StringKeys strings;
-    private boolean closed;
-    private long[] results = new long[INITIAL_RESULT_CAPACITY];
+    private final TupleStore tuples;
+    private final ThreadLocal<long[]> results = ThreadLocal.withInitial(() -> new long[INITIAL_RESULT_CAPACITY]);
+    private volatile boolean closed;
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
     private long[] keyIds = new long[INITIAL_RESULT_CAPACITY];
 
@@ -22,6 +29,7 @@ public final class GraphSession implements AutoCloseable {
         if (kernel.keyKind() == KeyKind.UNSET && kernel.hasEdges()) {
             kernel.claimKeyKind(KeyKind.INTEGER);
         }
+        this.tuples = TupleStore.open(kernel);
     }
 
     public synchronized void checkpoint() {
@@ -43,7 +51,7 @@ public final class GraphSession implements AutoCloseable {
         kernel.close();
     }
 
-    public synchronized KeyKind keyKind() {
+    public KeyKind keyKind() {
         requireOpen();
         return kernel.keyKind();
     }
@@ -62,7 +70,7 @@ public final class GraphSession implements AutoCloseable {
         return strings.intern(utf8, offset, length);
     }
 
-    public synchronized long lookup(byte[] utf8, int offset, int length) {
+    public long lookup(byte[] utf8, int offset, int length) {
         requireOpen();
         if (kernel.keyKind() == KeyKind.INTEGER) {
             throw new IllegalStateException("graph is keyed by integers");
@@ -70,7 +78,7 @@ public final class GraphSession implements AutoCloseable {
         return strings.lookup(utf8, offset, length);
     }
 
-    public synchronized byte[] resolve(long id) {
+    public byte[] resolve(long id) {
         requireOpen();
         return strings.resolve(id);
     }
@@ -101,17 +109,17 @@ public final class GraphSession implements AutoCloseable {
         return kernel.removeEdge(u, v);
     }
 
-    public synchronized boolean hasEdge(long u, long v) {
+    public boolean hasEdge(long u, long v) {
         requireOpen();
         return kernel.hasEdge(u, v);
     }
 
-    public synchronized int degree(long u) {
+    public int degree(long u) {
         requireOpen();
         return kernel.getDegree(u);
     }
 
-    public synchronized int inDegree(long v) {
+    public int inDegree(long v) {
         requireOpen();
         return kernel.getInDegree(v);
     }
@@ -137,31 +145,56 @@ public final class GraphSession implements AutoCloseable {
         return kernel.removeEdges(edges, pairCount);
     }
 
-    public synchronized int commonNeighbors(long u, long v) {
+    public int commonNeighbors(long u, long v) {
         requireOpen();
         while (true) {
             try {
-                return kernel.commonNeighbors(u, v, results);
+                return kernel.commonNeighbors(u, v, results.get());
             } catch (OutputBufferTooSmallException e) {
                 grow();
             }
         }
     }
 
-    public synchronized int khop(long start, int maxDepth) {
+    public int khop(long start, int maxDepth) {
         requireOpen();
         while (true) {
             try {
-                return kernel.kHop(start, maxDepth, results);
+                return kernel.kHop(start, maxDepth, results.get());
             } catch (OutputBufferTooSmallException e) {
                 grow();
             }
         }
     }
 
-    public synchronized long result(int index) {
+    public long result(int index) {
         requireOpen();
-        return results[index];
+        return results.get()[index];
+    }
+
+    public synchronized Token applySchema(String document) {
+        requireOpen();
+        return tuples.applySchema(document);
+    }
+
+    public synchronized Token writeTuples(TupleTransaction transaction, Durability durability) {
+        requireOpen();
+        return tuples.write(transaction, durability);
+    }
+
+    public boolean check(String object, String permission, String subject, Token atLeast) {
+        requireOpen();
+        return tuples.check(object, permission, subject, atLeast);
+    }
+
+    public Token token() {
+        requireOpen();
+        return tuples.token();
+    }
+
+    public int schemaVersion() {
+        requireOpen();
+        return tuples.schemaVersion();
     }
 
     private void requireOpen() {
@@ -177,6 +210,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     private void grow() {
-        results = new long[results.length << 1];
+        long[] current = results.get();
+        results.set(Arrays.copyOf(current, current.length << 1));
     }
 }

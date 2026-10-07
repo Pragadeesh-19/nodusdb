@@ -1,7 +1,7 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.error.ErrorCode;
 import io.nodusdb.kernel.KeyKind;
-import io.nodusdb.kernel.memory.MemoryLimitExceededException;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.SyncMode;
 
@@ -19,10 +19,10 @@ import java.nio.file.Path;
 
 public final class NodusCApi {
 
-    private static final int OK = 0;
-    private static final int ERROR = -1;
-    private static final int LOOKUP_ERROR = -2;
-    private static final int MEMORY_LIMIT = -3;
+    static final int OK = 0;
+    static final int ERROR = ErrorCode.FAILURE.value();
+
+    private static final int LOOKUP_ERROR = ErrorCode.LOOKUP_FAILED.value();
     private static final long MAX_STRING_BYTES = Integer.MAX_VALUE - 8;
     private static final int MAX_PATH_BYTES = 32_768;
     private static final GraphSessions SESSIONS = new GraphSessions();
@@ -35,6 +35,7 @@ public final class NodusCApi {
         try {
             return WordFactory.pointer(SESSIONS.open());
         } catch (RuntimeException e) {
+            Failures.codeOf(e);
             return WordFactory.nullPointer();
         }
     }
@@ -45,10 +46,8 @@ public final class NodusCApi {
             VoidPointer handle = WordFactory.pointer(SESSIONS.open(maxMemoryBytes));
             report(status, OK);
             return handle;
-        } catch (MemoryLimitExceededException e) {
-            report(status, MEMORY_LIMIT);
         } catch (RuntimeException e) {
-            report(status, ERROR);
+            report(status, Failures.codeOf(e));
         }
         return WordFactory.nullPointer();
     }
@@ -57,9 +56,9 @@ public final class NodusCApi {
     public static int destroy(IsolateThread thread, VoidPointer handle) {
         try {
             SESSIONS.close(handle.rawValue());
-            return 0;
+            return OK;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -69,6 +68,7 @@ public final class NodusCApi {
             LogConfig config = LogConfig.withSyncMode(SyncMode.fromCode(syncMode));
             return WordFactory.pointer(SESSIONS.openDurable(Path.of(cString(directory)), config));
         } catch (IOException | RuntimeException e) {
+            Failures.codeOf(e);
             return WordFactory.nullPointer();
         }
     }
@@ -82,10 +82,8 @@ public final class NodusCApi {
                     SESSIONS.openDurable(Path.of(cString(directory)), config, maxMemoryBytes));
             report(status, OK);
             return handle;
-        } catch (MemoryLimitExceededException e) {
-            report(status, MEMORY_LIMIT);
         } catch (IOException | RuntimeException e) {
-            report(status, ERROR);
+            report(status, Failures.codeOf(e));
         }
         return WordFactory.nullPointer();
     }
@@ -94,9 +92,9 @@ public final class NodusCApi {
     public static int checkpoint(IsolateThread thread, VoidPointer handle) {
         try {
             session(handle).checkpoint();
-            return 0;
+            return OK;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -104,35 +102,28 @@ public final class NodusCApi {
     public static int sync(IsolateThread thread, VoidPointer handle) {
         try {
             session(handle).sync();
-            return 0;
+            return OK;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
-    private static String cString(CCharPointer pointer) {
-        int length = 0;
-        while (pointer.read(length) != 0) {
-            length++;
-            if (length > MAX_PATH_BYTES) {
-                throw new IllegalArgumentException("path longer than " + MAX_PATH_BYTES + " bytes");
-            }
+    @CEntryPoint(name = "nodus_last_error")
+    public static int lastError(IsolateThread thread, CCharPointer outBuf, int outCap) {
+        byte[] message = Failures.lastMessage();
+        int count = Math.min(message.length, Math.max(outCap, 0));
+        for (int i = 0; i < count; i++) {
+            outBuf.write(i, message[i]);
         }
-        byte[] bytes = new byte[length];
-        for (int i = 0; i < length; i++) {
-            bytes[i] = pointer.read(i);
-        }
-        return new String(bytes, StandardCharsets.UTF_8);
+        return message.length;
     }
 
     @CEntryPoint(name = "nodus_add_edge")
     public static int addEdge(IsolateThread thread, VoidPointer handle, long u, long v) {
         try {
             return session(handle).addEdge(u, v) ? 1 : 0;
-        } catch (MemoryLimitExceededException e) {
-            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -141,6 +132,7 @@ public final class NodusCApi {
         try {
             return session(handle).removeEdge(u, v);
         } catch (RuntimeException e) {
+            Failures.codeOf(e);
             return false;
         }
     }
@@ -150,6 +142,7 @@ public final class NodusCApi {
         try {
             return session(handle).hasEdge(u, v);
         } catch (RuntimeException e) {
+            Failures.codeOf(e);
             return false;
         }
     }
@@ -159,7 +152,7 @@ public final class NodusCApi {
         try {
             return session(handle).degree(u);
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -168,7 +161,7 @@ public final class NodusCApi {
         try {
             return session(handle).inDegree(v);
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -181,10 +174,8 @@ public final class NodusCApi {
                 stageEdges(session, uArr, vArr, count);
                 return session.addEdges(count);
             }
-        } catch (MemoryLimitExceededException e) {
-            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -198,35 +189,33 @@ public final class NodusCApi {
                 return session.removeEdges(count);
             }
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
     @CEntryPoint(name = "nodus_common_neighbors")
-    public static int commonNeighbors(IsolateThread thread, VoidPointer handle, long u, long v, CLongPointer outBuf, int outCap) {
+    public static int commonNeighbors(IsolateThread thread, VoidPointer handle, long u, long v, CLongPointer outBuf,
+                                      int outCap) {
         try {
             GraphSession session = session(handle);
-            synchronized (session) {
-                int total = session.commonNeighbors(u, v);
-                copyResults(session, total, outBuf, outCap);
-                return total;
-            }
+            int total = session.commonNeighbors(u, v);
+            copyResults(session, total, outBuf, outCap);
+            return total;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
     @CEntryPoint(name = "nodus_khop")
-    public static int khop(IsolateThread thread, VoidPointer handle, long start, int maxDepth, CLongPointer outBuf, int outCap) {
+    public static int khop(IsolateThread thread, VoidPointer handle, long start, int maxDepth, CLongPointer outBuf,
+                           int outCap) {
         try {
             GraphSession session = session(handle);
-            synchronized (session) {
-                int total = session.khop(start, maxDepth);
-                copyResults(session, total, outBuf, outCap);
-                return total;
-            }
+            int total = session.khop(start, maxDepth);
+            copyResults(session, total, outBuf, outCap);
+            return total;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -235,7 +224,7 @@ public final class NodusCApi {
         try {
             return session(handle).keyKind().code();
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -244,7 +233,7 @@ public final class NodusCApi {
         try {
             return session(handle).claimKeys(KeyKind.fromCode(kind)).code();
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -254,7 +243,7 @@ public final class NodusCApi {
             byte[] bytes = readBytes(utf8, length);
             return session(handle).intern(bytes, 0, bytes.length);
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -264,6 +253,7 @@ public final class NodusCApi {
             byte[] bytes = readBytes(utf8, length);
             return session(handle).lookup(bytes, 0, bytes.length);
         } catch (RuntimeException e) {
+            Failures.codeOf(e);
             return LOOKUP_ERROR;
         }
     }
@@ -278,7 +268,7 @@ public final class NodusCApi {
             }
             return bytes.length;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
@@ -290,23 +280,39 @@ public final class NodusCApi {
                 return ERROR;
             }
             int[] lengthValues = intArray(lengths, 2 * pairCount);
-            long total = 0;
-            for (int length : lengthValues) {
-                if (length < 0) {
-                    return ERROR;
-                }
-                total += length;
-            }
-            byte[] bytes = readBytes(utf8, total);
+            byte[] bytes = readBytes(utf8, totalLength(lengthValues));
             return session(handle).addStringEdges(bytes, lengthValues, pairCount);
-        } catch (MemoryLimitExceededException e) {
-            return MEMORY_LIMIT;
         } catch (RuntimeException e) {
-            return ERROR;
+            return Failures.codeOf(e);
         }
     }
 
-    private static byte[] readBytes(CCharPointer pointer, long length) {
+    static GraphSession session(VoidPointer handle) {
+        return SESSIONS.get(handle.rawValue());
+    }
+
+    static void report(CIntPointer status, int code) {
+        if (status.isNonNull()) {
+            status.write(code);
+        }
+    }
+
+    static String cString(CCharPointer pointer) {
+        int length = 0;
+        while (pointer.read(length) != 0) {
+            length++;
+            if (length > MAX_PATH_BYTES) {
+                throw new IllegalArgumentException("path longer than " + MAX_PATH_BYTES + " bytes");
+            }
+        }
+        byte[] bytes = new byte[length];
+        for (int i = 0; i < length; i++) {
+            bytes[i] = pointer.read(i);
+        }
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    static byte[] readBytes(CCharPointer pointer, long length) {
         if (length < 0 || length > MAX_STRING_BYTES) {
             throw new IllegalArgumentException("string length out of range: " + length);
         }
@@ -317,7 +323,10 @@ public final class NodusCApi {
         return bytes;
     }
 
-    private static int[] intArray(CIntPointer pointer, int count) {
+    static int[] intArray(CIntPointer pointer, int count) {
+        if (count < 0) {
+            throw new IllegalArgumentException("count out of range: " + count);
+        }
         int[] values = new int[count];
         for (int i = 0; i < count; i++) {
             values[i] = pointer.read(i);
@@ -325,14 +334,15 @@ public final class NodusCApi {
         return values;
     }
 
-    private static GraphSession session(VoidPointer handle) {
-        return SESSIONS.get(handle.rawValue());
-    }
-
-    private static void report(CIntPointer status, int code) {
-        if (status.isNonNull()) {
-            status.write(code);
+    static long totalLength(int[] lengths) {
+        long total = 0;
+        for (int length : lengths) {
+            if (length < 0) {
+                throw new IllegalArgumentException("a string length is negative: " + length);
+            }
+            total += length;
         }
+        return total;
     }
 
     private static void stageEdges(GraphSession session, CLongPointer uArr, CLongPointer vArr, int count) {
