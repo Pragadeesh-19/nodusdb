@@ -4,7 +4,7 @@ import java.util.ArrayDeque;
 import java.util.Queue;
 import java.util.concurrent.Executor;
 
-final class ManualExecutor implements Executor {
+public final class ManualExecutor implements Executor {
 
     private final Queue<Runnable> tasks = new ArrayDeque<>();
 

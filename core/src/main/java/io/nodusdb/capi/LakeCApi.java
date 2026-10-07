@@ -1,12 +1,13 @@
 package io.nodusdb.capi;
 
-import io.nodusdb.lake.Aggregate;
-import io.nodusdb.lake.ColumnarRows;
-import io.nodusdb.lake.DeltaMemTable;
-import io.nodusdb.lake.LakeRow;
-import io.nodusdb.lake.LakeSchema;
 import io.nodusdb.lake.LakeTable;
-import io.nodusdb.lake.ParquetCodec;
+import io.nodusdb.lake.buffer.ColumnarRows;
+import io.nodusdb.lake.buffer.DeltaMemTable;
+import io.nodusdb.lake.codec.ParquetCodec;
+import io.nodusdb.lake.model.Aggregate;
+import io.nodusdb.lake.model.LakeRow;
+import io.nodusdb.lake.model.LakeSchema;
+
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
 import org.graalvm.nativeimage.c.type.CCharPointer;

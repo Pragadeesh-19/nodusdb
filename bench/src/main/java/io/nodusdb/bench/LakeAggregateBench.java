@@ -1,8 +1,9 @@
 package io.nodusdb.bench;
 
-import io.nodusdb.lake.LakeSchema;
 import io.nodusdb.lake.LakeTable;
-import io.nodusdb.lake.ParquetCodec;
+import io.nodusdb.lake.codec.ParquetCodec;
+import io.nodusdb.lake.model.LakeSchema;
+
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;

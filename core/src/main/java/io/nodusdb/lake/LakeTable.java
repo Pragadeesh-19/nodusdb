@@ -1,5 +1,16 @@
 package io.nodusdb.lake;
 
+import io.nodusdb.lake.buffer.ColumnarRows;
+import io.nodusdb.lake.buffer.DeltaMemTable;
+import io.nodusdb.lake.buffer.RowBuffer;
+import io.nodusdb.lake.buffer.RowSelection;
+import io.nodusdb.lake.codec.ParquetCodec;
+import io.nodusdb.lake.model.Aggregate;
+import io.nodusdb.lake.model.LakeRow;
+import io.nodusdb.lake.model.LakeSchema;
+import io.nodusdb.lake.parquet.ParquetReader;
+import io.nodusdb.lake.parquet.ParquetWriter;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.foreign.MemorySegment;

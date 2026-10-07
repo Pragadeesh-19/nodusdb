@@ -1,9 +1,13 @@
 package io.nodusdb.lake;
 
+import io.nodusdb.lake.buffer.DeltaMemTable;
+import io.nodusdb.lake.model.Aggregate;
+import io.nodusdb.lake.model.LakeSchema;
+
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 
-final class LakeAggregates {
+public final class LakeAggregates {
 
     private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;

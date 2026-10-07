@@ -8,7 +8,7 @@ import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
-final class Manifest {
+public final class Manifest {
 
     static final String FILE_NAME = "manifest.txt";
 

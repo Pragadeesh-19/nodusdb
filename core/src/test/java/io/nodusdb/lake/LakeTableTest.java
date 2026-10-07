@@ -1,5 +1,9 @@
 package io.nodusdb.lake;
 
+import io.nodusdb.lake.codec.ParquetCodec;
+import io.nodusdb.lake.model.LakeRow;
+import io.nodusdb.lake.model.LakeSchema;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class LakeTableTest {
+public class LakeTableTest {
 
     private static final LakeSchema SCHEMA = new LakeSchema(List.of(
             new LakeSchema.Field("amount", LakeSchema.Type.INT64),

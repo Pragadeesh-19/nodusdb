@@ -25,8 +25,17 @@ io.nodusdb.storage.legacy            read-only readers for version 1 directories
 io.nodusdb.authz                     the tuple store, transactions, tokens and the check evaluator
 io.nodusdb.authz.schema              the schema language, relation ids and the compiled model
 io.nodusdb.capi                      the C interface exported by the native library
-io.nodusdb.lake                      the lakehouse write path
+io.nodusdb.lake                      the lake table: flush lifecycle, manifest, aggregates
+io.nodusdb.lake.model                schema, row and aggregate types
+io.nodusdb.lake.buffer               the in-memory write absorber and its row selections
+io.nodusdb.lake.memory               native columns and the key index
+io.nodusdb.lake.codec                Snappy and the byte sink compressors write into
+io.nodusdb.lake.parquet              the Parquet writer and reader, column chunks and Thrift
 ```
+
+The packages layer upward without cycles: `memory`, then `codec` and `buffer`, then `model`, then `parquet`,
+then `lake`. `io.nodusdb.storage` depends on `kernel` and `log`, `io.nodusdb.authz` on `kernel`, and
+`io.nodusdb.capi` on everything.
 
 ## Chunked off-heap storage
 

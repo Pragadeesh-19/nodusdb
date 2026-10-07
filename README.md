@@ -9,7 +9,7 @@ NodusDB is an engine that runs inside your process. It has two parts, built from
 
 Neither part starts a server or makes a network call. Both keep their hot paths free of garbage collector work.
 
-The last CI run on `main` passed on Ubuntu, macOS (arm64), and Windows. It built the GraalVM native library, ran 426 Java tests and 96 Python tests against that library, and included the durability tests.
+CI builds the GraalVM native library on Ubuntu, macOS (arm64), and Windows and runs the Java and Python suites against it. [Verification](#verification) lists what the tests cover.
 
 ## The graph engine
 
@@ -426,14 +426,19 @@ Results are written into caller-supplied buffers, and the call returns the full 
 
 ## Verification
 
-The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. The last run on `main` (commit `e5c0e4c`) passed on all three:
+The `ci` workflow runs on Ubuntu, macOS (arm64), and Windows for every push. It runs the Java suite with assertions enabled, builds the native library with Oracle GraalVM 25, packages it into the Python package, runs the Python suite against it and then the native performance gate.
 
-- The Java suite ran 426 tests with assertions enabled. They include the durability tests, which cover clean restarts, crashes in both sync modes, torn and corrupted log tails, snapshot rolls, a crash between the snapshot rename and the log reset, corrupted and truncated snapshots, the directory lock, and the no-op rules. They also include the memory limit tests.
-- The native library built on each system with Oracle GraalVM 25 and was packaged into the Python package.
-- `python -m pytest python/tests` ran 96 tests against that library on each system, with `pyarrow` installed so that none skipped. They cover the lake, the PyArrow comparison, the handle lifecycle, and the memory limit.
+On the development laptop (Windows, JDK 22, a native library built by GraalVM CE 22.0.2) the Java suite passes with 630 tests and the Python suite with 120, with `pyarrow` installed so that none skip. What they cover:
+
+- The log: a crash simulator replays every prefix of the writes and forces of a run, with torn writes at every byte, and requires recovery to return a prefix of what was acknowledged. Corruption below the forced mark and a failed fsync have their own tests.
+- Durability on the graph: clean restarts, crashes in both sync modes, torn log tails, snapshot rolls, a crash between the snapshot rename and the deletion of the covered segments, corrupted and truncated snapshots, the directory lock and the memory limit.
+- Upgrade: the version 1 corpus (integer, string and snapshot-only directories) upgrades with equal edge fingerprints, and the upgrade is crashed after every step and finished by running it again.
+- Permissions: a seeded differential test compares the iterative evaluator with a naive recursive one over random tuples on ten seeds. Disabling arrow traversal makes four of them fail.
+- Concurrency: readers run against a busy writer on one kernel, one handle and one Python object, and a reader is not blocked while a write waits for its fsync.
+- The native performance gate compares the same Java code on the JVM and in the native library. On this laptop the ratio is about 9 for `add_edge` and 16 for `has_edge`, and the gate fails above 50. The CE 23 library, about 130 times slower than CE 22, would fail it.
 - The Pokec run was checked by digest, as described above.
 
-The Java sources compile for JDK 22. Locally, the suite also passes with a native library built by GraalVM CE 22.0.2.
+The Java sources compile for JDK 22.
 
 ## Building
 

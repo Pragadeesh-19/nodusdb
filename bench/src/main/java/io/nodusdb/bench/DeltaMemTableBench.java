@@ -1,6 +1,7 @@
 package io.nodusdb.bench;
 
-import io.nodusdb.lake.DeltaMemTable;
+import io.nodusdb.lake.buffer.DeltaMemTable;
+
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Level;
