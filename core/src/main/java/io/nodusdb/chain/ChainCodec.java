@@ -25,6 +25,10 @@ public final class ChainCodec {
     }
 
     public static byte[] encode(ChainHeader header, ChainBody body, SigningKey key) {
+        return seal(header, body, key).encoded();
+    }
+
+    public static ChainObject seal(ChainHeader header, ChainBody body, SigningKey key) {
         if (header.kind() != body.kind()) {
             throw new IllegalArgumentException("the header says " + header.kind() + " but the body is "
                     + body.kind());
@@ -46,8 +50,9 @@ public final class ChainCodec {
         out.put(bodyBytes);
         ChainHash digest = ChainHash.sha256(out.array(), 0, signedLength);
         digest.writeTo(out);
-        out.put(key.sign(digest));
-        return out.array();
+        byte[] signature = key.sign(digest);
+        out.put(signature);
+        return new ChainObject(header, body, digest, signature, out.array());
     }
 
     public static ChainObject decode(byte[] bytes) {

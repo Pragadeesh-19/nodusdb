@@ -124,6 +124,21 @@ class ChainCodecTest {
     }
 
     @Test
+    void sealingReturnsTheSameObjectAsEncodingAndDecoding() {
+        ChainHeader header = header(ChainKind.RECORDS, 7);
+        ChainBody body = new ChainBody.Records(10, 12, opaqueRecords());
+
+        ChainObject sealed = ChainCodec.seal(header, body, signingKey());
+        ChainObject decoded = ChainCodec.decode(sealed.encoded());
+
+        assertEquals(decoded.header(), sealed.header());
+        assertEquals(decoded.digest(), sealed.digest());
+        assertArrayEquals(decoded.signature(), sealed.signature());
+        assertArrayEquals(decoded.encoded(), sealed.encoded());
+        assertArrayEquals(ChainCodec.encode(header, body, signingKey()), sealed.encoded());
+    }
+
+    @Test
     void aRoundTripKeepsEveryField() {
         ChainObject records = ChainCodec.decode(sampleRecordsObject());
         ChainObject snapshot = ChainCodec.decode(sampleSnapshotObject());
