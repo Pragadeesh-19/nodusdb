@@ -133,3 +133,11 @@ These were settled while building Step 1. Each one refines a frozen decision wit
 | I12 | Native performance gate | `python/benchmarks/native_ratio.py` times 200,000 `add_edge` and 200,000 `has_edge` inside the JVM and inside the native library, running the same Java code, and fails above a ratio. The review proposed 5. Measured on a laptop with GraalVM CE 22.0.2: about 9 for `add_edge` and 16 to 18 for `has_edge`, because ahead-of-time code is slower than JIT code for off-heap memory access. The default is 50, which passes that build and fails the CE 23 library (about 130 times slower than CE 22). Lower it once CI has a recorded baseline for GraalVM 25 |
 | I13 | Single-tuple fast path | A tuple write whose nodes and tables already have room skips the memory reservation, appends one autocommit record and applies it without parsing it back. A write that must grow goes through the general transaction path. An addition that was just verified absent is inserted without a second membership test. Measured on one laptop on one day, at 200,000 edges through the native library: single-edge inserts 106,000 per second against 104,000 for the kernel before Step 1, batch 205,000 against 203,000, flat buffer 241,000 against 238,000. Before this path the new commit pipeline ran 13 to 30 percent slower |
 
+
+## Build Step 2 implementation notes
+
+These were settled while building Step 2. Each one refines a decision above without changing a format.
+
+| ID | Topic | Note |
+|---|---|---|
+| J1 | Native image spike | A throwaway program built with GraalVM CE 22.0.2 on Windows ran SHA-256, HMAC-SHA256, CRC32C, Ed25519 sign and verify (a tampered message was rejected), `HttpClient` over HTTP with an `If-None-Match` header, HTTPS with a CA bundle loaded from a PEM file, and HTTPS to the public S3 endpoint with the default trust store. Output matched the JVM run line for line, so the plan stands. GraalVM 25 on Linux and macOS is checked in CI when the S3 client lands |
