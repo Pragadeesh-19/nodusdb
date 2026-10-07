@@ -113,6 +113,13 @@ public final class SegmentedLog implements LogStore {
     }
 
     @Override
+    public long lastCommitMicros() {
+        synchronized (monitor) {
+            return lastCommitMicros;
+        }
+    }
+
+    @Override
     public long append(RecordBatch batch) {
         synchronized (appendLock) {
             synchronized (monitor) {

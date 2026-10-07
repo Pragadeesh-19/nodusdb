@@ -262,7 +262,7 @@ public final class LogRecovery {
             if (index == commitSegment) {
                 truncated += truncateTo(segment, commitEnd);
             } else if (index > commitSegment) {
-                truncated += sizeOf(segment);
+                truncated += payloadOf(segment);
                 files.delete(segment.name());
             }
         }
@@ -274,7 +274,7 @@ public final class LogRecovery {
         long truncated = 0;
         lowerMark(afterLsn + 1, 0);
         for (Segment segment : segments) {
-            truncated += sizeOf(segment);
+            truncated += payloadOf(segment);
             files.delete(segment.name());
         }
         files.trySyncDirectory();
@@ -299,6 +299,10 @@ public final class LogRecovery {
             channel.force();
             return size - length;
         }
+    }
+
+    private long payloadOf(Segment segment) throws IOException {
+        return Math.max(0, sizeOf(segment) - SegmentHeader.BYTES);
     }
 
     private long sizeOf(Segment segment) throws IOException {

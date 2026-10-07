@@ -32,6 +32,11 @@ public final class VolatileLog implements LogStore {
     }
 
     @Override
+    public long lastCommitMicros() {
+        return 0;
+    }
+
+    @Override
     public synchronized long append(RecordBatch batch) {
         lastLsn += batch.count();
         return lastLsn;

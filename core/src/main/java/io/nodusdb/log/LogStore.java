@@ -10,6 +10,8 @@ public interface LogStore extends AutoCloseable {
 
     long durableLsn();
 
+    long lastCommitMicros();
+
     long append(RecordBatch batch);
 
     void awaitDurable(long lsn);

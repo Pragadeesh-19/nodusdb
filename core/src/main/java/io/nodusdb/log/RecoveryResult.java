@@ -9,6 +9,11 @@ public record RecoveryResult(long lastLsn, long lastCommitMicros, List<Long> seg
         segmentBases = List.copyOf(segmentBases);
     }
 
+    public RecoveryResult withCommitMicrosFloor(long floor) {
+        return new RecoveryResult(lastLsn, Math.max(lastCommitMicros, floor), segmentBases, tailOffset,
+                discardedRecords, truncatedBytes);
+    }
+
     public boolean hasSegments() {
         return !segmentBases.isEmpty();
     }
