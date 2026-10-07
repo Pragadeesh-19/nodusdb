@@ -134,6 +134,21 @@ public final class SigV4Signer {
         return out.toString();
     }
 
+    public static String encodePath(String path) {
+        StringBuilder out = new StringBuilder(path.length());
+        int segmentStart = 0;
+        for (int i = 0; i <= path.length(); i++) {
+            if (i == path.length() || path.charAt(i) == '/') {
+                out.append(encode(path.substring(segmentStart, i)));
+                if (i < path.length()) {
+                    out.append('/');
+                }
+                segmentStart = i + 1;
+            }
+        }
+        return out.toString();
+    }
+
     static String decode(String text) {
         byte[] out = new byte[text.length()];
         int length = 0;
