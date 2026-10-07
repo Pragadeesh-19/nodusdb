@@ -4,10 +4,12 @@ import io.nodusdb.error.CorruptLogException;
 import io.nodusdb.log.io.ChannelWindow;
 import io.nodusdb.log.io.LogChannel;
 import io.nodusdb.log.io.LogFileSystem;
+import io.nodusdb.log.record.MalformedTransactionException;
 import io.nodusdb.log.record.RecordFormat;
 import io.nodusdb.log.record.RecordReader;
 import io.nodusdb.log.record.RecordType;
 import io.nodusdb.log.record.SegmentHeader;
+import io.nodusdb.log.record.TransactionTracker;
 import io.nodusdb.log.record.Verdict;
 
 import java.io.IOException;
@@ -29,10 +31,9 @@ public final class LogRecovery {
     private final ForcedMark.Position mark;
     private final RecordReader reader = new RecordReader();
     private final RecordReader pendingReader = new RecordReader();
+    private final TransactionTracker transaction = new TransactionTracker();
     private ByteBuffer pending = ByteBuffer.allocate(INITIAL_PENDING_BYTES);
-    private int pendingRecords;
     private int pendingBytes;
-    private long pendingFirstLsn;
     private long expectedLsn;
     private boolean commitSeen;
     private int commitSegment = -1;
@@ -153,15 +154,14 @@ public final class LogRecovery {
     private void accept(Segment segment, int index, long endOffset) {
         long lsn = reader.lsn();
         expectedLsn = lsn + 1;
+        track(segment, endOffset);
         if (reader.autocommit()) {
-            requireNoPending(segment, endOffset);
             boolean applies = lsn > afterLsn;
             if (applies) {
                 sink.apply(reader);
             }
             commitPoint(index, endOffset, applies);
         } else if (reader.type() == RecordType.TXN_COMMIT) {
-            requireMatchingCommit(segment, endOffset);
             boolean applies = reader.commitFirstLsn() > afterLsn;
             if (applies) {
                 deliverPending();
@@ -184,11 +184,15 @@ public final class LogRecovery {
         }
     }
 
-    private void holdPending(long lsn) {
-        if (pendingRecords == 0) {
-            pendingFirstLsn = lsn;
+    private void track(Segment segment, long endOffset) {
+        try {
+            transaction.accept(reader);
+        } catch (MalformedTransactionException malformed) {
+            throw corrupt(segment, endOffset, malformed.getMessage());
         }
-        pendingRecords++;
+    }
+
+    private void holdPending(long lsn) {
         if (lsn <= afterLsn) {
             return;
         }
@@ -211,23 +215,7 @@ public final class LogRecovery {
     }
 
     private void clearPending() {
-        pendingRecords = 0;
         pendingBytes = 0;
-    }
-
-    private void requireNoPending(Segment segment, long endOffset) {
-        if (pendingRecords != 0) {
-            throw corrupt(segment, endOffset, "a single-record commit interrupts an open transaction");
-        }
-    }
-
-    private void requireMatchingCommit(Segment segment, long endOffset) {
-        boolean consistent = pendingRecords > 0 && reader.commitRecordCount() == pendingRecords
-                && reader.commitFirstLsn() == pendingFirstLsn
-                && reader.lsn() == pendingFirstLsn + pendingRecords;
-        if (!consistent) {
-            throw corrupt(segment, endOffset, "the commit record does not match the records before it");
-        }
     }
 
     private boolean isBelowMark(long segmentBase, long offset) {
@@ -267,7 +255,7 @@ public final class LogRecovery {
             }
         }
         files.trySyncDirectory();
-        return new RecoveryResult(lastCommitLsn, lastCommitMicros, kept, commitEnd, pendingRecords, truncated);
+        return new RecoveryResult(lastCommitLsn, lastCommitMicros, kept, commitEnd, transaction.records(), truncated);
     }
 
     private RecoveryResult discardAll(List<Segment> segments) throws IOException {
@@ -278,7 +266,7 @@ public final class LogRecovery {
             files.delete(segment.name());
         }
         files.trySyncDirectory();
-        return new RecoveryResult(afterLsn, 0, List.of(), 0, pendingRecords, truncated);
+        return new RecoveryResult(afterLsn, 0, List.of(), 0, transaction.records(), truncated);
     }
 
     private void lowerMark(long segmentBase, long offset) throws IOException {
