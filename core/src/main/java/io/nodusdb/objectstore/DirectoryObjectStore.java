@@ -72,8 +72,7 @@ public final class DirectoryObjectStore implements ObjectStore {
                 return;
             }
             try {
-                entries.add(new ObjectInfo(key, Files.size(file), Files.getLastModifiedTime(file).toMillis(),
-                        readMetadata(key)));
+                entries.add(ObjectInfo.listing(key, Files.size(file), Files.getLastModifiedTime(file).toMillis()));
             } catch (NoSuchFileException vanished) {
                 return;
             }

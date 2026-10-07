@@ -107,7 +107,7 @@ public final class MemoryObjectStore implements ObjectStore {
                 truncated = true;
                 break;
             }
-            entries.add(infoOf(candidate.getKey(), candidate.getValue()));
+            entries.add(listingOf(candidate.getKey(), candidate.getValue()));
         }
         return new ListPage(entries, truncated);
     }
@@ -130,5 +130,9 @@ public final class MemoryObjectStore implements ObjectStore {
 
     private static ObjectInfo infoOf(String key, Entry entry) {
         return new ObjectInfo(key, entry.content().length, entry.lastModifiedMillis(), entry.metadata());
+    }
+
+    private static ObjectInfo listingOf(String key, Entry entry) {
+        return ObjectInfo.listing(key, entry.content().length, entry.lastModifiedMillis());
     }
 }

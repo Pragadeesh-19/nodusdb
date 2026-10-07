@@ -346,15 +346,16 @@ abstract class ObjectStoreContractTest {
     }
 
     @Test
-    void listedEntriesCarrySizeMetadataAndTime() {
+    void listedEntriesCarrySizeAndTimeButNoMetadata() {
         store.putIfAbsent("snap/1", bytes("abc"), Map.of("chain-seq", "5"));
 
         ObjectInfo info = store.list("snap/", "", 10).entries().get(0);
 
         assertEquals("snap/1", info.key());
         assertEquals(3, info.size());
-        assertEquals(Map.of("chain-seq", "5"), info.metadata());
+        assertEquals(Map.of(), info.metadata());
         assertNotEquals(0, info.lastModifiedMillis());
+        assertEquals(Map.of("chain-seq", "5"), store.head("snap/1").orElseThrow().metadata());
     }
 
     @Test

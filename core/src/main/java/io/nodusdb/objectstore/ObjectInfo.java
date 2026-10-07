@@ -11,4 +11,8 @@ public record ObjectInfo(String key, long size, long lastModifiedMillis, Map<Str
         }
         metadata = Map.copyOf(metadata);
     }
+
+    public static ObjectInfo listing(String key, long size, long lastModifiedMillis) {
+        return new ObjectInfo(key, size, lastModifiedMillis, Map.of());
+    }
 }
