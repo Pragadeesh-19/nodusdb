@@ -250,6 +250,52 @@ print(g.khop("user:alice", 1))  # ['role:admin']
 
 A graph uses one kind of key. The first key type written claims the graph, and a durable graph keeps the claim across restarts. Mixing kinds raises `TypeError`. Strings are stored once in a symbol table and mapped to dense integer ids, so the kernel still runs on integers. Reads never add a key: an unknown key answers as absent. The symbol table is forced to disk before any edge that uses a new key is written. A single call that adds new keys therefore costs one sync, and `add_edges_from` pays that cost once per batch.
 
+Permissions. A graph can hold typed tuples under a schema and answer permission checks:
+
+```python
+import nodusdb
+
+SCHEMA = """
+schema 1
+type user
+type group { relation member: user | group#member }
+type folder {
+  relation viewer: user | group#member
+  relation parent: folder
+  permission view = viewer + parent->view
+}
+type document {
+  relation parent: folder
+  relation viewer: user | group#member
+  permission view = viewer + parent->view
+}
+"""
+
+with nodusdb.Graph(path="/data/authz", sync_mode="sync") as g:
+    g.apply_schema(SCHEMA)
+    g.add_tuple("document:readme", "parent", "folder:eng")
+    g.add_tuple("folder:eng", "viewer", "group:staff", "member")
+    token = g.add_tuple("group:staff", "member", "user:alice")
+
+    print(g.check("document:readme", "view", "user:alice", at_least=token))   # True
+    print(g.check("document:readme", "view", "user:bob"))                     # False
+```
+
+A schema declares types, stored relations with the subject types they allow, and permissions built from unions, computed relations and arrows (`parent->view`). It moves forward one version at a time, and relation ids are never reused. `nodusdb.Transaction` groups tuple writes so that every tuple applies or none does. Each write returns a `Token(epoch, lsn)`. Passing it as `at_least` makes a check refuse to answer from state older than that write: `NodusStaleReadError` if the graph has not reached it, `NodusTokenLostError` if the write was acknowledged but never became durable. A check that cannot decide within the depth limit of 32 raises `NodusCheckDepthError` rather than answering `False`. `durability="lake"` raises `NodusUnsupportedError` until the segment shipper exists.
+
+Reads take no lock, so threads can check against one graph while another thread writes.
+
+Upgrading. A directory written by an earlier release is refused with `NodusUpgradeRequiredError` until it is converted:
+
+```python
+import nodusdb
+
+report = nodusdb.upgrade("/data/graph")        # report.performed, report.edges, report.symbols
+nodusdb.upgrade_cleanup("/data/graph")         # delete pre-v2/ once you trust the result
+```
+
+`upgrade` keeps the original files in `pre-v2/`, writes the new files, and reopens the result to compare an edge fingerprint and the symbol count with the original before it reports success. If it is interrupted, run it again.
+
 Memory limit. `max_memory_mb` caps the native memory that holds the graph's adjacency data. The default, `None`, sets no cap:
 
 ```python
@@ -264,7 +310,7 @@ with nodusdb.Graph(max_memory_mb=256) as g:
 
 A write that would pass the limit raises `NodusMemoryError`, which is both a `NodusError` and a built-in `MemoryError`. It is raised before the graph changes, and a rejected edge is never written to the log of a durable graph. Edges already stored stay queryable. Removals always succeed, and a write that needs no new storage still works. `add_edges_from` applies edges in order and stops at the first one that does not fit, so the edges before it stay applied. The limit is a whole number of megabytes, at least 1.
 
-Native storage grows in chunks that double, so the limit can trip while part of the budget is unused. A large node id needs a large node table, and that counts too. The limit covers the adjacency storage only. The string symbol table and the query result buffers live on the Java heap and are not counted. A durable graph whose stored snapshot does not fit the limit fails to open with `NodusMemoryError`. Open it again with a larger limit, or none.
+Native storage grows in chunks that double, so the limit can trip while part of the budget is unused. A large node id needs a large node table, and that counts too. The limit covers the graph's native memory: the adjacency storage and the symbol table. Query result buffers live on the Java heap and are not counted. A durable graph whose stored snapshot does not fit the limit fails to open with `NodusMemoryError`. Open it again with a larger limit, or none.
 
 Lakehouse writes:
 
@@ -297,20 +343,20 @@ with nodusdb.LakeTable("/data/orders", schema) as table:
 
 ## Durability
 
-A durable graph lives in one directory with four files:
+A durable graph lives in one directory:
 
-- `nodus.wal` is the write-ahead log. It starts with a 16-byte header: the ASCII magic `NODU`, a version, two reserved bytes, and a creation time. Every accepted edge change then adds a fixed 24-byte frame.
-- `snapshot.bin` is the last checkpoint. It stores each node's outgoing edges, then each node's incoming edges, with a header and a CRC32 over the whole body. Version 2 is written now. Version 1 files, which hold outgoing edges only, still load. Version 2 files cannot be read by builds that predate this change.
-- `symbols.nodus` holds the string and UUID keys, in the order they were first used. Each record carries a CRC32C checksum. A key is forced to disk before any edge that uses it is written. The header also records whether the graph is keyed by integers or by strings.
+- `log/` holds the write-ahead log as segments of at most 64 MiB, named by the sequence number of their first record. Records are typed and variable length, each with a CRC32C. `log/FORCED` records how far the log is known to have reached the disk.
+- `snapshot.bin` is the last checkpoint: a complete image of the graph, the schema, the symbols and the epoch history, in checksummed sections.
+- `FORMAT` names the directory format, and `nodus.wal` is a short marker that makes older releases refuse the directory.
 - `nodus.lock` holds a file lock, so a second process or a second handle cannot open the same directory.
 
-A frame is 24 bytes. It holds the operation (add or remove), one reserved byte, two zero bytes, a CRC32 over the operation and both node IDs, and the two IDs. The layout keeps every frame aligned to eight bytes, and the log is only ever appended to. Nothing is overwritten in place.
+**Writing.** A write is validated, its memory is reserved, and it is appended to the log. In `sync` mode the call then waits until the record is on disk. Only after that does the change appear in memory, so a reader never sees a write that a crash could undo. A duplicate add or a missing remove does nothing and writes nothing. A transaction is its records followed by a commit record, and recovery applies whole transactions only.
 
-**Writing.** An edge change first checks whether it does anything. A duplicate add or a missing remove is a no-op and writes nothing. A real change goes into the log buffer before the in-memory graph changes. A background thread writes the buffer to disk, either every 10 milliseconds in `async` mode or as each call requires in `sync` mode.
+**Checkpoint.** A checkpoint forces the log, writes the snapshot to a temporary file, forces it, renames it into place, and deletes the log segments the snapshot covers. A crash between the rename and the deletion is safe: recovery skips every record the snapshot already holds.
 
-**Checkpoint.** A checkpoint writes the snapshot to a temporary file, forces it to disk, renames it into place, and then replaces the log with an empty one. The writer pauses for the duration. A crash between the rename and the log replacement is safe: replaying the old log over the new snapshot gives the same final state, because the last operation on each edge decides whether it exists.
+**Recovery.** On open, the process deletes half-written temporary files, loads the snapshot, and replays the log from the first record after it. Where the log goes bad decides what happens. Damage in the part of the log known to have reached the disk means corruption, and the directory refuses to open with `NodusCorruptLogError`. Damage after that point is a torn tail from a crash: the log is cut back to its last commit and the cut bytes are reported. Every open then starts a new writer tenure, which is what lets a token name a write that was lost. If forcing the log fails, the write that waited gets `NodusIndeterminateError` and the log refuses further writes until the graph is reopened, because retrying a failed fsync is not safe on Linux.
 
-**Recovery.** On open, the process deletes any half-written temporary files, loads the snapshot if one exists, and then replays the log. A frame with a bad checksum or only part of its bytes at the end of the file ends the replay. The file is then cut back to the last good frame. The damage is reported as truncated bytes, and the replay does not continue past it. The symbol file follows the same rule for a torn final record. A corrupt record anywhere else refuses to open, because an edge could then refer to the wrong key. A test writes 100,000 edges, appends an incomplete 14-byte record, and reopens: every edge comes back and the torn bytes are removed.
+The crash tests replay every prefix of the writes and forces of a run through a simulated disk, with torn writes at every byte, and require recovery to return a prefix of what was acknowledged.
 
 ### What survives what
 
@@ -327,7 +373,7 @@ The kernel supports one writer and any number of readers. Every mutation runs in
 
 The stress test in `GraphConcurrencyTest` runs one writer that toggles 200,000 edges on a high-degree node while eight readers run `kHop` and `commonNeighbors`. Every result must hold distinct, in-range targets. The test also checks that the readers allocate nothing after the writer stops. Breaking the validation step makes it fail with a duplicated target.
 
-The Python `Graph` and `LakeTable` objects serialize their calls with a lock, so threads may share one object. Each OS thread runs its native calls on its own GraalVM isolate thread. Every C-ABI call on a graph handle also takes that handle's monitor, so threads may share a handle. Calls on one handle run one at a time, so readers do not yet run in parallel within a handle. `python/tests/test_concurrency.py` covers both Python cases, and `python/tests/test_crash.py` kills a writer with SIGKILL and checks that every acknowledged sync write survives.
+Readers on one handle run in parallel. Looking up a handle takes no lock, a read takes no monitor, and each thread keeps its own result buffer, so one reader never sees another's results. Writes, checkpoint and close serialize on the handle, and a write does not wait for readers. Each OS thread runs its native calls on its own GraalVM isolate thread. The Python `Graph` holds its lock for writes and close only. `GraphSessionReadersTest` and `python/tests/test_concurrency.py` run readers against a busy writer, and `python/tests/test_crash.py` kills a writer with SIGKILL and checks that every acknowledged sync write survives.
 
 ## How it works
 
@@ -374,7 +420,7 @@ The graph allocation test reads the thread's allocated-bytes counter. Across the
 
 ### Crossing into Python
 
-The Java code compiles to a native shared library with GraalVM Native Image, so Python does not need a JVM. Each exported function takes a GraalVM isolate thread, which GraalVM requires. Functions return sentinel values such as `false` or `-1` instead of throwing, so an exception cannot escape into the host process. A write that a memory limit refuses returns `-3`, which the Python layer raises as `NodusMemoryError`.
+The Java code compiles to a native shared library with GraalVM Native Image, so Python does not need a JVM. Each exported function takes a GraalVM isolate thread, which GraalVM requires. Functions return sentinel values such as `false` or `-1` instead of throwing, so an exception cannot escape into the host process. Every failure returns a negative code from a fixed contract, and the Python layer raises the matching exception: `-3` `NodusMemoryError`, `-4` `NodusStaleReadError`, `-5` `NodusCheckDepthError`, `-6` `NodusSchemaError`, `-9` `NodusCorruptLogError`, `-10` `NodusUnsupportedError`, `-11` `NodusUpgradeRequiredError`, `-12` `NodusIndeterminateError`, `-13` `NodusTokenLostError`. The message of the last failure on a thread is available through `nodus_last_error`.
 
 Results are written into caller-supplied buffers, and the call returns the full count. A caller that guessed too small can grow the buffer and retry. Batch calls validate the whole batch before they change anything, so one bad ID leaves the graph as it was.
 
@@ -437,7 +483,10 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 - **Recovery is not yet sub-second.** At 30.6 million edges, a fresh process with a 3 GB heap recovers in 2.3 to 3.7 seconds (3.7 seconds when it also replays 500,000 log frames). The graph lives in native memory, so the live Java heap after load is about 1 MB, down from 1,180 MB before the off-heap move. The remaining time is the snapshot load, which fills native blocks one edge at a time.
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
-- **Calls on one handle are serialized.** The kernel allows one writer and many readers. Python objects and C handles are both safe to share across threads, but calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
+- **One writer.** The kernel allows one writer and many readers. Writes on one handle run one at a time.
+- **Schema retypes.** A schema version that turns a relation holding tuples into a tupleset relation, or retires it, is refused. Moving the tuples between the two table pairs in the same transaction is not built yet.
+- **Durability `lake`.** It raises `NodusUnsupportedError` until the segment shipper exists. There is no follower, object-storage shipping or automatic failover yet.
+- **Transactions are bounded.** A transaction must fit one write of 1 MiB. Split larger loads, or use `add_edges_from`, which writes one record per edge.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
@@ -449,4 +498,4 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine (Rings 1 to 3) is built, and durability (write-ahead log, checkpoint, and recovery) is built on top of it. The lake write path is built. String and UUID keys, the kernel concurrency test, and the release wheel workflow are built. Python `Graph` and `LakeTable` objects can be shared across threads. Calls on one handle are serialized, and readers do not run in parallel within a handle yet. Multiple writers are not. Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine and its durability are built on a typed log and a version 3 snapshot, with an upgrade path from the earlier directory format. Typed tuples, schemas, tokens and permission checks are built on top of it, and readers run in parallel within a handle. The lake write path is built, and so are the release wheels. Multiple writers, followers, object-storage shipping, Iceberg metadata, compaction, and the Arrow export are still open.
