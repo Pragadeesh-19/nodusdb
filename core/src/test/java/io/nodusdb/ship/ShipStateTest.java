@@ -281,7 +281,7 @@ class ShipStateTest {
     }
 
     @Test
-    void theRunnerWaitsForWorkUntilItIsWokenOrAWaiterArrives() throws Exception {
+    void theRunnerWaitsForWorkUntilItIsWoken() throws Exception {
         ShipState state = state();
         long started = System.nanoTime();
         state.awaitWork(30_000_000L);
@@ -302,5 +302,133 @@ class ShipStateTest {
         }
         state.awaitWork(0);
         state.awaitWork(-5);
+    }
+
+    @Test
+    void aWakeBeforeTheRunnerWaitsIsNotLostAndIsConsumedOnce() {
+        ShipState state = state();
+        state.wake();
+
+        long started = System.nanoTime();
+        state.awaitWork(30 * SECOND);
+        assertTrue(System.nanoTime() - started < 10 * SECOND);
+
+        started = System.nanoTime();
+        state.awaitWork(30_000_000L);
+        assertTrue(System.nanoTime() - started >= 20_000_000L, "the second wait must not return at once");
+    }
+
+    @Test
+    void aWaiterThatArrivesWhileTheRunnerIsBusyWakesItsNextWaitOnlyOnce() throws Exception {
+        ShipState state = state();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Throwable> waiter = pool.submit(() -> {
+                try {
+                    state.awaitShipped(3, 150, 30 * SECOND);
+                    return null;
+                } catch (Throwable thrown) {
+                    return thrown;
+                }
+            });
+            waitUntil(state::hasWaiters);
+
+            long started = System.nanoTime();
+            state.awaitWork(30 * SECOND);
+            assertTrue(System.nanoTime() - started < 10 * SECOND);
+
+            started = System.nanoTime();
+            state.awaitWork(30_000_000L);
+            assertTrue(System.nanoTime() - started >= 20_000_000L, "a lingering waiter must not spin the runner");
+
+            state.shipped(150, 8, 1, 0);
+            assertNull(waiter.get(10, TimeUnit.SECONDS));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void aPauseLastsItsFullLengthDespiteWorkSignals() throws Exception {
+        ShipState state = state();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            state.wake();
+            long started = System.nanoTime();
+            Future<?> pausing = pool.submit(() -> state.pause(150_000_000L));
+            Thread.sleep(30);
+            state.wake();
+            state.wake();
+            pausing.get(10, TimeUnit.SECONDS);
+
+            assertTrue(System.nanoTime() - started >= 140_000_000L);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void aStopRequestEndsEveryWaitAtOnceAndStaysRequested() {
+        ShipState state = state();
+        assertFalse(state.stopRequested());
+
+        state.requestStop();
+
+        assertTrue(state.stopRequested());
+        long started = System.nanoTime();
+        state.awaitWork(30 * SECOND);
+        state.pause(30 * SECOND);
+        assertTrue(System.nanoTime() - started < 10 * SECOND);
+        assertTrue(state.stopRequested());
+    }
+
+    @Test
+    void aStopRequestWakesARunnerThatIsPausedOrIdle() throws Exception {
+        ShipState state = state();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Long> paused = pool.submit(() -> {
+                long begin = System.nanoTime();
+                state.pause(30 * SECOND);
+                return System.nanoTime() - begin;
+            });
+            Future<Long> idle = pool.submit(() -> {
+                long begin = System.nanoTime();
+                state.awaitWork(30 * SECOND);
+                return System.nanoTime() - begin;
+            });
+            Thread.sleep(50);
+
+            state.requestStop();
+
+            assertTrue(paused.get(10, TimeUnit.SECONDS) < 10 * SECOND);
+            assertTrue(idle.get(10, TimeUnit.SECONDS) < 10 * SECOND);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void aPauseEndsWhenTheStateIsClosedAndNeverStartsAfterwards() throws Exception {
+        ShipState state = state();
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Long> pausing = pool.submit(() -> {
+                long begin = System.nanoTime();
+                state.pause(30 * SECOND);
+                return System.nanoTime() - begin;
+            });
+            Thread.sleep(50);
+            state.closed();
+
+            assertTrue(pausing.get(10, TimeUnit.SECONDS) < 10 * SECOND);
+            long started = System.nanoTime();
+            state.pause(30 * SECOND);
+            assertTrue(System.nanoTime() - started < 10 * SECOND);
+            state.pause(0);
+            state.pause(-1);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

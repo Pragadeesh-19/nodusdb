@@ -43,6 +43,8 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private long bytesShipped;
     private long lastCommitNanos;
     private int waiters;
+    private boolean workPending;
+    private boolean stopRequested;
 
     public ShipState(long epoch, long shippedLsn, long chainSeq, long backlogCapBytes) {
         this.epoch = epoch;
@@ -79,6 +81,7 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                 return;
             }
             waiters++;
+            workPending = true;
             monitor.notifyAll();
             try {
                 while (shippedLsn < lsn) {
@@ -111,20 +114,52 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
             return;
         }
         synchronized (monitor) {
-            if (waiters > 0 || phase == Phase.CLOSED) {
-                return;
+            if (!workPending && !stopRequested && phase != Phase.CLOSED) {
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(monitor, maxNanos);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
-            try {
-                TimeUnit.NANOSECONDS.timedWait(monitor, maxNanos);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+            workPending = false;
+        }
+    }
+
+    public void pause(long nanos) {
+        long deadline = System.nanoTime() + nanos;
+        synchronized (monitor) {
+            while (phase != Phase.CLOSED && !stopRequested) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    return;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(monitor, remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
         }
     }
 
     public void wake() {
         synchronized (monitor) {
+            workPending = true;
             monitor.notifyAll();
+        }
+    }
+
+    public void requestStop() {
+        synchronized (monitor) {
+            stopRequested = true;
+            monitor.notifyAll();
+        }
+    }
+
+    public boolean stopRequested() {
+        synchronized (monitor) {
+            return stopRequested;
         }
     }
 

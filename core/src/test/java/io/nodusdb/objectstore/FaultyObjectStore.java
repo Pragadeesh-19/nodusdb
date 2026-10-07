@@ -53,6 +53,7 @@ public final class FaultyObjectStore implements ObjectStore {
     private double failAfter;
     private double conflict;
     private boolean ignoreConditionalWrites;
+    private String conflictExemptPrefix;
     private int ordinal;
 
     public FaultyObjectStore(ObjectStore delegate) {
@@ -84,6 +85,11 @@ public final class FaultyObjectStore implements ObjectStore {
         this.failBefore = failBefore;
         this.failAfter = failAfter;
         this.conflict = conflict;
+        return this;
+    }
+
+    public synchronized FaultyObjectStore exemptFromRandomConflicts(String keyPrefix) {
+        this.conflictExemptPrefix = keyPrefix;
         return this;
     }
 
@@ -194,7 +200,8 @@ public final class FaultyObjectStore implements ObjectStore {
         if (draw < failBefore + failAfter) {
             return Fault.FAIL_AFTER;
         }
-        if (operation == Operation.PUT_IF_ABSENT && draw < failBefore + failAfter + conflict) {
+        boolean conflictAllowed = conflictExemptPrefix == null || !key.startsWith(conflictExemptPrefix);
+        if (operation == Operation.PUT_IF_ABSENT && conflictAllowed && draw < failBefore + failAfter + conflict) {
             return Fault.CONFLICT;
         }
         return null;
