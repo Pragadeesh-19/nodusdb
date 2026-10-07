@@ -128,7 +128,7 @@ open durable graph with shipping configured
 
 | Bucket | Local | Action |
 |---|---|---|
-| empty | fresh or trimmed | upload the local snapshot, commit `SNAPSHOT_REF` first; stats record the history gap before it |
+| empty | fresh or trimmed | upload the local snapshot and claim an epoch; the shipper's first step commits `SNAPSHOT_REF` as object 1, after step 5 has written the local `EPOCH` record |
 | head at LSN H, epoch history matches | last LSN >= H | claim epoch `max(local, head) + 1` with `If-None-Match`; on 412 try the next epoch; resume at H + 1 |
 | head at LSN H | last LSN < H | refuse: `NodusWriterFencedError` naming both positions |
 | head at LSN H | epoch at H differs from the head's | refuse: `NodusWriterFencedError` |

@@ -1,11 +1,8 @@
 package io.nodusdb.ship;
 
 import io.nodusdb.chain.ChainBody;
-import io.nodusdb.chain.ChainCodec;
 import io.nodusdb.chain.ChainHash;
-import io.nodusdb.chain.ChainKind;
 import io.nodusdb.chain.ChainLayout;
-import io.nodusdb.chain.ChainObject;
 import io.nodusdb.chain.ChainTrustException;
 import io.nodusdb.chain.KeyFiles;
 import io.nodusdb.chain.Keyring;
@@ -23,17 +20,18 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -44,19 +42,19 @@ class OpenReconcilerTest {
     private final MemoryObjectStore store = new MemoryObjectStore();
     private final List<Long> publishedFloors = new ArrayList<>();
 
-    private SnapshotPublisher publisher(ObjectStore target, long lsn) {
+    private SnapshotPublisher publisher(ObjectStore target) {
         return floor -> {
             publishedFloors.add(floor);
-            byte[] snapshot = ("snapshot " + lsn).getBytes(StandardCharsets.UTF_8);
-            String path = ChainLayout.snapshotKey(lsn);
+            byte[] snapshot = ("snapshot " + SNAPSHOT_LSN).getBytes(StandardCharsets.UTF_8);
+            String path = ChainLayout.snapshotKey(SNAPSHOT_LSN);
             target.put(path, snapshot);
-            return new ChainBody.SnapshotRef(path, ChainHash.sha256(snapshot), lsn);
+            return new ChainBody.SnapshotRef(path, ChainHash.sha256(snapshot), SNAPSHOT_LSN);
         };
     }
 
     private OpenReconciler reconciler(ObjectStore target, long nonce, Keyring keyring) {
-        return new OpenReconciler(target, ChainBuilder.signingKey(), keyring, nonce, ShipSettings.defaults(),
-                publisher(target, SNAPSHOT_LSN), () -> 1_700_000_000_000_000L);
+        return new OpenReconciler(target, new WriterIdentity(ChainBuilder.signingKey(), nonce), keyring,
+                ShipSettings.defaults(), publisher(target), () -> 1_700_000_000_000_000L);
     }
 
     private OpenReconciler reconciler() {
@@ -64,34 +62,30 @@ class OpenReconcilerTest {
     }
 
     @Test
-    void anEmptyBucketStartsAChainWithTheSnapshotAndClaimsTheNextEpoch() {
+    void anEmptyBucketYieldsAnEpochAndTheSnapshotToStartTheChainWithoutWritingTheChain() {
         Start start = reconciler().reconcile(new Local(60, 4));
 
         assertEquals(5, start.epoch());
-        assertEquals(1, start.cursor().seq());
-        assertEquals(5, start.cursor().epoch());
-        assertEquals(SNAPSHOT_LSN, start.cursor().lastLsn());
-        assertEquals(SNAPSHOT_LSN, start.historyGapBeforeLsn());
+        assertTrue(start.startsChain());
+        assertEquals(SNAPSHOT_LSN, start.firstReference().lsn());
+        assertEquals(SNAPSHOT_LSN, start.shippedLsn());
+        assertTrue(start.cursor().atStart());
         assertEquals(List.of(1L), publishedFloors);
-        ChainObject first = ChainCodec.decode(store.get(ChainLayout.chainKey(1)).orElseThrow());
-        assertEquals(ChainKind.SNAPSHOT_REF, first.header().kind());
-        assertEquals(ChainHash.ZERO, first.header().prev());
-        assertEquals(start.cursor().digest(), first.digest());
         assertTrue(store.exists(ChainLayout.epochKey(5)));
-        assertFalse(store.exists(ChainLayout.epochKey(4)));
+        assertFalse(store.exists(ChainLayout.chainKey(1)));
+        assertEquals(0, store.list(ChainLayout.CHAIN_PREFIX, "", 10).entries().size());
     }
 
     @Test
-    void aSecondOpenContinuesTheChainInTheNextEpoch() {
+    void anOpenThatNeverStartedTheChainLeavesTheBucketEmptyAndTheNextOpenClaimsALaterEpoch() {
         Start first = reconciler().reconcile(new Local(60, 4));
 
-        Start second = reconciler().reconcile(new Local(60, first.epoch()));
+        Start second = reconciler().reconcile(new Local(60, 4));
 
+        assertEquals(5, first.epoch());
         assertEquals(6, second.epoch());
-        assertEquals(first.cursor().seq(), second.cursor().seq());
-        assertEquals(first.cursor().digest(), second.cursor().digest());
-        assertEquals(0, second.historyGapBeforeLsn());
-        assertEquals(List.of(1L), publishedFloors, "the snapshot is only published when the chain starts");
+        assertTrue(second.startsChain());
+        assertEquals(List.of(1L, 1L), publishedFloors);
     }
 
     @Test
@@ -103,8 +97,11 @@ class OpenReconcilerTest {
         Start start = reconciler().reconcile(new Local(chain.lastLsn() + 25, 3));
 
         assertEquals(4, start.epoch());
+        assertFalse(start.startsChain());
+        assertNull(start.firstReference());
         assertEquals(2, start.cursor().seq());
         assertEquals(chain.lastLsn(), start.cursor().lastLsn());
+        assertEquals(chain.lastLsn(), start.shippedLsn());
         assertEquals(chain.digest(), start.cursor().digest());
         assertTrue(publishedFloors.isEmpty());
     }
@@ -174,8 +171,8 @@ class OpenReconcilerTest {
 
     @Test
     void aFailureToPublishTheSnapshotLeavesNothingBehind() {
-        OpenReconciler failing = new OpenReconciler(store, ChainBuilder.signingKey(), Keyring.empty(), 7,
-                ShipSettings.defaults(), floor -> {
+        OpenReconciler failing = new OpenReconciler(store, new WriterIdentity(ChainBuilder.signingKey(), 7),
+                Keyring.empty(), ShipSettings.defaults(), floor -> {
                     throw new TransientStoreException("upload failed", 0);
                 }, () -> 1);
 
@@ -185,19 +182,16 @@ class OpenReconcilerTest {
     }
 
     @Test
-    void aFailureWhileCommittingTheFirstObjectLeavesOnlyAnOrphanClaimThatTheNextOpenSkips() {
+    void aFailureWhileClaimingTheEpochIsPassedOnAndLeavesNoClaim() {
         FaultyObjectStore faulty = new FaultyObjectStore(store);
-        faulty.failWhen(call -> call.key().equals(ChainLayout.chainKey(1)), 1, Fault.FAIL_BEFORE);
+        faulty.failWhen(call -> call.operation() == Operation.PUT_IF_ABSENT
+                && call.key().equals(ChainLayout.epochKey(5)), 1, Fault.FAIL_BEFORE);
 
         assertThrows(TransientStoreException.class,
                 () -> reconciler(faulty, 7, Keyring.empty()).reconcile(new Local(60, 4)));
-        assertTrue(store.exists(ChainLayout.epochKey(5)));
-        assertFalse(store.exists(ChainLayout.chainKey(1)));
+        assertFalse(store.exists(ChainLayout.epochKey(5)));
 
-        Start retried = reconciler(faulty, 7, Keyring.empty()).reconcile(new Local(60, 4));
-
-        assertEquals(6, retried.epoch());
-        assertTrue(store.exists(ChainLayout.chainKey(1)));
+        assertEquals(5, reconciler(faulty, 7, Keyring.empty()).reconcile(new Local(60, 4)).epoch());
     }
 
     @Test
@@ -219,43 +213,32 @@ class OpenReconcilerTest {
 
         assertThrows(ChainTrustException.class,
                 () -> reconciler(store, 7, wrong).reconcile(new Local(chain.lastLsn(), 3)));
-        assertEquals(Start.class,
-                reconciler(store, 7, ChainBuilder.keyring()).reconcile(new Local(chain.lastLsn(), 3)).getClass());
+        assertEquals(4,
+                reconciler(store, 7, ChainBuilder.keyring()).reconcile(new Local(chain.lastLsn(), 3)).epoch());
     }
 
     @Test
-    void twoWritersOpeningAnEmptyBucketTogetherLeaveExactlyOneOfThem() throws Exception {
+    void writersOpeningTheSameBucketTogetherAlwaysGetDistinctEpochs() throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(2);
         try {
             for (int round = 0; round < 40; round++) {
                 MemoryObjectStore shared = new MemoryObjectStore();
                 CountDownLatch go = new CountDownLatch(1);
-                AtomicInteger winners = new AtomicInteger();
-                List<Future<?>> attempts = new ArrayList<>();
+                List<Future<Long>> attempts = new ArrayList<>();
                 for (int writer = 0; writer < 2; writer++) {
                     long nonce = writer + 1;
                     attempts.add(pool.submit(() -> {
                         go.await();
-                        try {
-                            reconciler(shared, nonce, Keyring.empty()).reconcile(new Local(60, 4));
-                            winners.incrementAndGet();
-                        } catch (WriterFencedException lost) {
-                            return null;
-                        }
-                        return null;
+                        return reconciler(shared, nonce, Keyring.empty()).reconcile(new Local(60, 4)).epoch();
                     }));
                 }
                 go.countDown();
-                for (Future<?> attempt : attempts) {
-                    try {
-                        attempt.get(30, TimeUnit.SECONDS);
-                    } catch (ExecutionException e) {
-                        throw new AssertionError(e.getCause());
-                    }
+                Set<Long> epochs = new HashSet<>();
+                for (Future<Long> attempt : attempts) {
+                    epochs.add(attempt.get(30, TimeUnit.SECONDS));
                 }
 
-                assertEquals(1, winners.get(), "round " + round);
-                assertEquals(1, shared.list(ChainLayout.CHAIN_PREFIX, "", 100).entries().size(), "round " + round);
+                assertEquals(Set.of(5L, 6L), epochs, "round " + round);
             }
         } finally {
             pool.shutdownNow();
