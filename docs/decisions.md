@@ -1,8 +1,10 @@
 # Decisions
 
-Every architecture decision of the project, D1 to D87, in order. The authorization-wedge decisions (D58 to D87)
+Every architecture decision of the project, D1 to D104, in order. The authorization-wedge decisions (D58 to D87)
 are explained in [`designs/engineering-review-authz-wedge.md`](designs/engineering-review-authz-wedge.md), which is
-the authority for their contracts. The notes at the end record what Build Step 1 settled while implementing them.
+the authority for their contracts. The Build Step 2 decisions (D88 to D104) are explained in
+[`designs/engineering-review-build-step-2.md`](designs/engineering-review-build-step-2.md). The notes at the end
+record what Build Step 1 settled while implementing them.
 
 | ID | Topic | Decision | Source |
 |---|---|---|---|
@@ -93,6 +95,23 @@ the authority for their contracts. The notes at the end record what Build Step 1
 | D85 | Edge partition | Two table pairs: DIRECT and INDIRECT (usersets and tupleset relations) | Engineering review 2026-10-06 |
 | D86 | Write ordering | Validate, append and fsync under the writer monitor; the seqlock covers only memory changes | Engineering review 2026-10-06 |
 | D87 | fsync failure | `NodusIndeterminateError`; the log is poisoned until reopen; recovery decides the outcome | Engineering review 2026-10-06 |
+| D88 | Step 2 scope | Full writer-side Build Step 2 in six milestones on one branch, mergeable after each | Step 2 review 2026-10-07 |
+| D89 | Projector input | The projector reads signed chain objects through a bounded ring. Local trim stays `min(snapshot, shipped)`. Chain retention also stops at the projector's committed LSN | Step 2 review 2026-10-07 |
+| D90 | Open against a bucket | Reconcile at open: empty bucket starts with a `SNAPSHOT_REF`; a matching, equal or ahead local log claims the next epoch and resumes; a local log that is behind or diverged is refused with `NodusWriterFencedError` | Step 2 review 2026-10-07 |
+| D91 | Commit protocol | 409 retries the same bytes; timeouts and 5xx are unknown outcomes resolved by GET and compare; auth errors are fatal; a startup probe refuses stores that ignore `If-None-Match`. Amends section 8.3 | Step 2 review 2026-10-07 |
+| D92 | `LAKE` wait | The native write returns the token; `nodus_await_shipped` waits outside every lock; a timeout raises `NodusShipTimeoutError` (-14) carrying the token | Step 2 review 2026-10-07 |
+| D93 | Signing key | Operator-supplied Ed25519 key and explicit `key_id`; verifiers trust a keyring from their own configuration, never the bucket | Step 2 review 2026-10-07 |
+| D94 | Snapshot upload | Multipart upload on its own thread after the local rename; `SNAPSHOT_REF` only after the object and its SHA-256 are verified | Step 2 review 2026-10-07 |
+| D95 | Credentials | A `CredentialsProvider` with explicit keys and an environment or file source that re-reads on `ExpiredToken` or 403; cloud role providers are a TODO | Step 2 review 2026-10-07 |
+| D96 | Stats | One JSON export and `Graph.stats()`; threshold crossings go to the `nodusdb` logger once per crossing | Step 2 review 2026-10-07 |
+| D97 | Trim wiring | `ShippingLogStore` clamps `trim`; a `ShipWatermark` interface is reached through one kernel accessor; `SegmentedLog`, `VolatileLog` and `DurableStore` do not change | Step 2 review 2026-10-07 |
+| D98 | Parquet writer | A `ColumnSource` interface with optional field ids, a timestamp type and a no-key mode; existing lake output stays byte-identical | Step 2 review 2026-10-07 |
+| D99 | Projector names | A `NameResolver` with a kernel-backed implementation; schema version per event is tracked from `SCHEMA` records and stored with the projected LSN | Step 2 review 2026-10-07 |
+| D100 | Config transport | One JSON document through one new export, validated by one Java class; unknown keys rejected; secrets never echoed | Step 2 review 2026-10-07 |
+| D101 | Shipper testability | `ShipperCore` is a deterministic step function with a thin runner; tests use a manual clock, a faulty store and a seed, and crash after every store call | Step 2 review 2026-10-07 |
+| D102 | CI verifiers | pyiceberg, fastavro and botocore as test-only packages; committed botocore SigV4 vectors; MinIO as a pinned container on the Ubuntu job | Step 2 review 2026-10-07 |
+| D103 | Head discovery | Newest `SNAPSHOT_REF`, then a listing after its position; the snapshot carries the chain position at upload start as a lower-bound hint; always verified by signature | Step 2 review 2026-10-07 |
+| D104 | Performance proof | JMH baselines with `-prof gc` and a CI ratio gate of 3 for `add_tuple` with shipping off and on | Step 2 review 2026-10-07 |
 
 ## Build Step 1 implementation notes
 

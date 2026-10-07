@@ -112,4 +112,54 @@
 **Priority:** P3
 **Depends on:** The full relationship-lakehouse plan shipping first
 
+## Shipping and lake
+
+### Snapshot-backed NameResolver for a projector outside the writer
+
+**What:** A second `NameResolver` that reads the symbol and relation sections of the latest snapshot, plus later `SYMBOL` and `SCHEMA` records, instead of the writer's live tables.
+
+**Why:** Build Step 2 builds the Iceberg table inside the writer process (D99). This lets the projector run on another machine and keeps the table buildable from the bucket alone.
+
+**Context:** The `NameResolver` interface lands in Build Step 2, so this is a drop-in implementation. Snapshot v3 stores symbols with erased flags (D77). The cost is a ranged read of a large snapshot.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Build Step 2, the snapshot v3 section directory
+
+### Cloud role credential providers
+
+**What:** `CredentialsProvider` implementations for EC2 IMDSv2, ECS container credentials and STS web identity (EKS IRSA), with refresh before expiry.
+
+**Why:** Teams on AWS roles have no static keys. Without these providers they need a sidecar that writes a credentials file (D95).
+
+**Context:** Build Step 2 ships the provider interface and the refresh on `ExpiredToken`. Each provider is a drop-in. The flows cannot be tested end to end in CI without cloud accounts, so they need careful fakes.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Build Step 2 (S3 client and `CredentialsProvider`)
+
+### Prometheus and OpenTelemetry adapter for stats
+
+**What:** An optional Python module that exports the `Graph.stats()` dict as Prometheus metrics and OpenTelemetry gauges, with no required dependency.
+
+**Why:** A stuck shipper should page someone. The CEO plan (15A) promised this adapter, and D96 does not include it.
+
+**Context:** The stats fields are stable from Build Step 2 and only grow. The adapter maps them to metrics; metric names become a contract, so pick them with a real alert in mind.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Build Step 2 (stats export)
+
+### Signing key rotation and keyring tooling
+
+**What:** A tool and Python helpers to generate a key, publish a keyring file, verify a keyring against a chain range and stage a rotation.
+
+**Why:** A rotation done wrong stalls every follower at once. D93 makes trust operator-supplied, and nothing yet helps an operator rotate safely.
+
+**Context:** Build Step 2 ships `generate_signing_key`, an explicit `key_id` in every chain object and the writer key id in every `EPOCH` record. The keyring file format is best designed with the follower verifier in Build Step 3.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Build Steps 2 and 3
+
 ## Completed

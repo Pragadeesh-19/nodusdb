@@ -7,7 +7,8 @@ source plan disagree, this document wins (see its amendments section).
 This document freezes every contract that becomes permanent once a customer writes data: the
 tuple shape, the log and snapshot formats, the schema record, the object-storage layout, the
 commit and signing protocol, the lake table and the token semantics. Code is staged; formats are
-not. Each later build step gets its own short review against these contracts.
+not. Each later build step gets its own short review against these contracts. Build Step 2 is reviewed in
+[`engineering-review-build-step-2.md`](engineering-review-build-step-2.md).
 
 The review ran in two passes. The first pass produced D58 to D76. An independent adversarial
 review of the first draft found eleven defects, three of which would have lost customer data;
