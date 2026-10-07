@@ -1,5 +1,6 @@
 package io.nodusdb.ship;
 
+import io.nodusdb.chain.ChainBody;
 import io.nodusdb.error.ShipTimeoutException;
 import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.log.ShipWatermark;
@@ -22,7 +23,15 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
 
     public record Snapshot(Phase phase, long epoch, long shippedLsn, long chainSeq, long backlogBytes,
                            long backlogCapBytes, long consecutiveFailures, String lastError, long objectsShipped,
-                           long bytesShipped, long lastCommitNanos, long nowNanos) {
+                           long bytesShipped, long lastCommitNanos, long nowNanos, ReferenceStatus references,
+                           RetentionStatus retention) {
+    }
+
+    public record ReferenceStatus(long seq, long lsn, long committedNanos, long failures, String lastError) {
+    }
+
+    public record RetentionStatus(long sweeps, long chainObjectsDeleted, long snapshotsDeleted, long failures,
+                                  String lastError) {
     }
 
     private static final int MAX_EVENTS = 64;
@@ -45,6 +54,17 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private int waiters;
     private boolean workPending;
     private boolean stopRequested;
+    private ChainBody.SnapshotRef offeredReference;
+    private long referenceSeq;
+    private long referenceLsn = -1;
+    private long referenceNanos;
+    private long referenceFailures;
+    private String referenceError = "";
+    private long sweeps;
+    private long chainObjectsDeleted;
+    private long snapshotsDeleted;
+    private long retentionFailures;
+    private String retentionError = "";
 
     public ShipState(long epoch, long shippedLsn, long chainSeq, long backlogCapBytes) {
         this.epoch = epoch;
@@ -147,6 +167,57 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
         synchronized (monitor) {
             workPending = true;
             monitor.notifyAll();
+        }
+    }
+
+    public void offerReference(ChainBody.SnapshotRef reference) {
+        synchronized (monitor) {
+            if (offeredReference == null || reference.lsn() >= offeredReference.lsn()) {
+                offeredReference = reference;
+            }
+            workPending = true;
+            monitor.notifyAll();
+        }
+    }
+
+    public ChainBody.SnapshotRef takeReference() {
+        synchronized (monitor) {
+            ChainBody.SnapshotRef taken = offeredReference;
+            offeredReference = null;
+            return taken;
+        }
+    }
+
+    public void referenceCommitted(long seq, long lsn, long nowNanos) {
+        synchronized (monitor) {
+            referenceSeq = seq;
+            referenceLsn = lsn;
+            referenceNanos = nowNanos;
+            referenceError = "";
+            monitor.notifyAll();
+        }
+    }
+
+    public void referenceFailed(String reason) {
+        synchronized (monitor) {
+            referenceFailures++;
+            referenceError = reason;
+        }
+    }
+
+    public void retentionSwept(int chainObjects, int snapshots) {
+        synchronized (monitor) {
+            sweeps++;
+            chainObjectsDeleted += chainObjects;
+            snapshotsDeleted += snapshots;
+            retentionError = "";
+        }
+    }
+
+    public void retentionFailed(String reason) {
+        synchronized (monitor) {
+            retentionFailures++;
+            retentionError = reason;
         }
     }
 
@@ -271,7 +342,10 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     public Snapshot snapshot() {
         synchronized (monitor) {
             return new Snapshot(phase, epoch, shippedLsn, chainSeq, backlogBytes, backlogCapBytes,
-                    consecutiveFailures, lastError, objectsShipped, bytesShipped, lastCommitNanos, System.nanoTime());
+                    consecutiveFailures, lastError, objectsShipped, bytesShipped, lastCommitNanos, System.nanoTime(),
+                    new ReferenceStatus(referenceSeq, referenceLsn, referenceNanos, referenceFailures, referenceError),
+                    new RetentionStatus(sweeps, chainObjectsDeleted, snapshotsDeleted, retentionFailures,
+                            retentionError));
         }
     }
 

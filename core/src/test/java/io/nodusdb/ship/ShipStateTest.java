@@ -1,5 +1,8 @@
 package io.nodusdb.ship;
 
+import io.nodusdb.chain.ChainBody;
+import io.nodusdb.chain.ChainHash;
+import io.nodusdb.chain.ChainLayout;
 import io.nodusdb.error.ShipTimeoutException;
 import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.ship.ShipState.BacklogEvent;
@@ -365,6 +368,75 @@ class ShipStateTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    private static ChainBody.SnapshotRef reference(long lsn) {
+        return new ChainBody.SnapshotRef(ChainLayout.snapshotKey(lsn), ChainHash.sha256(new byte[]{(byte) lsn}), lsn);
+    }
+
+    @Test
+    void anOfferedReferenceIsTakenOnceAndTheNewestOfferWins() {
+        ShipState state = state();
+        assertNull(state.takeReference());
+
+        state.offerReference(reference(10));
+        state.offerReference(reference(20));
+        state.offerReference(reference(15));
+
+        assertEquals(20, state.takeReference().lsn());
+        assertNull(state.takeReference());
+        state.offerReference(reference(5));
+        assertEquals(5, state.takeReference().lsn());
+    }
+
+    @Test
+    void aReferenceWithTheSameLsnReplacesTheOfferedOne() {
+        ShipState state = state();
+        ChainBody.SnapshotRef first = reference(10);
+        ChainBody.SnapshotRef second = new ChainBody.SnapshotRef(first.path(), ChainHash.sha256(new byte[]{1}), 10);
+
+        state.offerReference(first);
+        state.offerReference(second);
+
+        assertEquals(second, state.takeReference());
+    }
+
+    @Test
+    void offeringAReferenceWakesTheRunnerOnce() {
+        ShipState state = state();
+
+        state.offerReference(reference(10));
+        long started = System.nanoTime();
+        state.awaitWork(30 * SECOND);
+        assertTrue(System.nanoTime() - started < 10 * SECOND);
+
+        started = System.nanoTime();
+        state.awaitWork(30_000_000L);
+        assertTrue(System.nanoTime() - started >= 20_000_000L);
+    }
+
+    @Test
+    void referenceProgressAndFailuresAreReported() {
+        ShipState state = state();
+        ShipState.ReferenceStatus initial = state.snapshot().references();
+        assertEquals(0, initial.seq());
+        assertEquals(-1, initial.lsn());
+        assertEquals(0, initial.failures());
+        assertEquals("", initial.lastError());
+
+        state.referenceFailed("first");
+        state.referenceFailed("second");
+        ShipState.ReferenceStatus failing = state.snapshot().references();
+        assertEquals(2, failing.failures());
+        assertEquals("second", failing.lastError());
+
+        state.referenceCommitted(9, 77, 123);
+        ShipState.ReferenceStatus committed = state.snapshot().references();
+        assertEquals(9, committed.seq());
+        assertEquals(77, committed.lsn());
+        assertEquals(123, committed.committedNanos());
+        assertEquals(2, committed.failures());
+        assertEquals("", committed.lastError());
     }
 
     @Test

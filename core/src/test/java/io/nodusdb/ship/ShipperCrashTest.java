@@ -54,6 +54,9 @@ class ShipperCrashTest {
                 while (done < TRANSACTIONS) {
                     rig.append(1 + done % 4);
                     done++;
+                    if (done == 6) {
+                        session.state().offerReference(rig.referenceAt(rig.log.lastLsn()));
+                    }
                     if (done % 2 == 0) {
                         rig.runPastBackoffs(session, BACKOFF_STEPS);
                     }

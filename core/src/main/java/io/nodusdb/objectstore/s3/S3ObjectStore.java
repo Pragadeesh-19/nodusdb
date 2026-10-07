@@ -202,6 +202,7 @@ public final class S3ObjectStore implements ObjectStore {
         }
     }
 
+    @Override
     public int abortStaleUploads(String prefix, Duration olderThan, Instant now) {
         ObjectKeys.requirePrefix(prefix);
         return uploader.abortStale(prefix, now.minus(olderThan));

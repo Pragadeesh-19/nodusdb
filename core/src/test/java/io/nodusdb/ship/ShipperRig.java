@@ -88,6 +88,13 @@ final class ShipperRig implements AutoCloseable {
         return new Session(start, state, core, feed);
     }
 
+    ChainBody.SnapshotRef referenceAt(long lsn) {
+        byte[] content = ("snapshot " + lsn).getBytes(StandardCharsets.UTF_8);
+        String path = ChainLayout.snapshotKey(lsn);
+        memory.put(path, content);
+        return new ChainBody.SnapshotRef(path, ChainHash.sha256(content), lsn);
+    }
+
     ShipperCore.Next run(Session session) {
         ShipperCore.Next next;
         do {

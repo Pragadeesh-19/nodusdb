@@ -99,8 +99,14 @@ public final class ShipperCore {
 
     private Next prepare() throws IOException {
         if (cursor.atStart()) {
-            pending = sealReference();
+            pending = sealReference(start.firstReference());
             pendingLastLsn = start.firstReference().lsn();
+            return commit();
+        }
+        ChainBody.SnapshotRef reference = state.takeReference();
+        if (reference != null) {
+            pending = sealReference(reference);
+            pendingLastLsn = cursor.lastLsn();
             return commit();
         }
         LogTailReader.Batch batch = feed.next(settings.maxObjectBytes());
@@ -122,8 +128,8 @@ public final class ShipperCore {
         return commit();
     }
 
-    private ChainObject sealReference() {
-        return ChainCodec.seal(header(ChainKind.SNAPSHOT_REF), start.firstReference(), identity.key());
+    private ChainObject sealReference(ChainBody.SnapshotRef reference) {
+        return ChainCodec.seal(header(ChainKind.SNAPSHOT_REF), reference, identity.key());
     }
 
     private ChainHeader header(ChainKind kind) {
@@ -147,7 +153,11 @@ public final class ShipperCore {
 
     private Next committed() throws IOException {
         cursor.accept(pending);
-        state.shipped(pendingLastLsn, pending.seq(), pending.encoded().length, nanoClock.getAsLong());
+        long now = nanoClock.getAsLong();
+        state.shipped(pendingLastLsn, pending.seq(), pending.encoded().length, now);
+        if (pending.body() instanceof ChainBody.SnapshotRef reference) {
+            state.referenceCommitted(pending.seq(), reference.lsn(), now);
+        }
         state.active();
         pending = null;
         transientFailures = 0;

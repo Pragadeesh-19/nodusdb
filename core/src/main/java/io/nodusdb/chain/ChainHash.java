@@ -29,12 +29,32 @@ public final class ChainHash {
     }
 
     public static ChainHash sha256(byte[] data, int offset, int length) {
+        return accumulator().update(data, offset, length).finish();
+    }
+
+    public static Accumulator accumulator() {
         try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            digest.update(data, offset, length);
-            return new ChainHash(digest.digest());
+            return new Accumulator(MessageDigest.getInstance("SHA-256"));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
+        }
+    }
+
+    public static final class Accumulator {
+
+        private final MessageDigest digest;
+
+        private Accumulator(MessageDigest digest) {
+            this.digest = digest;
+        }
+
+        public Accumulator update(byte[] data, int offset, int length) {
+            digest.update(data, offset, length);
+            return this;
+        }
+
+        public ChainHash finish() {
+            return new ChainHash(digest.digest());
         }
     }
 

@@ -1,6 +1,8 @@
 package io.nodusdb.objectstore;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
@@ -35,6 +37,10 @@ public interface ObjectStore extends AutoCloseable {
 
     default boolean exists(String key) {
         return head(key).isPresent();
+    }
+
+    default int abortStaleUploads(String prefix, Duration olderThan, Instant now) {
+        return 0;
     }
 
     @Override

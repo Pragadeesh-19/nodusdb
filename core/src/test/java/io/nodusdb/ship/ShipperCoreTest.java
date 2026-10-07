@@ -481,6 +481,101 @@ class ShipperCoreTest {
     }
 
     @Test
+    void aReferenceOfferedWhileIdleIsCommittedAsTheNextObject() {
+        Session session = shippedUpToTheSnapshot();
+        long shipped = session.state().shippedLsn();
+        ChainBody.SnapshotRef reference = rig.referenceAt(shipped);
+
+        session.state().offerReference(reference);
+        Next next = rig.run(session);
+
+        assertEquals(Cadence.IDLE, next.cadence());
+        ChainObject committed = object(2);
+        assertEquals(ChainKind.SNAPSHOT_REF, committed.header().kind());
+        assertEquals(reference, committed.body());
+        assertEquals(object(1).digest(), committed.header().prev());
+        assertEquals(shipped, session.state().shippedLsn());
+        ShipState.ReferenceStatus status = session.state().snapshot().references();
+        assertEquals(2, status.seq());
+        assertEquals(shipped, status.lsn());
+        ChainAudit.verify(rig.memory, rig.disk, rig.log.lastLsn());
+    }
+
+    @Test
+    void theStartingReferenceIsReportedAsTheNewestCommittedOne() {
+        rig.append(3);
+        Session session = rig.open(1);
+
+        rig.run(session);
+
+        ShipState.ReferenceStatus status = session.state().snapshot().references();
+        assertEquals(1, status.seq());
+        assertEquals(session.start().firstReference().lsn(), status.lsn());
+    }
+
+    @Test
+    void aWaitingReferenceIsCommittedBeforeRecordsThatArriveWithIt() {
+        Session session = shippedUpToTheSnapshot();
+        long snapshotLsn = rig.log.lastLsn();
+        rig.append(4);
+
+        session.state().offerReference(rig.referenceAt(snapshotLsn));
+        rig.run(session);
+
+        assertEquals(ChainKind.SNAPSHOT_REF, object(2).header().kind());
+        assertEquals(ChainKind.RECORDS, object(3).header().kind());
+        assertEquals(rig.log.lastLsn(), session.state().shippedLsn());
+        ChainAudit.verify(rig.memory, rig.disk, rig.log.lastLsn());
+    }
+
+    @Test
+    void aReferenceAheadOfTheShippedLsnDoesNotMakeThoseRecordsLookShipped() {
+        Session session = shippedUpToTheSnapshot();
+        long shipped = session.state().shippedLsn();
+        long ahead = rig.append(3);
+        session.state().offerReference(rig.referenceAt(ahead));
+
+        Next next = session.core().step();
+
+        assertEquals(Cadence.CONTINUE, next.cadence());
+        assertEquals(ChainKind.SNAPSHOT_REF, object(2).header().kind());
+        assertEquals(shipped, session.state().shippedLsn());
+        assertEquals(ahead, session.state().snapshot().references().lsn());
+        rig.run(session);
+        assertEquals(ahead, session.state().shippedLsn());
+    }
+
+    @Test
+    void aReferenceThatFailsToCommitIsRetriedWithTheSameBytes() {
+        Session session = shippedUpToTheSnapshot();
+        ChainBody.SnapshotRef reference = rig.referenceAt(rig.log.lastLsn());
+        session.state().offerReference(reference);
+        rig.store.failNext(Operation.PUT_IF_ABSENT, 2, Fault.FAIL_BEFORE);
+
+        assertEquals(Cadence.BACKOFF, session.core().step().cadence());
+        assertEquals(Cadence.BACKOFF, session.core().step().cadence());
+        assertEquals(null, session.state().takeReference());
+        rig.run(session);
+
+        assertEquals(reference, object(2).body());
+        assertEquals(2, session.state().snapshot().references().seq());
+    }
+
+    @Test
+    void aNewerOfferedReferenceReplacesAnOlderOneThatWasNotYetTaken() {
+        Session session = shippedUpToTheSnapshot();
+        long lsn = rig.log.lastLsn();
+        rig.append(2);
+        session.state().offerReference(rig.referenceAt(lsn));
+        session.state().offerReference(rig.referenceAt(lsn + 3));
+
+        rig.run(session);
+
+        assertEquals(lsn + 3, ((ChainBody.SnapshotRef) object(2).body()).lsn());
+        assertEquals(3, ChainAudit.chainKeys(rig.memory).size());
+    }
+
+    @Test
     void aShipperThatOpensOnAnExistingChainContinuesItInANewEpoch() {
         Session first = shippedUpToTheSnapshot();
         rig.append(2);

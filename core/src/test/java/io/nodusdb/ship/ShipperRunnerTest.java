@@ -6,9 +6,8 @@ import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.log.SyncMode;
 import io.nodusdb.objectstore.FaultyObjectStore.Fault;
 import io.nodusdb.objectstore.FaultyObjectStore.Operation;
-import io.nodusdb.objectstore.ListPage;
+import io.nodusdb.objectstore.ForwardingObjectStore;
 import io.nodusdb.objectstore.MemoryObjectStore;
-import io.nodusdb.objectstore.ObjectInfo;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.objectstore.PutResult;
 import io.nodusdb.ship.ShipState.Phase;
@@ -19,13 +18,10 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -270,13 +266,12 @@ class ShipperRunnerTest {
         }
     }
 
-    private static final class ExplodingStore implements ObjectStore {
+    private static final class ExplodingStore extends ForwardingObjectStore {
 
-        private final ObjectStore delegate;
         private final AtomicBoolean armed = new AtomicBoolean();
 
         ExplodingStore(ObjectStore delegate) {
-            this.delegate = delegate;
+            super(delegate);
         }
 
         @Override
@@ -284,47 +279,7 @@ class ShipperRunnerTest {
             if (armed.get() && key.startsWith(ChainLayout.CHAIN_PREFIX)) {
                 throw new IllegalStateException("simulated defect");
             }
-            return delegate.putIfAbsent(key, content, metadata);
-        }
-
-        @Override
-        public void put(String key, byte[] content) {
-            delegate.put(key, content);
-        }
-
-        @Override
-        public void putFile(String key, Path file, Map<String, String> metadata) {
-            delegate.putFile(key, file, metadata);
-        }
-
-        @Override
-        public Optional<byte[]> get(String key) {
-            return delegate.get(key);
-        }
-
-        @Override
-        public Optional<byte[]> getRange(String key, long offset, int length) {
-            return delegate.getRange(key, offset, length);
-        }
-
-        @Override
-        public Optional<ObjectInfo> head(String key) {
-            return delegate.head(key);
-        }
-
-        @Override
-        public ListPage list(String prefix, String startAfter, int maxKeys) {
-            return delegate.list(prefix, startAfter, maxKeys);
-        }
-
-        @Override
-        public void delete(String key) {
-            delegate.delete(key);
-        }
-
-        @Override
-        public void deleteAll(Collection<String> keys) {
-            delegate.deleteAll(keys);
+            return super.putIfAbsent(key, content, metadata);
         }
     }
 }

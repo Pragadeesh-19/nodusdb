@@ -1,6 +1,8 @@
 package io.nodusdb.objectstore;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -175,6 +177,11 @@ public final class FaultyObjectStore implements ObjectStore {
         for (String key : keys) {
             delete(key);
         }
+    }
+
+    @Override
+    public int abortStaleUploads(String prefix, Duration olderThan, Instant now) {
+        return delegate.abortStaleUploads(prefix, olderThan, now);
     }
 
     private synchronized boolean conditionalWritesIgnored() {
