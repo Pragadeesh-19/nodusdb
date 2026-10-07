@@ -13,6 +13,10 @@ public interface LogFileSystem {
 
     LogChannel open(String name) throws IOException;
 
+    default LogChannel openForRead(String name) throws IOException {
+        return open(name);
+    }
+
     void delete(String name) throws IOException;
 
     void trySyncDirectory() throws IOException;

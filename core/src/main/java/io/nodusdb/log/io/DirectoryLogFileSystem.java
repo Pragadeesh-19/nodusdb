@@ -51,6 +51,11 @@ public final class DirectoryLogFileSystem implements LogFileSystem {
     }
 
     @Override
+    public LogChannel openForRead(String name) throws IOException {
+        return new FileLogChannel(FileChannel.open(directory.resolve(name), StandardOpenOption.READ));
+    }
+
+    @Override
     public void delete(String name) throws IOException {
         Files.deleteIfExists(directory.resolve(name));
     }
