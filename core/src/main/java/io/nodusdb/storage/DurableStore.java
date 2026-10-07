@@ -1,5 +1,6 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.io.FileSync;
 import io.nodusdb.kernel.DurableStorage;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogStore;
@@ -33,7 +34,7 @@ final class DurableStore implements DurableStorage {
             SnapshotWriter.write(kernel, meta, temp);
             Files.move(temp, directory.resolve(GraphFiles.SNAPSHOT),
                     StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            DirectoryFormat.syncDirectory(directory);
+            FileSync.directory(directory);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

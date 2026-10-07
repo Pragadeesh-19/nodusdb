@@ -1,5 +1,7 @@
 package io.nodusdb.log.io;
 
+import io.nodusdb.io.FileSync;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -55,11 +57,7 @@ public final class DirectoryLogFileSystem implements LogFileSystem {
 
     @Override
     public void trySyncDirectory() {
-        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
-            channel.force(true);
-        } catch (IOException | UnsupportedOperationException ignored) {
-            return;
-        }
+        FileSync.directory(directory);
     }
 
     private record FileLogChannel(FileChannel channel) implements LogChannel {

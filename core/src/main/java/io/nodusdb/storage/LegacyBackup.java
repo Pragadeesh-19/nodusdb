@@ -1,5 +1,6 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.io.FileSync;
 import io.nodusdb.storage.legacy.LegacyGraph;
 
 import java.io.IOException;
@@ -50,9 +51,9 @@ final class LegacyBackup {
                 observer.accept(UpgradeStep.BACKUP_FILE_COPIED);
             }
         }
-        DirectoryFormat.syncDirectory(partial);
+        FileSync.directory(partial);
         Files.move(partial, location(directory), StandardCopyOption.ATOMIC_MOVE);
-        DirectoryFormat.syncDirectory(directory);
+        FileSync.directory(directory);
         observer.accept(UpgradeStep.BACKUP_INSTALLED);
     }
 

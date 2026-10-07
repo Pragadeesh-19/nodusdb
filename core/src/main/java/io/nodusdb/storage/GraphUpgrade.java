@@ -1,6 +1,7 @@
 package io.nodusdb.storage;
 
 import io.nodusdb.error.UpgradeFailedException;
+import io.nodusdb.io.FileSync;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.storage.DirectoryFormat.Layout;
@@ -41,7 +42,7 @@ public final class GraphUpgrade {
                 throw new IllegalStateException("only a graph in the current format has a backup to remove");
             }
             FileTrees.deleteRecursively(LegacyBackup.location(directory));
-            DirectoryFormat.syncDirectory(directory);
+            FileSync.directory(directory);
             return null;
         });
     }
@@ -114,11 +115,11 @@ public final class GraphUpgrade {
         Path log = directory.resolve(GraphFiles.LOG_DIRECTORY);
         FileTrees.deleteRecursively(log);
         Files.move(staging.resolve(GraphFiles.LOG_DIRECTORY), log, StandardCopyOption.ATOMIC_MOVE);
-        DirectoryFormat.syncDirectory(directory);
+        FileSync.directory(directory);
         observer.accept(UpgradeStep.LOG_INSTALLED);
         Files.move(staging.resolve(GraphFiles.SNAPSHOT), directory.resolve(GraphFiles.SNAPSHOT),
                 StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        DirectoryFormat.syncDirectory(directory);
+        FileSync.directory(directory);
         observer.accept(UpgradeStep.SNAPSHOT_INSTALLED);
     }
 
@@ -127,7 +128,7 @@ public final class GraphUpgrade {
         Files.deleteIfExists(directory.resolve(GraphFiles.FORMAT + ".tmp"));
         FileTrees.deleteRecursively(directory.resolve(GraphFiles.STAGING_DIRECTORY));
         FileTrees.deleteRecursively(directory.resolve(GraphFiles.BACKUP_DIRECTORY + ".partial"));
-        DirectoryFormat.syncDirectory(directory);
+        FileSync.directory(directory);
     }
 
     private static void verify(Path directory, GraphDigest expected) throws IOException {

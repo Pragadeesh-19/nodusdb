@@ -1,6 +1,7 @@
 package io.nodusdb.storage;
 
 import io.nodusdb.error.UnsupportedFeatureException;
+import io.nodusdb.io.FileSync;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -60,7 +61,7 @@ final class DirectoryFormat {
         writeDurably(temp, ByteBuffer.wrap(content));
         Files.move(temp, directory.resolve(GraphFiles.FORMAT),
                 StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        syncDirectory(directory);
+        FileSync.directory(directory);
     }
 
     static void writeTripwire(Path directory) throws IOException {
@@ -71,15 +72,7 @@ final class DirectoryFormat {
         writeDurably(temp, header);
         Files.move(temp, directory.resolve(GraphFiles.TRIPWIRE),
                 StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        syncDirectory(directory);
-    }
-
-    static void syncDirectory(Path directory) {
-        try (FileChannel channel = FileChannel.open(directory, StandardOpenOption.READ)) {
-            channel.force(true);
-        } catch (IOException | UnsupportedOperationException ignored) {
-            return;
-        }
+        FileSync.directory(directory);
     }
 
     static int readTripwireVersion(Path file) throws IOException {
