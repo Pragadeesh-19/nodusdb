@@ -19,6 +19,7 @@ CONTRACT = {
     -11: errors.NodusUpgradeRequiredError,
     -12: errors.NodusIndeterminateError,
     -13: errors.NodusTokenLostError,
+    -14: errors.NodusShipTimeoutError,
 }
 
 
@@ -37,6 +38,16 @@ class ErrorContractTest(unittest.TestCase):
 
     def test_the_memory_error_is_also_a_memory_error(self):
         self.assertTrue(issubclass(errors.NodusMemoryError, MemoryError))
+
+    def test_a_ship_timeout_has_no_token_until_the_caller_attaches_one(self):
+        error = errors.error_for(-14, "not shipped")
+
+        self.assertIsNone(error.token)
+        error.token = (3, 40)
+        self.assertEqual((3, 40), error.token)
+
+    def test_the_contract_is_contiguous_from_minus_one_to_minus_fourteen(self):
+        self.assertEqual(set(range(-14, 0)) - {-2}, set(CONTRACT))
 
     def test_an_unknown_code_is_a_generic_error(self):
         self.assertIs(errors.NodusError, type(errors.error_for(-99, "unknown")))

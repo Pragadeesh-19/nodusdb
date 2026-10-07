@@ -14,7 +14,8 @@ public enum ErrorCode {
     UNSUPPORTED(-10),
     UPGRADE_REQUIRED(-11),
     INDETERMINATE(-12),
-    TOKEN_LOST(-13);
+    TOKEN_LOST(-13),
+    SHIP_TIMEOUT(-14);
 
     private final int value;
 

@@ -68,12 +68,19 @@ class NodusTokenLostError(NodusError):
     code = -13
 
 
+class NodusShipTimeoutError(NodusError):
+    """The write is applied and locally durable but had not reached the object store when the wait ended."""
+
+    code = -14
+    token = None
+
+
 _BY_CODE = {
     error.code: error
     for error in (
         NodusMemoryError, NodusStaleReadError, NodusCheckDepthError, NodusSchemaError, NodusLogBacklogError,
         NodusWriterFencedError, NodusCorruptLogError, NodusUnsupportedError, NodusUpgradeRequiredError,
-        NodusIndeterminateError, NodusTokenLostError,
+        NodusIndeterminateError, NodusTokenLostError, NodusShipTimeoutError,
     )
 }
 
