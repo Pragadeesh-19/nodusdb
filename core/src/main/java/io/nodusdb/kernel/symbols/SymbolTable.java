@@ -15,7 +15,8 @@ public final class SymbolTable {
 
     public static final int MAX_SYMBOLS = (int) Math.min(NodeIds.MAX_NODE_ID + 1, (Integer.MAX_VALUE - 8) / 2);
 
-    private static final int SLAB_CHUNK_BYTES = 1 << 20;
+    private static final int FIRST_SLAB_CHUNK_BYTES = 1 << 12;
+    private static final int MAX_SLAB_CHUNK_BYTES = 1 << 20;
     private static final int INITIAL_SYMBOLS = 1 << 10;
     private static final int INITIAL_BUCKETS = 1 << 11;
     private static final long HASH_MASK = 0xFFFF_FFFFL;
@@ -128,7 +129,7 @@ public final class SymbolTable {
         long initialBytes = initialized ? 0 : (long) (2 * INITIAL_SYMBOLS + INITIAL_BUCKETS) * Long.BYTES;
         long bucketBytes = neededBuckets != currentBuckets ? (long) neededBuckets * Long.BYTES : 0;
         boolean needsChunk = slab.length == 0 || (additionalBytes > 0 && slabRemaining() < additionalBytes);
-        long slabBytes = needsChunk ? Math.max(SLAB_CHUNK_BYTES, additionalBytes) : 0;
+        long slabBytes = needsChunk ? Math.max(nextSlabChunkBytes(), additionalBytes) : 0;
         int entryCount = (int) (2 * target);
         long entryBytes = initialized ? entries.bytesToReach(entryCount) : 0;
         return new Reservation(entryCount, neededBuckets, initialBytes + entryBytes, bucketBytes, slabBytes);
@@ -179,6 +180,13 @@ public final class SymbolTable {
 
     private int lengthOf(int id) {
         return (int) (entries.get(2 * id + 1) >>> Integer.SIZE);
+    }
+
+    private long nextSlabChunkBytes() {
+        if (slab.length == 0) {
+            return FIRST_SLAB_CHUNK_BYTES;
+        }
+        return Math.min(MAX_SLAB_CHUNK_BYTES, 2 * slab[slab.length - 1].byteSize());
     }
 
     private long slabRemaining() {
