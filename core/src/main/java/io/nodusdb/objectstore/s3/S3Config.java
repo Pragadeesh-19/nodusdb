@@ -14,6 +14,7 @@ public record S3Config(URI endpoint, String region, String bucket, String prefix
     public static final Duration DEFAULT_CONNECT_TIMEOUT = Duration.ofSeconds(5);
     public static final Duration DEFAULT_REQUEST_TIMEOUT = Duration.ofSeconds(10);
     public static final Duration DEFAULT_TRANSFER_TIMEOUT = Duration.ofSeconds(120);
+    public static final int MAX_PREFIX_LENGTH = 256;
 
     private static final Pattern REGION = Pattern.compile("[a-z0-9][a-z0-9-]{0,62}");
     private static final Pattern BUCKET = Pattern.compile("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]");
@@ -108,6 +109,10 @@ public record S3Config(URI endpoint, String region, String bucket, String prefix
             return "";
         }
         String normalized = prefix.endsWith("/") ? prefix : prefix + "/";
+        if (normalized.length() > MAX_PREFIX_LENGTH) {
+            throw new IllegalArgumentException("the prefix must not be longer than " + MAX_PREFIX_LENGTH
+                    + " characters, so that prefix and key fit the 1024 bytes S3 allows");
+        }
         return ObjectKeys.requirePrefix(normalized);
     }
 

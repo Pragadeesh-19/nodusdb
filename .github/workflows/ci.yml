@@ -5,6 +5,54 @@ on:
   pull_request:
 
 jobs:
+  s3-compatibility:
+    name: S3 compatibility (SeaweedFS)
+    runs-on: ubuntu-latest
+    env:
+      NODUS_S3_ENDPOINT: http://127.0.0.1:8333
+      NODUS_S3_BUCKET: nodus-test
+      NODUS_S3_ACCESS_KEY: nodus
+      NODUS_S3_SECRET_KEY: nodus-secret-key
+      AWS_ACCESS_KEY_ID: nodus
+      AWS_SECRET_ACCESS_KEY: nodus-secret-key
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "22"
+          cache: maven
+
+      - name: Start SeaweedFS with an authenticated S3 gateway
+        run: |
+          set -eu
+          docker run -d --name seaweedfs -p 8333:8333 \
+            -v "$PWD/.github/s3/identities.json:/etc/seaweedfs/s3.json:ro" \
+            chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
+            server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
+          for attempt in $(seq 1 60); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
+            if [ "$code" = "200" ] || [ "$code" = "403" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs seaweedfs
+          exit 1
+
+      - name: Create the test bucket
+        run: aws --endpoint-url "$NODUS_S3_ENDPOINT" s3 mb "s3://$NODUS_S3_BUCKET"
+
+      - name: Run the object store contract against the real server
+        run: mvn -B -ntp -pl core test -Dtest=RealS3ContractTest
+
+      - name: Show the server log when the tests fail
+        if: failure()
+        run: docker logs seaweedfs
+
   build:
     name: build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

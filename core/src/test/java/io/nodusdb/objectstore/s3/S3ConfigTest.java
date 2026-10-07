@@ -1,5 +1,6 @@
 package io.nodusdb.objectstore.s3;
 
+import io.nodusdb.objectstore.ObjectKeys;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -66,6 +67,21 @@ class S3ConfigTest {
         assertEquals("a/b/", local().withPrefix("a/b").prefix());
         assertEquals("", local().withPrefix("").prefix());
         assertEquals("", local().withPrefix(null).prefix());
+    }
+
+    @Test
+    void aPrefixAtTheLimitIsKeptAndOneLongerIsRefused() {
+        String atLimit = "p".repeat(S3Config.MAX_PREFIX_LENGTH - 1);
+
+        assertEquals(S3Config.MAX_PREFIX_LENGTH, local().withPrefix(atLimit).prefix().length());
+        assertThrows(IllegalArgumentException.class, () -> local().withPrefix(atLimit + "p"));
+    }
+
+    @Test
+    void aPrefixAndAKeyAtTheirLimitsStayInsideWhatS3Allows() {
+        int longest = S3Config.MAX_PREFIX_LENGTH + ObjectKeys.MAX_KEY_LENGTH;
+
+        assertTrue(longest <= 1024, "prefix plus key could reach " + longest);
     }
 
     @ParameterizedTest

@@ -20,7 +20,7 @@ that other engines read with SQL. Followers, takeover and the full simulation ha
  | retention, LAKE durability, backlog, stats                   |   | stale-read waits     |
  | lake: Iceberg projection of the chain (Avro, metadata)       |   | takeover and salvage |
  | api: config document, wait call, stats call, error -14       |   | full simulation      |
- +--------------------------------------------------------------+   | harness, MinIO chaos |
+ +--------------------------------------------------------------+   | harness, real-server chaos |
                                                                     +----------------------+
 ```
 
@@ -56,7 +56,7 @@ That is the seed of the Step 3 harness, not the harness itself.
 | D99 | Names | A `NameResolver` interface with a kernel-backed implementation; the projector runs inside the writer; schema version per event comes from `SCHEMA` records in stream order and is stored with the projected LSN in the Iceberg snapshot properties |
 | D100 | Config transport | One JSON document through one new export `nodus_open_durable_shipping`, parsed and validated by one Java class; unknown keys are rejected; secrets are never echoed |
 | D101 | Testability | `ShipperCore` is a deterministic step function; `ShipperRunner` is a thin loop; tests use a manual clock, a faulty store and a seed, and crash the writer after every store call |
-| D102 | CI verifiers | pyiceberg, fastavro and botocore as test-only packages; botocore-generated SigV4 vectors are committed; MinIO runs as a pinned container on the Ubuntu job only |
+| D102 | CI verifiers | pyiceberg, fastavro and botocore as test-only packages; botocore-generated SigV4 vectors are committed; a real S3-compatible server (SeaweedFS, pinned by digest, because MinIO stopped publishing community images in 2025 and removed them in September 2026) runs on the Ubuntu job only |
 | D103 | Head discovery | Newest `SNAPSHOT_REF` (snapshot objects carry the chain position at upload start as metadata, a lower bound only), then a listing with `start-after`; a missing hint falls back to a full listing; the result is always verified by signature |
 | D104 | Performance proof | JMH baselines with `-prof gc`, recorded in `bench/baseline/shipping-windows-dev.json`; a CI step compares `add_tuple` with shipping off and on and fails above a ratio of 3 |
 
@@ -225,7 +225,7 @@ Milestones: M1 = 2.0 to 2.2, M2 = 2.3, M3 = 2.4 and 2.5, M4 = 2.6, M5 = 2.7 and 
 |---|---|---|---|
 | 2.0 | Native-image spike (Ed25519, SHA-256, HttpClient over HTTP and HTTPS, trust store) with go or no-go; strict JSON codec; error classes and codes (-14, backlog, fenced) | D93, D100 | spike written up in `docs/decisions.md`; JSON fuzz; every code maps in Java and Python |
 | 2.1 | `ObjectStore` seam, memory, directory and faulty stores, shared contract suite | D101 | one suite on every backend; N threads racing one key give one winner |
-| 2.2 | S3 client: SigV4, credentials, status mapping, probe, multipart; in-JDK fake S3; MinIO job | D91, D94, D95, D102 | botocore golden vectors; fake server in ignore mode is refused; MinIO on Ubuntu |
+| 2.2 | S3 client: SigV4, credentials, status mapping, probe, multipart; in-JDK fake S3; real-server job | D91, D94, D95, D102 | botocore golden vectors; fake server in ignore mode is refused; SeaweedFS on Ubuntu |
 | 2.3 | Chain codec, signing keys, verifier | D93 | golden corpus; flip every byte and truncate at every length |
 | 2.4 | `LogTailReader`, `ShipWatermark`, `ShippingLogStore` | D97 | tail beside a live writer; transaction across a segment roll; trim clamp; Windows delete |
 | 2.5 | `ShipperCore`, runner, open reconciliation, epoch claim, head discovery, `awaitShipped`, backlog | D89 to D92, D101, D103 | crash after every store call; reconcile matrix; outcome table |
@@ -327,7 +327,7 @@ run sequentially on this branch unless asked otherwise.
 ## 17. Risks with a gate
 
 - **Native image and TLS (2.0).** If Ed25519 or `HttpClient` do not work in the native image, or HTTPS trust cannot
-  be configured through `ca_bundle`, the fallback is plain HTTP for loopback and MinIO plus a documented TLS
+  be configured through `ca_bundle`, the fallback is plain HTTP for loopback and a local S3-compatible server plus a documented TLS
   terminator, and this document is revised before 2.1 starts.
 - **Hand-written formats (2.2, 2.8).** Signatures, Avro and Iceberg metadata are judged by botocore, fastavro and
   pyiceberg (D102). A disagreement with any of them blocks the milestone.

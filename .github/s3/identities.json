@@ -1,0 +1,11 @@
+{
+  "identities": [
+    {
+      "name": "nodus",
+      "credentials": [
+        {"accessKey": "nodus", "secretKey": "nodus-secret-key"}
+      ],
+      "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+    }
+  ]
+}

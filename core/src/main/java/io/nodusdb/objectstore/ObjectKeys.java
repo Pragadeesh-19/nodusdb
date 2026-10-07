@@ -5,7 +5,7 @@ import java.util.Set;
 
 public final class ObjectKeys {
 
-    public static final int MAX_KEY_LENGTH = 1024;
+    public static final int MAX_KEY_LENGTH = 512;
     public static final int MAX_SEGMENT_LENGTH = 255;
     public static final int MAX_METADATA_ENTRIES = 16;
     public static final int MAX_METADATA_NAME_LENGTH = 64;
@@ -119,8 +119,8 @@ public final class ObjectKeys {
     }
 
     private static void requireMetadataValue(String name, String value) {
-        if (value == null || value.length() > MAX_METADATA_VALUE_LENGTH) {
-            throw new IllegalArgumentException("the value of metadata '" + name + "' must hold at most "
+        if (value == null || value.isEmpty() || value.length() > MAX_METADATA_VALUE_LENGTH) {
+            throw new IllegalArgumentException("the value of metadata '" + name + "' must hold 1 to "
                     + MAX_METADATA_VALUE_LENGTH + " characters");
         }
         for (int i = 0; i < value.length(); i++) {
