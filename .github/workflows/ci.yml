@@ -67,6 +67,9 @@ jobs:
           NODUSDB_REQUIRE_PYARROW: "1"
         run: python -m pytest python/tests -v -ra
 
+      - name: Native performance gate
+        run: python python/benchmarks/native_ratio.py
+
       - name: Upload native library
         uses: actions/upload-artifact@v4
         with:
