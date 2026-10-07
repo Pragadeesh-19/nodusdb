@@ -1,6 +1,10 @@
-package io.nodusdb.kernel.wal;
+package io.nodusdb.bench;
 
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.log.LogConfig;
+import io.nodusdb.log.SyncMode;
+import io.nodusdb.storage.DurableGraph;
+import io.nodusdb.storage.Recovery;
 
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -22,6 +26,7 @@ import java.util.zip.GZIPInputStream;
 
 public final class DurabilityBenchmark {
 
+    private static final String SNAPSHOT_FILE = "snapshot.bin";
     private static final int BATCH = 1 << 20;
     private static final int NODES = 1_700_000;
     private static final int REMOVE_HEAD = 1_000_000;
@@ -95,8 +100,7 @@ public final class DurabilityBenchmark {
 
     private void durableAsync() throws IOException {
         Path directory = freshDirectory("durable-async");
-        RecoveryManager.Opened opened = RecoveryManager.open(directory, WalConfig.DEFAULT);
-        GraphKernel graph = opened.kernel();
+        GraphKernel graph = DurableGraph.open(directory, LogConfig.DEFAULT).kernel();
         long[] starts = sampleStarts();
         long ingestStart = System.nanoTime();
         long edgeCount = ingestAll(graph);
@@ -109,7 +113,7 @@ public final class DurabilityBenchmark {
         graph.checkpoint();
         long checkpointNanos = System.nanoTime() - checkpointStart;
         out.printf("RESULT phase=durable-async metric=checkpoint seconds=%.3f snapshot-bytes=%d%n",
-                checkpointNanos / 1e9, Files.size(directory.resolve(DurableStore.SNAPSHOT)));
+                checkpointNanos / 1e9, Files.size(directory.resolve(SNAPSHOT_FILE)));
 
         long tailStart = System.nanoTime();
         long tailRemoved = removeRange(graph, REMOVE_HEAD, REMOVE_TAIL);
@@ -117,23 +121,22 @@ public final class DurabilityBenchmark {
         report("durable-async", "remove-tail", tailRemoved, tailStart);
         out.printf("DIGEST phase=durable-async-before-crash value=%016x%n", digest(graph, starts));
         out.printf("STATE phase=durable-async directory=%s%n", directory);
-        opened.store().abandon();
     }
 
     private void recover(Path directory) throws IOException {
         long[] starts = sampleStarts();
         long recoveryStart = System.nanoTime();
-        RecoveryManager.Recovery recovery = RecoveryManager.recover(directory, WalConfig.DEFAULT);
+        Recovery recovery = DurableGraph.open(directory, LogConfig.DEFAULT);
         long recoveryNanos = System.nanoTime() - recoveryStart;
-        out.printf("RESULT phase=recover metric=recovery seconds=%.3f frames-replayed=%d truncated-bytes=%d%n",
-                recoveryNanos / 1e9, recovery.framesApplied(), recovery.truncatedBytes());
+        out.printf("RESULT phase=recover metric=recovery seconds=%.3f records-replayed=%d truncated-bytes=%d%n",
+                recoveryNanos / 1e9, recovery.recordsReplayed(), recovery.truncatedBytes());
         out.printf("DIGEST phase=recover value=%016x%n", digest(recovery.kernel(), starts));
         recovery.kernel().close();
     }
 
     private void durableSyncBatch() throws IOException {
         Path directory = freshDirectory("durable-sync-batch");
-        GraphKernel graph = GraphKernel.open(directory, WalConfig.withSyncMode(SyncMode.SYNC));
+        GraphKernel graph = DurableGraph.open(directory, LogConfig.withSyncMode(SyncMode.SYNC)).kernel();
         long[] starts = sampleStarts();
         long ingestStart = System.nanoTime();
         long edgeCount = ingestAll(graph);
@@ -153,7 +156,7 @@ public final class DurabilityBenchmark {
         long[] pairs = readPrefix(SINGLE_CALL_ASYNC);
 
         Path syncDirectory = freshDirectory("single-call-sync");
-        GraphKernel syncGraph = GraphKernel.open(syncDirectory, WalConfig.withSyncMode(SyncMode.SYNC));
+        GraphKernel syncGraph = DurableGraph.open(syncDirectory, LogConfig.withSyncMode(SyncMode.SYNC)).kernel();
         long[] latencies = new long[SINGLE_CALL_SYNC];
         long syncStart = System.nanoTime();
         for (int i = 0; i < SINGLE_CALL_SYNC; i++) {
@@ -170,7 +173,7 @@ public final class DurabilityBenchmark {
                 latencies[SINGLE_CALL_SYNC / 2] / 1e3, latencies[(int) (SINGLE_CALL_SYNC * 0.99)] / 1e3);
 
         Path asyncDirectory = freshDirectory("single-call-async");
-        GraphKernel asyncGraph = GraphKernel.open(asyncDirectory, WalConfig.DEFAULT);
+        GraphKernel asyncGraph = DurableGraph.open(asyncDirectory, LogConfig.DEFAULT).kernel();
         long asyncStart = System.nanoTime();
         for (int i = 0; i < SINGLE_CALL_ASYNC; i++) {
             asyncGraph.addEdge(pairs[2 * i], pairs[2 * i + 1]);
