@@ -5,7 +5,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 
-public interface ObjectStore {
+public interface ObjectStore extends AutoCloseable {
 
     PutResult putIfAbsent(String key, byte[] content, Map<String, String> metadata);
 
@@ -35,5 +35,9 @@ public interface ObjectStore {
 
     default boolean exists(String key) {
         return head(key).isPresent();
+    }
+
+    @Override
+    default void close() {
     }
 }

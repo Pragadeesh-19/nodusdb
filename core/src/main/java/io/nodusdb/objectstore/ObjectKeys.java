@@ -129,5 +129,9 @@ public final class ObjectKeys {
                 throw new IllegalArgumentException("the value of metadata '" + name + "' must be printable ASCII");
             }
         }
+        if (!value.isEmpty() && (value.charAt(0) == ' ' || value.charAt(value.length() - 1) == ' ')) {
+            throw new IllegalArgumentException("the value of metadata '" + name
+                    + "' must not start or end with a space");
+        }
     }
 }

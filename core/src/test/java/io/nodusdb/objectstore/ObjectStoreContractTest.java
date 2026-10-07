@@ -1,5 +1,6 @@
 package io.nodusdb.objectstore;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -31,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-abstract class ObjectStoreContractTest {
+public abstract class ObjectStoreContractTest {
 
     private static final long CLOCK_TOLERANCE_MILLIS = 10_000;
     private static final int RACERS = 16;
@@ -39,22 +40,27 @@ abstract class ObjectStoreContractTest {
     private static final long TIMEOUT_SECONDS = 60;
 
     @TempDir
-    Path scratch;
+    protected Path scratch;
 
-    ObjectStore store;
+    protected ObjectStore store;
 
-    abstract ObjectStore create() throws Exception;
+    protected abstract ObjectStore create() throws Exception;
 
     @BeforeEach
     void openStore() throws Exception {
         store = create();
     }
 
-    static byte[] bytes(String text) {
+    @AfterEach
+    void closeStore() {
+        store.close();
+    }
+
+    protected static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
     }
 
-    static List<String> keys(ListPage page) {
+    protected static List<String> keys(ListPage page) {
         return page.entries().stream().map(ObjectInfo::key).toList();
     }
 
@@ -428,6 +434,7 @@ abstract class ObjectStoreContractTest {
         }
         List<Map<String, String>> invalid = List.of(
                 Map.of("Upper", "v"), Map.of("has space", "v"), Map.of("", "v"), Map.of("k", "café"),
+                Map.of("k", " leading"), Map.of("k", "trailing "), Map.of("k", " "),
                 Map.of("k", "line\nbreak"), Map.of("k", "x".repeat(ObjectKeys.MAX_METADATA_VALUE_LENGTH + 1)),
                 Map.of("k".repeat(ObjectKeys.MAX_METADATA_NAME_LENGTH + 1), "v"), tooMany);
 
@@ -435,6 +442,16 @@ abstract class ObjectStoreContractTest {
             assertThrows(IllegalArgumentException.class, () -> store.putIfAbsent("m/x", bytes("x"), metadata));
         }
         assertFalse(store.exists("m/x"));
+    }
+
+    @Test
+    void metadataValuesRoundTripExactlyIncludingInnerSpacesAndPunctuation() {
+        Map<String, String> metadata = Map.of("note", "a b  c=d;e,\"f\"", "chain-seq", "12345678901234567890",
+                "empty", "");
+
+        store.putIfAbsent("m/round", bytes("x"), metadata);
+
+        assertEquals(metadata, store.head("m/round").orElseThrow().metadata());
     }
 
     @Test

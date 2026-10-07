@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 class MemoryObjectStoreTest extends ObjectStoreContractTest {
 
     @Override
-    ObjectStore create() {
+    protected ObjectStore create() {
         return new MemoryObjectStore();
     }
 

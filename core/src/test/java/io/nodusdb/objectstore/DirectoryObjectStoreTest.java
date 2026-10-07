@@ -37,7 +37,7 @@ class DirectoryObjectStoreTest extends ObjectStoreContractTest {
     }
 
     @Override
-    ObjectStore create() {
+    protected ObjectStore create() {
         return new DirectoryObjectStore(root());
     }
 
