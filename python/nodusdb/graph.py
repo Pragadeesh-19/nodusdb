@@ -1,5 +1,8 @@
 import array
 import ctypes
+import json
+import logging
+import math
 import os
 import threading
 import typing
@@ -8,7 +11,14 @@ import weakref
 
 from . import _native
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
+from .errors import NodusShipTimeoutError, NodusUnsupportedError
+from .shipping import Shipping
 
+LOGGER = logging.getLogger("nodusdb")
+DEFAULT_SHIP_TIMEOUT = 30.0
+INITIAL_STATS_CAPACITY = 1 << 14
+STATS_ATTEMPTS = 3
+MAX_WAIT_MILLISECONDS = 2**62
 MAX_NODE_ID = 2**31 - 10
 MAX_MEMORY_MB = (2**63 - 1) >> 20
 DEFAULT_RESULT_CAPACITY = 1 << 16
@@ -129,13 +139,16 @@ def _int32_pointer(column):
 
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async",
-                 max_memory_mb=None):
+                 max_memory_mb=None, shipping=None):
         limit = _memory_limit_bytes(max_memory_mb)
+        configuration = _shipping_document(shipping, path)
         self._lib, self._isolate = _native.load(library_path)
         self._lock = threading.RLock()
+        self._events = _EventLog()
         self._bind_signatures()
         self._max_memory_mb = max_memory_mb
-        handle = self._open(path, sync_mode, limit)
+        self._shipping = configuration is not None
+        handle = self._open(path, sync_mode, limit, configuration)
         self._owned = _native.OwnedHandle(
             self._lib, self._isolate, handle, _destroyer(self._lib),
             "graph close failed; the final checkpoint did not complete")
@@ -159,15 +172,19 @@ class Graph:
     def _handle(self):
         return self._owned.value
 
-    def _open(self, path, sync_mode, limit):
+    def _open(self, path, sync_mode, limit, configuration):
         if path is not None and sync_mode not in SYNC_MODES:
             raise ValueError(f"sync_mode must be 'async' or 'sync', got {sync_mode!r}")
         status = ctypes.c_int(0)
         if path is None:
             handle = self._lib.nodus_create_limited(self._thread, limit, ctypes.byref(status))
-        else:
+        elif configuration is None:
             handle = self._lib.nodus_open_durable_limited(
                 self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode], limit, ctypes.byref(status))
+        else:
+            handle = self._shipping_export("nodus_open_durable_shipping")(
+                self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode], limit, configuration,
+                len(configuration), ctypes.byref(status))
         if handle:
             return handle
         if status.value == MEMORY_LIMIT:
@@ -237,6 +254,29 @@ class Graph:
         lib.nodus_check.argtypes = [
             thread, handle, ctypes.c_char_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_int64, ctypes.c_int64,
         ]
+        self._bind_shipping_signatures()
+
+    def _bind_shipping_signatures(self):
+        lib = self._lib
+        thread, handle = _native.THREAD, _native.HANDLE
+        if hasattr(lib, "nodus_open_durable_shipping"):
+            lib.nodus_open_durable_shipping.restype = _native.HANDLE
+            lib.nodus_open_durable_shipping.argtypes = [
+                thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.c_char_p, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_int),
+            ]
+        if hasattr(lib, "nodus_await_shipped"):
+            lib.nodus_await_shipped.restype = ctypes.c_int
+            lib.nodus_await_shipped.argtypes = [thread, handle, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
+        if hasattr(lib, "nodus_stats_json"):
+            lib.nodus_stats_json.restype = ctypes.c_int
+            lib.nodus_stats_json.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int]
+
+    def _shipping_export(self, name):
+        function = getattr(self._lib, name, None)
+        if function is None:
+            raise error_for(NodusUnsupportedError.code, "this libnodusdb has no shipping support; rebuild or upgrade it")
+        return function
 
     @serialized
     def checkpoint(self):
@@ -274,23 +314,69 @@ class Graph:
         self._require_success(code, "apply_schema failed")
         return Token(out[0], out[1])
 
-    @serialized
-    def write(self, transaction, durability="local"):
-        """Commit a Transaction. Every tuple applies or none does. Returns the token of the commit."""
+    def write(self, transaction, durability="local", *, timeout=DEFAULT_SHIP_TIMEOUT):
+        """Commit a Transaction. Every tuple applies or none does. Returns the token of the commit.
+
+        With durability="lake" the call also waits, for at most timeout seconds, until the write is in the
+        object store. On a timeout the write is still applied and NodusShipTimeoutError.token names it."""
         if durability not in DURABILITY:
             raise ValueError(f"durability must be one of {sorted(DURABILITY)}, got {durability!r}")
         if not isinstance(transaction, Transaction):
             raise TypeError(f"expected a Transaction, got {type(transaction).__name__}")
+        milliseconds = _wait_milliseconds(timeout)
+        if durability == "lake":
+            self._require_shipping()
+        token = self._write_locally(transaction)
+        if durability == "lake":
+            self._await(token, milliseconds)
+        return token
+
+    def wait_shipped(self, token, timeout=DEFAULT_SHIP_TIMEOUT):
+        """Wait, for at most timeout seconds, until the write the token names is in the object store."""
+        epoch, lsn = _token_parts(token)
+        self._require_shipping()
+        self._await(Token(epoch, lsn), _wait_milliseconds(timeout))
+
+    def stats(self):
+        """A snapshot of the graph's position and, when shipping is on, of the shipper, with new events logged.
+
+        New shipping events go to the "nodusdb" logger as warnings."""
+        export = self._shipping_export("nodus_stats_json")
+        capacity = INITIAL_STATS_CAPACITY
+        for _ in range(STATS_ATTEMPTS):
+            buffer = ctypes.create_string_buffer(capacity)
+            length = export(self._thread, self._require_open(), buffer, capacity)
+            if length < 0:
+                raise self._failure(length, "stats failed")
+            if length <= capacity:
+                document = json.loads(buffer.raw[:length].decode("utf-8"))
+                self._events.log_new(document)
+                return document
+            capacity = length
+        raise NodusError("stats kept growing while being read")
+
+    @serialized
+    def _write_locally(self, transaction):
         if not len(transaction):
             return self.token
         blob, lengths, kinds = transaction._encode()
         out = (ctypes.c_int64 * 2)()
         code = self._lib.nodus_tuple_write(
             self._thread, self._require_open(), blob, _int32_pointer(lengths), _int32_pointer(kinds),
-            len(transaction), DURABILITY[durability], out)
+            len(transaction), DURABILITY["local"], out)
         self._refresh_kind()
         self._require_success(code, "write failed")
         return Token(out[0], out[1])
+
+    def _require_shipping(self):
+        if not self._shipping:
+            raise NodusUnsupportedError("shipping is not configured for this graph")
+
+    def _await(self, token, milliseconds):
+        export = self._shipping_export("nodus_await_shipped")
+        code = export(self._thread, self._require_open(), token.epoch, token.lsn, milliseconds)
+        if code != 0:
+            raise self._failure(code, "the write did not reach the object store", token=token)
 
     def add_tuple(self, object, relation, subject, subject_relation=None):
         return self.write(Transaction().add(object, relation, subject, subject_relation))
@@ -532,11 +618,14 @@ class Graph:
         if kind >= 0:
             self._kind = kind
 
-    def _failure(self, code, message, operation=None):
+    def _failure(self, code, message, operation=None, token=None):
         if code == MEMORY_LIMIT and operation is not None:
             return NodusMemoryError(self._limit_message(operation))
         detail = _native.last_error_message(self._lib, self._thread)
-        return error_for(code, f"{message}: {detail}" if detail else message)
+        error = error_for(code, f"{message}: {detail}" if detail else message)
+        if isinstance(error, NodusShipTimeoutError):
+            error.token = token
+        return error
 
     def _limit_message(self, operation):
         return (f"{operation} would exceed max_memory_mb={self._max_memory_mb}; the graph is unchanged, "
@@ -551,6 +640,50 @@ def _memory_limit_bytes(megabytes):
     if not 1 <= megabytes <= MAX_MEMORY_MB:
         raise ValueError(f"max_memory_mb must be between 1 and {MAX_MEMORY_MB}, got {megabytes}")
     return megabytes << 20
+
+
+def _shipping_document(shipping, path):
+    if shipping is None:
+        return None
+    if path is None:
+        raise ValueError("shipping needs a durable graph: pass path=")
+    if isinstance(shipping, Shipping):
+        return shipping.to_json().encode("utf-8")
+    if isinstance(shipping, str):
+        return shipping.encode("utf-8")
+    raise TypeError(f"shipping must be a Shipping or a JSON document, got {type(shipping).__name__}")
+
+
+def _wait_milliseconds(timeout):
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TypeError(f"timeout must be a number of seconds, got {type(timeout).__name__}")
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
+    return int(min(max(1, math.ceil(timeout * 1000)), MAX_WAIT_MILLISECONDS))
+
+
+def _token_parts(token):
+    try:
+        epoch, lsn = int(token[0]), int(token[1])
+    except (TypeError, IndexError, ValueError) as error:
+        raise TypeError("a token is an (epoch, lsn) pair") from error
+    if epoch < 0 or lsn < 0:
+        raise ValueError("a token has a non-negative epoch and lsn")
+    return epoch, lsn
+
+
+class _EventLog:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._seen = 0
+
+    def log_new(self, document):
+        events = document.get("shipping", {}).get("events", ())
+        with self._lock:
+            for event in events:
+                if event["seq"] > self._seen:
+                    LOGGER.warning("%s", event["message"])
+                    self._seen = event["seq"]
 
 
 def _destroyer(library):

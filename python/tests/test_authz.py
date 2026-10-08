@@ -115,11 +115,17 @@ class AuthzTest(unittest.TestCase):
         with self.assertRaisesRegex(NodusSchemaError, "unknown type 'widget'"):
             self.graph.check("widget:a", "view", "user:u")
 
-    def test_lake_durability_is_not_available_yet(self):
-        with self.assertRaises(NodusUnsupportedError):
+    def test_lake_durability_needs_shipping_to_be_configured(self):
+        before = self.graph.token
+
+        with self.assertRaisesRegex(NodusUnsupportedError, "shipping is not configured"):
             self.graph.write(Transaction().add("document:a", "viewer", "user:u"), durability="lake")
+
+        self.assertEqual(before, self.graph.token)
         with self.assertRaises(ValueError):
             self.graph.write(Transaction(), durability="elsewhere")
+        with self.assertRaises(NodusUnsupportedError):
+            self.graph.wait_shipped(before)
 
     def test_a_deep_chain_raises_the_depth_error(self):
         for index in range(60):
