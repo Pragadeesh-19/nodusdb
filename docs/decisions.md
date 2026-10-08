@@ -112,6 +112,28 @@ record what Build Step 1 settled while implementing them.
 | D102 | CI verifiers | pyiceberg, fastavro and botocore as test-only packages; committed botocore SigV4 vectors; a real S3-compatible server (SeaweedFS, pinned by digest) on the Ubuntu job, since MinIO no longer publishes community images | Step 2 review 2026-10-07 |
 | D103 | Head discovery | Newest `SNAPSHOT_REF`, then a listing after its position; the snapshot carries the chain position at upload start as a lower-bound hint; always verified by signature | Step 2 review 2026-10-07 |
 | D104 | Performance proof | JMH baselines with `-prof gc` and a CI ratio gate of 3 for `add_tuple` with shipping off and on | Step 2 review 2026-10-07 |
+| D105 | Step 3 scope | All of Build Step 3 in five milestones on one branch, each mergeable: foundations and restore, follower core, follower API, takeover and salvage, simulator and chaos | Step 3 review 2026-10-08 |
+| D106 | Retention anchor | `ChainRetention` keeps every object from the one holding the newest reference's snapshot LSN plus one. The old rule kept one object and made the reference unbootstrappable after the window | Step 3 review 2026-10-08 |
+| D107 | Replica seam | An explicit replica role on `GraphKernel` and a package-private `ReplicaWriter`; writes refused up front; epoch from the epoch history | Step 3 review 2026-10-08 |
+| D108 | Follower config | A shared `StoreConfig`, a `ShippingConfig` that adds signing, and a `FollowerConfig` with a required public key and no private key | Step 3 review 2026-10-08 |
+| D109 | Follower state | No persisted graph; a checksummed anti-rollback marker in an optional state directory; every start bootstraps from the newest verified reference | Step 3 review 2026-10-08 |
+| D110 | Takeover | Claim, restore, open, and retry the restore if the head moved; `ShipperCore` and `OpenReconciler` unchanged. Amends wedge 8.5 step 3 | Step 3 review 2026-10-08 |
+| D111 | Gap detection | GET the next object each poll; LIST one key at most once a second on a 404; a later key means the prefix was deleted | Step 3 review 2026-10-08 |
+| D112 | Stalled reads | Serve the last verified state; optional `max_staleness_ms` makes reads raise `NodusStaleReadError` past the bound | Step 3 review 2026-10-08 |
+| D113 | One verified fetch | `ChainFetch` with a `Trust` mode replaces the copies in `ChainHead` and `StoreChainSource`; followers require a known signer | Step 3 review 2026-10-08 |
+| D114 | Schema refresh | `TupleStore.currentModel()` rebuilds the compiled schema when the catalog version moves | Step 3 review 2026-10-08 |
+| D115 | Follower API | `Graph(follow=...)` and one export `nodus_open_follower`; `restore`, `takeover` and `salvage` as functions | Step 3 review 2026-10-08 |
+| D116 | Fell behind retention | The follower stops in STALLED with the reason and keeps serving under D112; a restart rebuilds. Live rebuild is a TODO | Step 3 review 2026-10-08 |
+| D117 | Simulator | Single-threaded, seeded, virtual clock, real step functions, six invariants after every step, failing seeds pinned | Step 3 review 2026-10-08 |
+| D118 | Real-server chaos | A JDK-socket `FaultProxy` in the test sources in front of SeaweedFS | Step 3 review 2026-10-08 |
+| D119 | Apply window | One seqlock section per transaction | Step 3 review 2026-10-08 |
+| D120 | Snapshot download | Up to four 8 MiB ranges in flight, size check first, one SHA-256 pass over the finished file | Step 3 review 2026-10-08 |
+| D121 | Trust errors | New code -15 `NodusChainTrustError` for signature, link, epoch, sequence, rollback and fork violations | Step 3 review 2026-10-08 |
+| D122 | Damaged marker | Fail closed with `NodusCorruptLogError` naming the file; the operator deletes it to accept the loss | Step 3 review 2026-10-08 |
+| D123 | Reservation unit | Reserve per transaction; a limit hit leaves a valid prefix and STALLED. Refines D119's text | Step 3 review 2026-10-08 |
+| D124 | Event log | `EventLog` extracted from `ShipState` and shared with the follower state | Step 3 review 2026-10-08 |
+| D125 | Takeover shape | An orchestrator over three injected steps so the simulator can substitute the open | Step 3 review 2026-10-08 |
+| D126 | Read gate | `FollowerGate` in `GraphSession.requireOpen`; the token wait uses `read_wait_ms`, so `nodus_check` keeps its signature | Step 3 review 2026-10-08 |
 
 ## Build Step 1 implementation notes
 

@@ -70,7 +70,7 @@
 
 **Why:** Split-brain, lost-write and stale-read bugs live in rare interleavings of the commit protocol, followers and takeover; seeded simulation finds and reproduces them.
 
-**Context:** Gate for Build Step 3. The local every-prefix crash harness (D73) is the seed. The protocol to simulate is in `docs/designs/engineering-review-authz-wedge.md` sections 8 and 9.
+**Context:** Gate for Build Step 3, scheduled as milestone M5 in `docs/designs/engineering-review-build-step-3.md` (D117). The local every-prefix crash harness (D73) is the seed. The protocol to simulate is in `docs/designs/engineering-review-authz-wedge.md` sections 8 and 9.
 
 **Effort:** L
 **Priority:** P1
@@ -192,7 +192,7 @@
 
 **Why:** Shipping is one-way today. The chain and the snapshots hold everything needed, but only the projector reads them back.
 
-**Context:** `ChainHead`, `ChainVerifier`, `ChainCursor` and the snapshot reader already do the hard parts. Open reconciliation refuses a directory that is behind the chain, so a restore also decides what happens to a stale directory.
+**Context:** Scheduled as milestone M1 of Build Step 3 (`docs/designs/engineering-review-build-step-3.md`, D105 to D120). `ChainHead`, `ChainVerifier`, `ChainCursor` and the snapshot reader already do the hard parts. Open reconciliation refuses a directory that is behind the chain, so a restore also decides what happens to a stale directory.
 
 **Effort:** M
 **Priority:** P1
@@ -219,6 +219,54 @@
 **Context:** Python already passes `timeout=`. Changing the signature of `nodus_tuple_write` breaks the ABI, so a new export is the likelier shape.
 
 **Effort:** S
+**Priority:** P3
+**Depends on:** none
+
+### Live rebuild of a follower that fell behind retention
+
+**What:** Let a follower bootstrap a second graph in the background and swap it in when it falls behind retention, instead of stopping in STALLED (D116 chose stop and restart).
+
+**Why:** Removes the last case where an unattended follower needs a restart; matters for fleets without a supervisor.
+
+**Context:** `GraphSession` keeps `kernel`, `tuples` and `strings` as final fields on purpose, so a swap needs a holder indirection through about 25 methods, and peak memory is about double the graph. The detection already exists after Step 3 (STALLED reason "fell behind retention"); this is only the remedy. Start in `replica/FollowerCore` where the gap is detected.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Build Step 3
+
+### Local follower checkpoint for fast restarts
+
+**What:** Persist a follower's own snapshot so a restart loads from local disk and tails the chain, instead of downloading the newest snapshot (D109 chose a rollback marker only).
+
+**Why:** A restart of a multi-gigabyte follower costs the download (about 10 to 15 s with parallel ranges) plus the 2 to 4 s load; a fleet restart multiplies it.
+
+**Context:** The marker already stores `(seq, digest, epoch, lsn)`, the resume point a checkpoint needs. `SnapshotWriter` and `SnapshotReader` exist, so the work is the lifecycle (when to checkpoint, how to trust the file after a crash), not the format. It adds a second durable format for a cache that is always rebuildable.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Build Step 3
+
+### Adaptive polling for large follower fleets
+
+**What:** Back off the poll interval while the chain is idle (for example 100 ms up to 2 s) and snap back when an object appears.
+
+**Why:** At the default 100 ms each follower makes 10 GET requests a second. 500 followers make 5,000 a second, near S3's 5,500 GET/s per prefix limit, and about 430 million 404s a day on an idle writer.
+
+**Context:** The frozen visibility budget assumes a 100 ms poll (D66), so this trades first-write latency after an idle period for request cost. Tune it against real fleet traffic. Start in `replica/FollowerCore` where the idle cadence is chosen.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Build Step 3
+
+### Split ShipState
+
+**What:** Split `ship/ShipState.java` (523 lines) into the shipped position and wait, the backlog gate, the snapshot-reference mailbox, retention and projection status, and the event log.
+
+**Why:** It is the largest class in the shipping packages and a monitor shared by five threads.
+
+**Context:** Step 3 extracts only the event log (D124) and gives the follower its own `FollowerState`. Do the rest one part per commit with the existing `ShipStateTest` and the shipper crash tests as the safety net, starting with the reference mailbox.
+
+**Effort:** M
 **Priority:** P3
 **Depends on:** none
 
