@@ -2,6 +2,7 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogConfig;
+import io.nodusdb.ship.ShippingConfig;
 import io.nodusdb.storage.DurableGraph;
 
 import java.io.IOException;
@@ -24,7 +25,12 @@ public final class GraphSessions {
     }
 
     public long openDurable(Path directory, LogConfig config, long maxMemoryBytes) throws IOException {
-        GraphKernel kernel = DurableGraph.open(directory, config, maxMemoryBytes).kernel();
+        return openDurable(directory, config, maxMemoryBytes, null);
+    }
+
+    public long openDurable(Path directory, LogConfig config, long maxMemoryBytes, ShippingConfig shipping)
+            throws IOException {
+        GraphKernel kernel = DurableGraph.open(directory, config, maxMemoryBytes, shipping).kernel();
         return table.open(new GraphSession(kernel));
     }
 

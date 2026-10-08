@@ -27,6 +27,9 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                            RetentionStatus retention, ProjectionStatus projection) {
     }
 
+    public record Event(long seq, String message) {
+    }
+
     public record ReferenceStatus(long seq, long lsn, long committedNanos, long failures, String lastError) {
     }
 
@@ -49,7 +52,8 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private final long epoch;
     private final long backlogCapBytes;
     private final ChainRing ring;
-    private final Deque<String> events = new ArrayDeque<>();
+    private final Deque<Event> events = new ArrayDeque<>();
+    private long eventSeq;
     private Phase phase = Phase.STARTING;
     private long shippedLsn;
     private long chainSeq;
@@ -476,9 +480,18 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
 
     public List<String> drainEvents() {
         synchronized (monitor) {
-            List<String> drained = new ArrayList<>(events);
+            List<String> drained = new ArrayList<>(events.size());
+            for (Event event : events) {
+                drained.add(event.message());
+            }
             events.clear();
             return drained;
+        }
+    }
+
+    public List<Event> recentEvents() {
+        synchronized (monitor) {
+            return List.copyOf(events);
         }
     }
 
@@ -486,7 +499,7 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
         if (events.size() == MAX_EVENTS) {
             events.removeFirst();
         }
-        events.addLast(message);
+        events.addLast(new Event(++eventSeq, message));
     }
 
     private void failFastIfTerminal(long tokenEpoch, long lsn) {

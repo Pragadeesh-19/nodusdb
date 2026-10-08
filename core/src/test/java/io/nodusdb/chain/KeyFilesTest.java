@@ -202,6 +202,51 @@ class KeyFilesTest {
         assertEquals(0, Keyring.empty().size());
     }
 
+    @Test
+    void generateToWritesAUsablePairAndNothingElse() throws Exception {
+        Path privateFile = scratch.resolve("new-private.pem");
+        Path publicFile = scratch.resolve("new-public.pem");
+
+        KeyFiles.generateTo(privateFile, publicFile);
+
+        byte[] message = "round trip".getBytes(StandardCharsets.US_ASCII);
+        Signature verifier = Signature.getInstance("Ed25519");
+        verifier.initVerify(KeyFiles.readPublic(publicFile));
+        verifier.update(message);
+        assertTrue(verifier.verify(sign(KeyFiles.readPrivate(privateFile), message)));
+        try (var listing = Files.list(scratch)) {
+            assertEquals(2, listing.count());
+        }
+    }
+
+    @Test
+    void generateToRefusesToOverwriteEitherFileAndCreatesNothing() throws IOException {
+        Path privateFile = scratch.resolve("p.pem");
+        Path publicFile = scratch.resolve("q.pem");
+        Files.writeString(publicFile, "precious");
+
+        assertThrows(FileAlreadyExistsException.class, () -> KeyFiles.generateTo(privateFile, publicFile));
+
+        assertFalse(Files.exists(privateFile));
+        assertEquals("precious", Files.readString(publicFile));
+
+        Files.delete(publicFile);
+        Files.writeString(privateFile, "also precious");
+        assertThrows(FileAlreadyExistsException.class, () -> KeyFiles.generateTo(privateFile, publicFile));
+        assertFalse(Files.exists(publicFile));
+        assertEquals("also precious", Files.readString(privateFile));
+    }
+
+    @Test
+    void generateToRemovesThePrivateKeyWhenThePublicKeyCannotBeWritten() {
+        Path privateFile = scratch.resolve("p.pem");
+        Path publicFile = scratch.resolve("missing-directory").resolve("q.pem");
+
+        assertThrows(IOException.class, () -> KeyFiles.generateTo(privateFile, publicFile));
+
+        assertFalse(Files.exists(privateFile));
+    }
+
     private static byte[] pemOf(String label, byte[] der) {
         return ("-----BEGIN " + label + "-----\n" + Base64.getMimeEncoder(64, "\n".getBytes())
                 .encodeToString(der) + "\n-----END " + label + "-----\n").getBytes(StandardCharsets.US_ASCII);

@@ -25,7 +25,7 @@ public final class NodusCApi {
     private static final int LOOKUP_ERROR = ErrorCode.LOOKUP_FAILED.value();
     private static final long MAX_STRING_BYTES = Integer.MAX_VALUE - 8;
     private static final int MAX_PATH_BYTES = 32_768;
-    private static final GraphSessions SESSIONS = new GraphSessions();
+    static final GraphSessions SESSIONS = new GraphSessions();
 
     private NodusCApi() {
     }

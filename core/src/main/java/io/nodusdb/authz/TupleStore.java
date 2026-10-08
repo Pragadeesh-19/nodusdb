@@ -145,7 +145,7 @@ public final class TupleStore {
         watermark.awaitShipped(token.epoch(), token.lsn(), waitNanos(timeout));
     }
 
-    private ShipWatermark requireShipping() {
+    public ShipWatermark requireShipping() {
         ShipWatermark watermark = kernel.shipWatermark();
         if (!watermark.configured()) {
             throw new UnsupportedFeatureException("shipping is not configured for this graph");

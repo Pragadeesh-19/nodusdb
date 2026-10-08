@@ -95,6 +95,23 @@ public final class KeyFiles {
                 StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
     }
 
+    public static void generateTo(Path privateFile, Path publicFile) throws IOException {
+        if (Files.exists(privateFile)) {
+            throw new FileAlreadyExistsException(privateFile.toString());
+        }
+        if (Files.exists(publicFile)) {
+            throw new FileAlreadyExistsException(publicFile.toString());
+        }
+        KeyPair pair = generate();
+        writePrivate(privateFile, pair.getPrivate());
+        try {
+            writePublic(publicFile, pair.getPublic());
+        } catch (IOException | RuntimeException failure) {
+            Files.deleteIfExists(privateFile);
+            throw failure;
+        }
+    }
+
     public static byte[] rawPublic(PublicKey key) {
         EdECPoint point = ((EdECPublicKey) key).getPoint();
         byte[] bigEndian = point.getY().toByteArray();

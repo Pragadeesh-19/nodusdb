@@ -7,7 +7,9 @@ import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
+import io.nodusdb.ship.ShipStats;
 
+import java.time.Duration;
 import java.util.Arrays;
 
 public final class GraphSession implements AutoCloseable {
@@ -177,9 +179,29 @@ public final class GraphSession implements AutoCloseable {
         return tuples.applySchema(document);
     }
 
-    public synchronized Token writeTuples(TupleTransaction transaction, Durability durability) {
+    public Token writeTuples(TupleTransaction transaction, Durability durability) {
+        if (durability != Durability.LAKE) {
+            return writeLocally(transaction);
+        }
+        tuples.requireShipping();
+        Token token = writeLocally(transaction);
+        awaitShipped(token, TupleStore.DEFAULT_SHIP_WAIT);
+        return token;
+    }
+
+    public void awaitShipped(Token token, Duration timeout) {
         requireOpen();
-        return tuples.write(transaction, durability);
+        tuples.awaitShipped(token, timeout);
+    }
+
+    public String statsJson() {
+        requireOpen();
+        return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark());
+    }
+
+    private synchronized Token writeLocally(TupleTransaction transaction) {
+        requireOpen();
+        return tuples.write(transaction, Durability.LOCAL);
     }
 
     public boolean check(String object, String permission, String subject, Token atLeast) {

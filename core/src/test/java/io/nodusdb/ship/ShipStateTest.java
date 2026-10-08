@@ -284,6 +284,31 @@ class ShipStateTest {
     }
 
     @Test
+    void recentEventsAreReadWithoutConsumingThemAndKeepCountingPastTheBound() {
+        ShipState state = state();
+        state.failed("one");
+        state.active();
+        state.failed("two");
+
+        List<ShipState.Event> first = state.recentEvents();
+        List<ShipState.Event> again = state.recentEvents();
+
+        assertEquals(List.of(new ShipState.Event(1, "shipping failed: one"),
+                new ShipState.Event(2, "shipping failed: two")), first);
+        assertEquals(first, again);
+        for (int i = 0; i < 100; i++) {
+            state.active();
+            state.failed("later " + i);
+        }
+        List<ShipState.Event> bounded = state.recentEvents();
+        assertEquals(64, bounded.size());
+        assertEquals(102, bounded.get(63).seq());
+        assertEquals(39, bounded.get(0).seq());
+        assertEquals(64, state.drainEvents().size());
+        assertEquals(List.of(), state.recentEvents());
+    }
+
+    @Test
     void theRunnerWaitsForWorkUntilItIsWoken() throws Exception {
         ShipState state = state();
         long started = System.nanoTime();

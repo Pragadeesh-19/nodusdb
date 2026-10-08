@@ -2,6 +2,7 @@ package io.nodusdb.capi;
 
 import io.nodusdb.authz.Durability;
 import io.nodusdb.authz.TupleTransaction;
+import io.nodusdb.error.ShipTimeoutException;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.storage.GraphUpgrade;
 
@@ -72,6 +73,9 @@ public final class AuthzCApi {
             Token token = NodusCApi.session(handle).writeTuples(transaction, durabilityOf(durability));
             writeToken(tokenOut, token);
             return NodusCApi.OK;
+        } catch (ShipTimeoutException e) {
+            writeToken(tokenOut, new Token(e.epoch(), e.lsn()));
+            return Failures.codeOf(e);
         } catch (RuntimeException e) {
             return Failures.codeOf(e);
         }
