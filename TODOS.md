@@ -186,4 +186,40 @@
 **Priority:** P3
 **Depends on:** Merge Iceberg manifests
 
+### Restore a graph from the bucket
+
+**What:** A tool that downloads the newest snapshot reference, verifies it and the chain after it, and rebuilds a graph directory.
+
+**Why:** Shipping is one-way today. The chain and the snapshots hold everything needed, but only the projector reads them back.
+
+**Context:** `ChainHead`, `ChainVerifier`, `ChainCursor` and the snapshot reader already do the hard parts. Open reconciliation refuses a directory that is behind the chain, so a restore also decides what happens to a stale directory.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** Build Step 2
+
+### Start a new chain after an unshipped gap
+
+**What:** A deliberate operation that ends the old chain at its head and starts a new one from a fresh snapshot, for a directory that wrote while shipping was off.
+
+**Why:** Such a directory is refused at open today (`NodusWriterFencedError`, "never shipped"). The only ways out are another bucket prefix or deleting the chain.
+
+**Context:** The chain's epoch claims and `SNAPSHOT_REF` objects already express "history restarts here". The risk is a verifier that trusts the old chain's end as the whole history, so the break needs a signed marker.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Restore a graph from the bucket
+
+### Set the `lake` wait through the C interface
+
+**What:** An argument or a setting for the wait that `nodus_tuple_write` does for durability `lake`. It is 30 seconds now.
+
+**Why:** A C caller that wants a shorter bound has to write locally and call `nodus_await_shipped` itself.
+
+**Context:** Python already passes `timeout=`. Changing the signature of `nodus_tuple_write` breaks the ABI, so a new export is the likelier shape.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** none
+
 ## Completed

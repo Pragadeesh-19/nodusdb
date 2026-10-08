@@ -281,7 +281,7 @@ with nodusdb.Graph(path="/data/authz", sync_mode="sync") as g:
     print(g.check("document:readme", "view", "user:bob"))                     # False
 ```
 
-A schema declares types, stored relations with the subject types they allow, and permissions built from unions, computed relations and arrows (`parent->view`). It moves forward one version at a time, and relation ids are never reused. `nodusdb.Transaction` groups tuple writes so that every tuple applies or none does. Each write returns a `Token(epoch, lsn)`. Passing it as `at_least` makes a check refuse to answer from state older than that write: `NodusStaleReadError` if the graph has not reached it, `NodusTokenLostError` if the write was acknowledged but never became durable. A check that cannot decide within the depth limit of 32 raises `NodusCheckDepthError` rather than answering `False`. `durability="lake"` raises `NodusUnsupportedError` until the segment shipper exists.
+A schema declares types, stored relations with the subject types they allow, and permissions built from unions, computed relations and arrows (`parent->view`). It moves forward one version at a time, and relation ids are never reused. `nodusdb.Transaction` groups tuple writes so that every tuple applies or none does. Each write returns a `Token(epoch, lsn)`. Passing it as `at_least` makes a check refuse to answer from state older than that write: `NodusStaleReadError` if the graph has not reached it, `NodusTokenLostError` if the write was acknowledged but never became durable. A check that cannot decide within the depth limit of 32 raises `NodusCheckDepthError` rather than answering `False`. `durability="lake"` also waits until the write is in the object store, and raises `NodusUnsupportedError` when shipping is not configured (see [Shipping the log](#shipping-the-log-to-object-storage)).
 
 Reads take no lock, so threads can check against one graph while another thread writes.
 
@@ -367,6 +367,43 @@ The crash tests replay every prefix of the writes and forces of a run through a 
 
 Call `sync()` or `checkpoint()` to force a point where everything is on disk.
 
+## Shipping the log to object storage
+
+A durable graph can copy its log to a bucket as it writes. The bucket then holds every change in order, signed and hash-linked, in a format other tools read without the graph running.
+
+```python
+from nodusdb import Graph, Shipping, Transaction, environment_credentials, generate_signing_key
+
+generate_signing_key("signing.pem", "signing.pub")     # once; keep signing.pem private
+
+shipping = Shipping.s3(
+    "my-bucket", "eu-west-1", prefix="graphs/prod",
+    key_file="signing.pem", key_id=1, public_key_file="signing.pub",
+    credentials=environment_credentials(),             # or file_credentials(), static_credentials(...)
+    iceberg=True,                                       # also project the log into an Iceberg table
+)
+with Graph(path="graph", sync_mode="sync", shipping=shipping) as g:
+    g.apply_schema(SCHEMA)
+    token = g.write(Transaction().add("document:a", "viewer", "user:alice"), durability="lake")
+    print(g.stats()["shipping"]["lag_lsn"])             # 0 once the bucket holds everything
+```
+
+`Shipping.directory(path, ...)` ships into a local directory instead, which is what the tests use. Any S3-compatible server works with `endpoint=` and `path_style=True`.
+
+**What lands in the bucket.** Under the prefix, `_nodus/chain/` holds numbered objects. Each one carries a run of log records, an Ed25519 signature, and the SHA-256 of the object before it, so a reader can detect a gap, a reordering or a forged object. `_nodus/snapshots/` holds a copy of each checkpoint, and a snapshot reference in the chain says which one. `_nodus/epoch/` holds one small claim per writer tenure. With `iceberg=True`, `iceberg/` holds an Iceberg v2 table `nodus_log`, with one row per tuple change, names instead of ids, partitioned by day. pyiceberg, DuckDB and Spark read it.
+
+**Durability `lake`.** A local write returns once the log has it. A `lake` write also waits until the object is in the bucket, 30 seconds at most (`timeout=`). On a timeout the write is still applied and logged locally, and `NodusShipTimeoutError.token` names it, so `wait_shipped(token)` can finish the wait later. Other threads keep using the graph during the wait.
+
+**Opening.** The open checks the bucket before it takes any write. An empty bucket starts a chain with a snapshot of the graph. A bucket whose chain this directory can continue gets a new epoch, and the graph keeps shipping where the chain ends. A directory that is behind the chain, or that lost records the chain never received, is refused with `NodusWriterFencedError`. A store that ignores conditional writes is refused with `NodusUnsupportedError`, because the chain's safety rests on them. A second writer that claims a newer epoch fences the first: its writes fail with `NodusWriterFencedError` from then on.
+
+**Outages.** A bucket that cannot be reached does not stop local writes at first. The unshipped part of the log grows, local trimming waits for it, and `stats()` reports `RETRYING` with the last error. At half of `backlog_cap_bytes` (1 GiB by default) the `nodusdb` logger warns. At the cap writes fail with `NodusLogBacklogError` until shipping catches up, then they resume by themselves.
+
+**Operating it.** `stats()` returns a dictionary with the shipper phase, the shipped and applied positions, the lag, the backlog, the age of the last commit and snapshot reference, retention counters and the projection state. New events go to the `nodusdb` logger once each. Retention deletes chain objects and snapshots older than `retention_days` (7 by default), but never the part a restore or the projection still needs.
+
+**Cost.** The shipper uploads at most once per `interval_ms` (100 ms by default) and only when there is something to send, so a busy writer makes about 864,000 PUT requests a day and an idle one makes none. A larger interval means fewer requests and a longer `lake` wait. A local write costs about what it did without shipping: `python/benchmarks/shipping_ratio.py` measures `add_tuple` with and without shipping in one run, and CI fails above a ratio of 3.
+
+The bucket needs conditional writes (`If-None-Match`), which S3 supports, and an operator-owned signing key. NodusDB never trusts a key stored in the bucket: readers take the public key from their own configuration.
+
 ## Concurrency
 
 The kernel supports one writer and any number of readers. Every mutation runs inside a seqlock: a version counter is odd while an edge change is in progress and even otherwise. A reader checks the counter before and after each query. If a write overlapped the query, the reader discards the result and runs it again. Readers never take a lock and never block the writer, and a query never returns a half-applied change.
@@ -450,7 +487,10 @@ Prerequisites:
 - On Windows, Visual Studio 2022 with the C++ build tools.
 
 ```sh
-# Java tests
+# Java tests. The Parquet, Avro and Iceberg tests judge their output with real readers:
+# pip install "pyiceberg[pyarrow]" fastavro pyarrow tzdata
+# Set NODUS_PYTHON to that interpreter if it is not `python` on the path. Without the packages those
+# tests skip, and NODUS_REQUIRE_PYTHON_VERIFIERS=1 turns the skip into a failure, as CI does.
 mvn test
 
 # Native library, written to target/native/
@@ -475,6 +515,9 @@ pip install -r python/benchmarks/requirements.txt
 python python/benchmarks/benchmark_graph_heavyweights.py run --out bench/baseline/graph-heavyweights-windows-dev.json
 python python/benchmarks/benchmark_lake_heavyweights.py run --out bench/baseline/lake-heavyweights-windows-dev-v2.json
 
+# Shipping overhead: add_tuple with and without shipping, one run, fails above a ratio of 3
+python python/benchmarks/shipping_ratio.py
+
 # JMH microbenchmarks
 mvn -pl bench -am package -DskipTests
 java -jar bench/target/benchmarks.jar -prof gc
@@ -490,7 +533,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **One writer.** The kernel allows one writer and many readers. Writes on one handle run one at a time.
 - **Schema retypes.** A schema version that turns a relation holding tuples into a tupleset relation, or retires it, is refused. Moving the tuples between the two table pairs in the same transaction is not built yet.
-- **Durability `lake`.** It raises `NodusUnsupportedError` until the segment shipper exists. There is no follower, object-storage shipping or automatic failover yet.
+- **Shipping is one-way.** The bucket receives the log, and nothing restores a graph from it yet. There is no follower or automatic failover. A directory that was written without shipping while a chain already existed, and has trimmed those records, is refused when shipping is turned back on.
 - **Transactions are bounded.** A transaction must fit one write of 1 MiB. Split larger loads, or use `add_edges_from`, which writes one record per edge.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
@@ -503,4 +546,4 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: the graph engine and its durability are built on a typed log and a version 3 snapshot, with an upgrade path from the earlier directory format. Typed tuples, schemas, tokens and permission checks are built on top of it, and readers run in parallel within a handle. The lake write path is built, and so are the release wheels. Multiple writers, followers, object-storage shipping, Iceberg metadata, compaction, and the Arrow export are still open.
+Status: the graph engine and its durability are built on a typed log and a version 3 snapshot, with an upgrade path from the earlier directory format. Typed tuples, schemas, tokens and permission checks are built on top of it, and readers run in parallel within a handle. The lake write path is built, and so are the release wheels. A durable graph can ship its log to object storage as a signed chain and project it into an Iceberg table. Multiple writers, followers, restore from the bucket, compaction, and the Arrow export are still open.

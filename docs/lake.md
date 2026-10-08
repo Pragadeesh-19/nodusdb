@@ -124,8 +124,10 @@ which it also does not show for PyArrow's own files.
 - Each buffer holds up to `2^29` rows, and a slab holds up to `2^30` bytes.
 - Writes and reads share one lock. Writers do not run in parallel.
 - There is no compaction. Superseded rows and tombstones stay in the files.
-- Iceberg table metadata (JSON and Avro manifests) is not written. The manifest has the Iceberg
-  shape and nothing more.
+- Iceberg table metadata (JSON and Avro manifests) is not written for a `LakeTable`. Its manifest has the
+  Iceberg shape and nothing more. The shipped graph log is different: with `iceberg=True` it is projected into
+  a real Iceberg v2 table, `nodus_log`, written by the same Parquet writer through its `ColumnSource`
+  interface. See the Shipping section of `architecture.md`.
 
 ## C ABI
 

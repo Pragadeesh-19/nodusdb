@@ -25,6 +25,14 @@ io.nodusdb.storage.legacy            read-only readers for version 1 directories
 io.nodusdb.authz                     the tuple store, transactions, tokens and the check evaluator
 io.nodusdb.authz.schema              the schema language, relation ids and the compiled model
 io.nodusdb.capi                      the C interface exported by the native library
+io.nodusdb.json                      the strict JSON parser and writer used for configuration and statistics
+io.nodusdb.objectstore               the object store seam, memory and directory stores, the conditional-write probe
+io.nodusdb.objectstore.s3            the S3 client: SigV4, credentials, multipart upload, error mapping
+io.nodusdb.chain                     the signed, hash-linked chain objects, signing keys and the verifier
+io.nodusdb.ship                      the shipper, open reconciliation, epoch claims, snapshots, retention, statistics
+io.nodusdb.avro                      the Avro object container writer and reader
+io.nodusdb.iceberg                   the Iceberg v2 table writer for the shipped log
+io.nodusdb.projection                the projector that turns chain objects into Iceberg rows
 io.nodusdb.lake                      the lake table: flush lifecycle, manifest, aggregates
 io.nodusdb.lake.model                schema, row and aggregate types
 io.nodusdb.lake.buffer               the in-memory write absorber and its row selections
@@ -35,7 +43,9 @@ io.nodusdb.lake.parquet              the Parquet writer and reader, column chunk
 
 The packages layer upward without cycles: `memory`, then `codec` and `buffer`, then `model`, then `parquet`,
 then `lake`. `io.nodusdb.storage` depends on `kernel` and `log`, `io.nodusdb.authz` on `kernel`, and
-`io.nodusdb.capi` on everything.
+`io.nodusdb.capi` on everything. The shipping packages layer the same way: `objectstore`, then `chain`, then
+`ship`, then `avro` and `iceberg`, then `projection`. `io.nodusdb.storage` is the composition root that wires
+them to a graph directory, so none of them depends on it.
 
 ## Chunked off-heap storage
 
@@ -289,6 +299,65 @@ frames in a per-thread array and its visited frames in a generation-stamped set,
 warm-up and ends on cycles. It runs between `readStart` and `readStillValid` and retries when a write overlapped
 it. When the depth limit stops it before it can decide it raises `CheckDepthException`, and a grant found on
 another branch is still returned.
+
+## Shipping
+
+Shipping copies the log to an object store as it grows. It reads the log files the writer already produced,
+so the write path gains no work of its own: `ShippingLogStore` wraps the `LogStore`, asks a gate whether the
+unshipped backlog is at its cap or the writer was fenced, and clamps `trim` to what has been shipped.
+
+```
+SegmentedLog --append--> ShippingLogStore --> kernel
+     |                         ^ gate: fenced? backlog at cap?   trim <= shippedLsn
+     | files
+     v
+LogTailReader -> LogFeed -> ShipperCore.step -> ObjectStore.putIfAbsent(_nodus/chain/{seq}.obj)
+                                  |                          ^
+                                  v                          | read by
+                              ShipState -- ChainRing --> EdgeLogProjector -> Parquet -> IcebergTable
+```
+
+**Chain.** Each chain object has a header (kind, sequence number, epoch, writer nonce, the SHA-256 of the
+previous object, key id), a body and an Ed25519 signature over the digest. A `RECORDS` body holds whole
+transactions from `lsnFirst` to `lsnLast`; a `SNAPSHOT_REF` body names a snapshot object, its hash and its LSN.
+`ChainVerifier` checks the signature and the link; `ChainCursor` follows a chain object by object. The bucket
+never supplies the key: a verifier takes the public key from its own configuration.
+
+**Shipper.** `ShipperCore.step` is a deterministic function over a store, a log feed and a clock, so tests
+drive it with a faulty store and a manual clock and crash it after every store call. One step either commits
+the next object with a conditional `putIfAbsent`, backs off, or stops. A lost reply is resolved by reading the
+key and comparing bytes. A different object at the key means another writer, and the shipper fences itself.
+`ShipperRunner` is the thread around it. The runner asks the log to force only when a `lake` write is waiting
+or the graph is closing; forcing takes the append lock for a whole fsync, so forcing on every step cost a
+local write about 1.9 times its price in the first measurement.
+
+**Epochs and open.** `OpenReconciler` runs before the log opens. It lists the newest snapshot and the objects
+after it to find the head, verifies it when a public key is configured, refuses a directory that is behind the
+head or that lost records the head never received, claims the next free epoch with a conditional write on
+`_nodus/epoch/{n}.json`, and for an empty bucket uploads a snapshot of the recovered graph. The first chain
+object is committed by the shipper after the local `EPOCH` record exists, so a crash between the two cannot
+leave a head whose epoch the directory never recorded. Before every commit the shipper checks that no higher
+epoch was claimed; if one was, it is fenced and every later write fails.
+
+**Snapshots and retention.** A checkpoint hands its snapshot file to `SnapshotShipper` by hard link
+(`ship-staging/`). The upload is multipart, read back in ranges and hashed, and never overwrites an object.
+Only then is a `SNAPSHOT_REF` offered to the chain. A checkpoint whose LSN is not above the newest snapshot
+in the bucket is not shipped, because two snapshots of one LSN differ in epoch history and the second would
+look like a second history. `ChainRetention` deletes a prefix of the chain that is older than the retention
+window and below the newest reference and the last object the projector consumed, keeping the last records
+object before the reference because head discovery reads its LSN.
+
+**Close.** `GraphKernel.close` checkpoints, then closes the log, and the log store's close hook stops the
+snapshot shipper, lets the shipper drain every durable record, lets the projector commit what it has, stops
+retention and closes the store. A snapshot staged by that last checkpoint is dropped if its upload has not
+started; the chain is complete either way.
+
+**Projection.** `EdgeLogProjector` reads chain objects from a bounded ring and then from the store, applies
+whole transactions, resolves symbol ids to names through `NameResolver` (the live kernel, plus an overlay for
+names defined in the stream), groups rows by commit day and writes them as Parquet data files. Each table
+commit carries the projected position and a signed `nodus.commit.v1` record that names the batch and links to
+the previous record. `IcebergTable` commits metadata with a conditional write, so a second writer is fenced
+and a crash leaves at most orphan data files that the next start removes.
 
 ## Lake write path
 

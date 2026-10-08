@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Log shipping. `Graph(path=..., shipping=Shipping.s3(...))` or `Shipping.directory(...)` copies the log to an object store as a signed, hash-linked chain, with snapshot references, epoch claims, retention and a backlog cap. The open refuses a directory that is behind the chain or lost unshipped records (`NodusWriterFencedError`) and a store that ignores conditional writes (`NodusUnsupportedError`).
+- `durability="lake"` now waits until the write is in the bucket. `wait_shipped(token)` finishes a wait later, and a timeout raises `NodusShipTimeoutError` with the token of the applied write. Without shipping, `lake` still raises `NodusUnsupportedError`.
+- `Graph.stats()` reports the shipper, the backlog, retention and the projection, and logs new shipping events to the `nodusdb` logger. `generate_signing_key` writes an Ed25519 key pair.
+- An Iceberg v2 table `nodus_log` projected from the shipped log (`iceberg=True`), one row per tuple change with names instead of ids, readable by pyiceberg.
+- C exports `nodus_open_durable_shipping`, `nodus_await_shipped`, `nodus_stats_json` and `nodus_signing_key_generate`.
+- `python/benchmarks/shipping_ratio.py` compares `add_tuple` with and without shipping in one run. CI fails above a ratio of 3. It measures 1.01 on the development laptop.
+
 ### Fixed
 
 - Every C-ABI call on one graph handle holds that handle's monitor. Before, concurrent calls could overwrite each other's query results, and concurrent batch writes could return wrong counts.
@@ -10,6 +19,8 @@
 ### Known limits
 
 - Calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
+- Shipping is one-way. Nothing restores a graph from the bucket yet, and the Iceberg manifest list grows by one entry per commit.
+- A `lake` write waits 30 seconds at most through the C interface.
 
 ## 0.1.0rc1
 
