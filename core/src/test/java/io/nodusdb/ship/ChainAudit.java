@@ -57,8 +57,10 @@ final class ChainAudit {
             }
         }
         assertEquals(expectedLastLsn, cursor.lastLsn(), "the chain does not end at the log's last LSN");
-        assertArrayEquals(logRecords(disk, snapshotLsn, expectedLastLsn), shipped.toByteArray(),
-                "the shipped records differ from the log");
+        if (disk != null) {
+            assertArrayEquals(logRecords(disk, snapshotLsn, expectedLastLsn), shipped.toByteArray(),
+                    "the shipped records differ from the log");
+        }
         return new Result(keys.size(), cursor.lastLsn(), snapshotLsn, List.copyOf(epochs));
     }
 

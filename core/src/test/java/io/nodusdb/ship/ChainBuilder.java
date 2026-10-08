@@ -37,6 +37,10 @@ public final class ChainBuilder {
         this.nonce = nonce;
     }
 
+    public static KeyPair keyPair() {
+        return PAIR;
+    }
+
     public static SigningKey signingKey() {
         return new SigningKey(KEY_ID, PAIR.getPrivate());
     }

@@ -4,12 +4,18 @@ import io.nodusdb.error.UpgradeRequiredException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.LogRecovery;
+import io.nodusdb.log.LogStore;
 import io.nodusdb.log.RecoveryResult;
 import io.nodusdb.log.ReplaySink;
 import io.nodusdb.log.SegmentedLog;
 import io.nodusdb.log.io.DirectoryLogFileSystem;
 import io.nodusdb.log.io.LogFileSystem;
 import io.nodusdb.log.record.RecordReader;
+import io.nodusdb.ship.OpenReconciler;
+import io.nodusdb.ship.ShippingBootstrap;
+import io.nodusdb.ship.ShippingBootstrap.Reconciled;
+import io.nodusdb.ship.ShippingConfig;
+import io.nodusdb.ship.ShippingLogStore;
 import io.nodusdb.storage.DirectoryFormat.Layout;
 import io.nodusdb.storage.snapshot.SnapshotMeta;
 import io.nodusdb.storage.snapshot.SnapshotReader;
@@ -60,20 +66,25 @@ public final class DurableGraph {
     }
 
     public static Recovery open(Path directory, LogConfig config, long maxMemoryBytes) throws IOException {
+        return open(directory, config, maxMemoryBytes, null);
+    }
+
+    public static Recovery open(Path directory, LogConfig config, long maxMemoryBytes, ShippingConfig shipping)
+            throws IOException {
         Objects.requireNonNull(directory, "directory");
         Objects.requireNonNull(config, "config");
         Files.createDirectories(directory);
         DirectoryLock lock = DirectoryLock.acquire(directory);
         try {
-            return openLocked(directory, config, maxMemoryBytes, lock);
+            return openLocked(directory, config, maxMemoryBytes, shipping, lock);
         } catch (IOException | RuntimeException e) {
             releaseQuietly(lock, e);
             throw e;
         }
     }
 
-    private static Recovery openLocked(Path directory, LogConfig config, long maxMemoryBytes, DirectoryLock lock)
-            throws IOException {
+    private static Recovery openLocked(Path directory, LogConfig config, long maxMemoryBytes,
+                                       ShippingConfig shipping, DirectoryLock lock) throws IOException {
         Layout layout = DirectoryFormat.detect(directory);
         requireOpenable(layout, directory);
         if (layout == Layout.NEW) {
@@ -89,22 +100,62 @@ public final class DurableGraph {
         if (snapshot != null) {
             recovered = recovered.withCommitMicrosFloor(snapshot.lastCommitMicros());
         }
-        long epoch = kernel.epochHistory().latestEpoch() + 1;
-        SegmentedLog log = SegmentedLog.open(files, config, recovered, epoch, LOCAL_WRITER_KEY,
-                DurableGraph::wallClockMicros);
+        byte[] salt = snapshot == null ? newSalt() : snapshot.salt();
+        long latestEpoch = kernel.epochHistory().latestEpoch();
+        SnapshotStaging staging = new SnapshotStaging(directory.resolve(GraphFiles.SHIP_STAGING));
+        ShippingRuntime runtime = null;
+        long epoch = latestEpoch + 1;
+        if (shipping != null) {
+            staging.reset();
+            SnapshotMeta openingState = new SnapshotMeta(recovered.lastLsn(), latestEpoch,
+                    recovered.lastCommitMicros(), salt);
+            Reconciled reconciled = ShippingBootstrap.reconcile(shipping,
+                    new OpenReconciler.Local(recovered.lastLsn(), latestEpoch, oldestRetainedLsn(recovered)),
+                    staging.writing(kernel, openingState), DurableGraph::wallClockMicros);
+            runtime = ShippingRuntime.begin(reconciled, staging);
+            epoch = reconciled.start().epoch();
+        }
+        SegmentedLog log;
         try {
-            byte[] salt = snapshot == null ? newSalt() : snapshot.salt();
+            log = SegmentedLog.open(files, config, recovered, epoch, LOCAL_WRITER_KEY, DurableGraph::wallClockMicros);
+        } catch (IOException | RuntimeException e) {
+            closeQuietly(runtime, e);
+            throw e;
+        }
+        try {
+            LogStore attached = runtime == null ? log : new ShippingLogStore(log, runtime.state(), runtime::close);
+            CheckpointListener listener = runtime == null ? CheckpointListener.NONE : runtime.checkpointListener();
             kernel.recordEpoch(epoch, recovered.lastLsn() + 1, recovered.lastLsn());
-            kernel.attachLog(log, new DurableStore(directory, lock, salt));
+            kernel.attachLog(attached, new DurableStore(directory, lock, salt, listener));
             if (layout == Layout.NEW) {
                 kernel.checkpoint();
                 DirectoryFormat.writeFormat(directory);
             }
+            if (runtime != null) {
+                runtime.startShipping(kernel, log, files, directory.resolve(GraphFiles.SHIP_SCRATCH));
+                kernel.attachShipping(runtime.state());
+            }
         } catch (IOException | RuntimeException e) {
+            closeQuietly(runtime, e);
             log.abort();
             throw e;
         }
         return new Recovery(kernel, sink.records(), recovered.discardedRecords(), recovered.truncatedBytes());
+    }
+
+    private static long oldestRetainedLsn(RecoveryResult recovered) {
+        return recovered.segmentBases().stream().mapToLong(Long::longValue).min().orElse(recovered.lastLsn() + 1);
+    }
+
+    private static void closeQuietly(ShippingRuntime runtime, Exception cause) {
+        if (runtime == null) {
+            return;
+        }
+        try {
+            runtime.close();
+        } catch (RuntimeException e) {
+            cause.addSuppressed(e);
+        }
     }
 
     private static void requireOpenable(Layout layout, Path directory) {

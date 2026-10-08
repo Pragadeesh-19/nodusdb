@@ -18,11 +18,17 @@ final class DurableStore implements DurableStorage {
     private final Path directory;
     private final DirectoryLock lock;
     private final byte[] salt;
+    private final CheckpointListener listener;
 
     DurableStore(Path directory, DirectoryLock lock, byte[] salt) {
+        this(directory, lock, salt, CheckpointListener.NONE);
+    }
+
+    DurableStore(Path directory, DirectoryLock lock, byte[] salt, CheckpointListener listener) {
         this.directory = directory;
         this.lock = lock;
         this.salt = salt.clone();
+        this.listener = listener;
     }
 
     @Override
@@ -32,9 +38,10 @@ final class DurableStore implements DurableStorage {
         try {
             Path temp = directory.resolve(GraphFiles.SNAPSHOT_TEMP);
             SnapshotWriter.write(kernel, meta, temp);
-            Files.move(temp, directory.resolve(GraphFiles.SNAPSHOT),
-                    StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            Path snapshot = directory.resolve(GraphFiles.SNAPSHOT);
+            Files.move(temp, snapshot, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             FileSync.directory(directory);
+            listener.checkpointed(snapshot, lsn);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
