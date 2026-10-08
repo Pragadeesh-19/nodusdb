@@ -42,21 +42,23 @@ public final class ChainRetention {
     public Result sweep(Reference newest, long projectedSeq) {
         long now = clockMillis.getAsLong();
         long cutoff = now - retention.toMillis();
-        long keepFrom = Math.min(lastRecordsBefore(newest.seq()), projectedSeq);
+        long keepFrom = Math.min(firstObjectToKeep(newest), projectedSeq);
         int chainObjects = deleteChainPrefix(keepFrom, cutoff);
         int snapshots = deleteSnapshots(newest.lsn(), cutoff);
         int uploads = store.abortStaleUploads(UPLOAD_PREFIX, STALE_UPLOAD_AGE, Instant.ofEpochMilli(now));
         return new Result(chainObjects, snapshots, uploads);
     }
 
-    private long lastRecordsBefore(long referenceSeq) {
-        long seq = referenceSeq;
+    private long firstObjectToKeep(Reference newest) {
+        long firstNeededLsn = newest.lsn() + 1;
+        long seq = newest.seq();
         while (seq > 1) {
             Optional<byte[]> bytes = store.get(ChainLayout.chainKey(seq - 1));
             if (bytes.isEmpty()) {
                 return seq;
             }
-            if (ChainCodec.decode(bytes.get()).body() instanceof ChainBody.Records) {
+            if (ChainCodec.decode(bytes.get()).body() instanceof ChainBody.Records records
+                    && records.lsnFirst() <= firstNeededLsn) {
                 return seq - 1;
             }
             seq--;

@@ -144,6 +144,67 @@ class ChainRetentionTest {
     }
 
     @Test
+    void aSnapshotOlderThanTheObjectsBeforeItsReferenceKeepsEveryObjectAfterTheSnapshot() {
+        chain.snapshotRef(10, 1);
+        chain.many(5, 1);
+        long snapshotLsn = chain.lastLsn();
+        chain.many(4, 1);
+        chain.snapshotRef(snapshotLsn, 11);
+        chain.many(2, 1);
+        clock.addAndGet(30 * DAY);
+
+        Result result = retention().sweep(new Reference(11, snapshotLsn), ChainRetention.NO_PROJECTOR);
+
+        assertEquals(6, result.chainObjects());
+        assertEquals(range(7, 13), remaining());
+    }
+
+    @Test
+    void theObjectHoldingTheFirstRecordAfterTheSnapshotIsTheOneKept() {
+        chain.snapshotRef(10, 1);
+        chain.many(6, 1);
+        chain.snapshotRef(10, 8);
+        chain.many(1, 1);
+        clock.addAndGet(30 * DAY);
+
+        Result result = retention().sweep(new Reference(8, 10), ChainRetention.NO_PROJECTOR);
+
+        assertEquals(1, result.chainObjects());
+        assertEquals(range(2, 9), remaining());
+    }
+
+    @Test
+    void theProjectorBoundStillWinsOverTheSnapshotAnchor() {
+        chain.snapshotRef(10, 1);
+        chain.many(5, 1);
+        long snapshotLsn = chain.lastLsn();
+        chain.many(4, 1);
+        chain.snapshotRef(snapshotLsn, 11);
+        clock.addAndGet(30 * DAY);
+
+        Result result = retention().sweep(new Reference(11, snapshotLsn), 3);
+
+        assertEquals(2, result.chainObjects());
+        assertEquals(range(3, 11), remaining());
+    }
+
+    @Test
+    void aGapInsideTheNeededRunStopsTheWalkAboveTheGap() {
+        chain.snapshotRef(10, 1);
+        chain.many(5, 1);
+        long snapshotLsn = chain.lastLsn();
+        chain.many(4, 1);
+        chain.snapshotRef(snapshotLsn, 11);
+        memory.delete(ChainLayout.chainKey(8));
+        clock.addAndGet(30 * DAY);
+
+        Result result = retention().sweep(new Reference(11, snapshotLsn), ChainRetention.NO_PROJECTOR);
+
+        assertEquals(7, result.chainObjects());
+        assertEquals(range(9, 11), remaining());
+    }
+
+    @Test
     void aNewestReferenceAtTheStartOfTheChainDeletesNothing() {
         chain.snapshotRef(10, 1);
         chain.many(5, 1);
