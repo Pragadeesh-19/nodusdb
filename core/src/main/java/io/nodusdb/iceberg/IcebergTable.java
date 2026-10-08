@@ -171,6 +171,16 @@ public final class IcebergTable {
         List<String> doomed = new ArrayList<>();
         collectUnreferencedData(committedLsn, doomed);
         collectUnreferencedMetadata(head, olderThanMillis, doomed);
+        return delete(doomed);
+    }
+
+    public int removeOrphanData(long committedLsn) {
+        List<String> doomed = new ArrayList<>();
+        collectUnreferencedData(committedLsn, doomed);
+        return delete(doomed);
+    }
+
+    private int delete(List<String> doomed) {
         if (!doomed.isEmpty()) {
             store.deleteAll(doomed);
         }

@@ -132,14 +132,14 @@ class ChainRetentionTest {
     }
 
     @Test
-    void theProjectorBoundsTheDeletionAndNoProjectorMeansNoBound() {
+    void theLastProjectedObjectAndEverythingAfterItAreKeptAndNoProjectorMeansNoBound() {
         long referenceLsn = standardChain();
         clock.addAndGet(8 * DAY);
 
         assertEquals(0, retention().sweep(new Reference(11, referenceLsn), 0).chainObjects());
-        assertEquals(4, retention().sweep(new Reference(11, referenceLsn), 4).chainObjects());
-        assertEquals(range(5, 15), remaining());
-        assertEquals(5, retention().sweep(new Reference(11, referenceLsn), 100).chainObjects());
+        assertEquals(3, retention().sweep(new Reference(11, referenceLsn), 4).chainObjects());
+        assertEquals(range(4, 15), remaining());
+        assertEquals(6, retention().sweep(new Reference(11, referenceLsn), 100).chainObjects());
         assertEquals(range(10, 15), remaining());
     }
 

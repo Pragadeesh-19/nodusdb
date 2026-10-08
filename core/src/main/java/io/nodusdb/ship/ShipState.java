@@ -24,7 +24,7 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     public record Snapshot(Phase phase, long epoch, long shippedLsn, long chainSeq, long backlogBytes,
                            long backlogCapBytes, long consecutiveFailures, String lastError, long objectsShipped,
                            long bytesShipped, long lastCommitNanos, long nowNanos, ReferenceStatus references,
-                           RetentionStatus retention) {
+                           RetentionStatus retention, ProjectionStatus projection) {
     }
 
     public record ReferenceStatus(long seq, long lsn, long committedNanos, long failures, String lastError) {
@@ -34,11 +34,21 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                                   String lastError) {
     }
 
+    public enum ProjectionPhase {
+        DISABLED, STARTING, ACTIVE, RETRYING, FAILED, FENCED, CLOSED
+    }
+
+    public record ProjectionStatus(ProjectionPhase phase, long projectedLsn, long projectedSeq, long snapshotId,
+                                   long lastCommitNanos, long commits, long rows, long failures, String lastError) {
+    }
+
     private static final int MAX_EVENTS = 64;
+    private static final long DEFAULT_RING_BYTES = 32L << 20;
 
     private final Object monitor = new Object();
     private final long epoch;
     private final long backlogCapBytes;
+    private final ChainRing ring;
     private final Deque<String> events = new ArrayDeque<>();
     private Phase phase = Phase.STARTING;
     private long shippedLsn;
@@ -65,12 +75,30 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private long snapshotsDeleted;
     private long retentionFailures;
     private String retentionError = "";
+    private ProjectionPhase projectionPhase = ProjectionPhase.DISABLED;
+    private long projectedLsn = -1;
+    private volatile long projectedSeq;
+    private long icebergSnapshotId = -1;
+    private long projectionCommitNanos;
+    private long projectionCommits;
+    private long projectionRows;
+    private long projectionFailures;
+    private String projectionError = "";
 
     public ShipState(long epoch, long shippedLsn, long chainSeq, long backlogCapBytes) {
+        this(epoch, shippedLsn, chainSeq, backlogCapBytes, DEFAULT_RING_BYTES);
+    }
+
+    public ShipState(long epoch, long shippedLsn, long chainSeq, long backlogCapBytes, long ringBytes) {
         this.epoch = epoch;
         this.shippedLsn = shippedLsn;
         this.chainSeq = chainSeq;
         this.backlogCapBytes = backlogCapBytes;
+        this.ring = new ChainRing(ringBytes);
+    }
+
+    public ChainRing ring() {
+        return ring;
     }
 
     @Override
@@ -202,6 +230,93 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
         synchronized (monitor) {
             referenceFailures++;
             referenceError = reason;
+        }
+    }
+
+    public long projectedSeq() {
+        return projectedSeq;
+    }
+
+    public boolean projectionTerminal() {
+        synchronized (monitor) {
+            return projectionPhase == ProjectionPhase.FENCED || projectionPhase == ProjectionPhase.CLOSED;
+        }
+    }
+
+    public void projectionStarting() {
+        synchronized (monitor) {
+            projectionPhase = ProjectionPhase.STARTING;
+        }
+    }
+
+    public void projectionResumed(long lsn, long seq, long snapshotId) {
+        synchronized (monitor) {
+            projectedLsn = lsn;
+            projectedSeq = seq;
+            icebergSnapshotId = snapshotId;
+        }
+    }
+
+    public void projectionCommitted(long lsn, long seq, long snapshotId, long rows, long nowNanos) {
+        synchronized (monitor) {
+            projectedLsn = lsn;
+            projectedSeq = seq;
+            icebergSnapshotId = snapshotId;
+            projectionCommitNanos = nowNanos;
+            projectionCommits++;
+            projectionRows += rows;
+            projectionError = "";
+            if (projectionPhase != ProjectionPhase.FENCED && projectionPhase != ProjectionPhase.CLOSED) {
+                projectionPhase = ProjectionPhase.ACTIVE;
+            }
+        }
+    }
+
+    public void projectionActive() {
+        synchronized (monitor) {
+            if (projectionPhase != ProjectionPhase.FENCED && projectionPhase != ProjectionPhase.CLOSED) {
+                projectionPhase = ProjectionPhase.ACTIVE;
+                projectionError = "";
+            }
+        }
+    }
+
+    public void projectionRetrying(String reason) {
+        synchronized (monitor) {
+            if (projectionPhase != ProjectionPhase.FENCED && projectionPhase != ProjectionPhase.CLOSED) {
+                projectionPhase = ProjectionPhase.RETRYING;
+                projectionFailures++;
+                projectionError = reason;
+            }
+        }
+    }
+
+    public void projectionFailed(String reason) {
+        synchronized (monitor) {
+            if (projectionPhase != ProjectionPhase.FENCED && projectionPhase != ProjectionPhase.CLOSED) {
+                if (projectionPhase != ProjectionPhase.FAILED) {
+                    event("projection failed: " + reason);
+                }
+                projectionPhase = ProjectionPhase.FAILED;
+                projectionFailures++;
+                projectionError = reason;
+            }
+        }
+    }
+
+    public void projectionFenced(String reason) {
+        synchronized (monitor) {
+            if (projectionPhase != ProjectionPhase.CLOSED) {
+                projectionPhase = ProjectionPhase.FENCED;
+                projectionError = reason;
+                event("the projection was fenced: " + reason);
+            }
+        }
+    }
+
+    public void projectionClosed() {
+        synchronized (monitor) {
+            projectionPhase = ProjectionPhase.CLOSED;
         }
     }
 
@@ -345,7 +460,10 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                     consecutiveFailures, lastError, objectsShipped, bytesShipped, lastCommitNanos, System.nanoTime(),
                     new ReferenceStatus(referenceSeq, referenceLsn, referenceNanos, referenceFailures, referenceError),
                     new RetentionStatus(sweeps, chainObjectsDeleted, snapshotsDeleted, retentionFailures,
-                            retentionError));
+                            retentionError),
+                    new ProjectionStatus(projectionPhase, projectedLsn, projectedSeq, icebergSnapshotId,
+                            projectionCommitNanos, projectionCommits, projectionRows, projectionFailures,
+                            projectionError));
         }
     }
 

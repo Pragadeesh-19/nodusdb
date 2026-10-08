@@ -481,6 +481,33 @@ class ShipperCoreTest {
     }
 
     @Test
+    void everyCommittedObjectIsKeptInTheRingForTheProjector() {
+        Session session = shippedUpToTheSnapshot();
+        rig.append(3);
+        rig.append(2);
+        rig.run(session);
+
+        ChainRing ring = session.state().ring();
+
+        assertEquals(2, ring.size());
+        assertEquals(object(1).digest(), ring.get(1).orElseThrow().digest());
+        assertEquals(object(2).digest(), ring.get(2).orElseThrow().digest());
+        assertEquals(ChainKind.SNAPSHOT_REF, ring.get(1).orElseThrow().header().kind());
+    }
+
+    @Test
+    void anObjectThatFailedToCommitIsNotInTheRing() {
+        Session session = shippedUpToTheSnapshot();
+        rig.append(3);
+        rig.store.failNext(Operation.PUT_IF_ABSENT, Fault.FAIL_BEFORE);
+
+        session.core().step();
+
+        assertEquals(1, session.state().ring().size());
+        assertTrue(session.state().ring().get(2).isEmpty());
+    }
+
+    @Test
     void aReferenceOfferedWhileIdleIsCommittedAsTheNextObject() {
         Session session = shippedUpToTheSnapshot();
         long shipped = session.state().shippedLsn();

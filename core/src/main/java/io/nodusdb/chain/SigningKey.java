@@ -23,10 +23,14 @@ public final class SigningKey {
     }
 
     byte[] sign(ChainHash digest) {
+        return signMessage(ChainSignature.message(digest));
+    }
+
+    byte[] signMessage(byte[] message) {
         try {
             Signature signer = Signature.getInstance(ChainSignature.ALGORITHM);
             signer.initSign(key);
-            signer.update(ChainSignature.message(digest));
+            signer.update(message);
             return signer.sign();
         } catch (GeneralSecurityException e) {
             throw new IllegalStateException("the signing key cannot sign", e);

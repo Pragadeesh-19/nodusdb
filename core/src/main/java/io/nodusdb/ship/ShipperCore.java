@@ -154,6 +154,7 @@ public final class ShipperCore {
     private Next committed() throws IOException {
         cursor.accept(pending);
         long now = nanoClock.getAsLong();
+        state.ring().put(pending);
         state.shipped(pendingLastLsn, pending.seq(), pending.encoded().length, now);
         if (pending.body() instanceof ChainBody.SnapshotRef reference) {
             state.referenceCommitted(pending.seq(), reference.lsn(), now);

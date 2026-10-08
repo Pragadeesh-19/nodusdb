@@ -19,9 +19,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.util.Map;
 
-final class ChainBuilder {
+public final class ChainBuilder {
 
-    static final int KEY_ID = 3;
+    public static final int KEY_ID = 3;
 
     private static final KeyPair PAIR = KeyFiles.generate();
 
@@ -32,16 +32,16 @@ final class ChainBuilder {
     private long epoch;
     private long lastLsn = -1;
 
-    ChainBuilder(ObjectStore store, long nonce) {
+    public ChainBuilder(ObjectStore store, long nonce) {
         this.store = store;
         this.nonce = nonce;
     }
 
-    static SigningKey signingKey() {
+    public static SigningKey signingKey() {
         return new SigningKey(KEY_ID, PAIR.getPrivate());
     }
 
-    static Keyring keyring() {
+    public static Keyring keyring() {
         return Keyring.single(KEY_ID, PAIR.getPublic());
     }
 
@@ -55,24 +55,24 @@ final class ChainBuilder {
         return RecordFixtures.copyOf(batch);
     }
 
-    long seq() {
+    public long seq() {
         return seq;
     }
 
-    long lastLsn() {
+    public long lastLsn() {
         return lastLsn;
     }
 
-    ChainHash digest() {
+    public ChainHash digest() {
         return digest;
     }
 
-    ChainBuilder epoch(long newEpoch) {
+    public ChainBuilder epoch(long newEpoch) {
         this.epoch = newEpoch;
         return this;
     }
 
-    ChainObject snapshotRef(long lsn, long floor) {
+    public ChainObject snapshotRef(long lsn, long floor) {
         String path = ChainLayout.snapshotKey(lsn);
         store.putIfAbsent(path, ("snapshot " + lsn).getBytes(StandardCharsets.UTF_8),
                 Map.of(ChainHead.FLOOR_METADATA, Long.toString(floor)));
@@ -95,7 +95,7 @@ final class ChainBuilder {
         return object;
     }
 
-    ChainObject records(int tuples) {
+    public ChainObject records(int tuples) {
         long first = lastLsn + 1;
         byte[] records = transaction(first, tuples);
         long last = first + tuples;
@@ -103,6 +103,14 @@ final class ChainBuilder {
                 signingKey());
         publish(object);
         lastLsn = last;
+        return object;
+    }
+
+    public ChainObject records(byte[] raw, long lsnFirst, long lsnLast) {
+        ChainObject object = ChainCodec.seal(next(ChainKind.RECORDS), new ChainBody.Records(lsnFirst, lsnLast, raw),
+                signingKey());
+        publish(object);
+        lastLsn = lsnLast;
         return object;
     }
 

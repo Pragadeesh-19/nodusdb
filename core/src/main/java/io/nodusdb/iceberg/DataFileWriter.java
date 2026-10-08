@@ -5,6 +5,7 @@ import io.nodusdb.lake.codec.ParquetCodec;
 import io.nodusdb.lake.parquet.ParquetWriter;
 import io.nodusdb.lake.parquet.WrittenFile;
 import io.nodusdb.objectstore.ObjectStore;
+import io.nodusdb.objectstore.ObjectStoreException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,11 +35,28 @@ public final class DataFileWriter {
         try {
             WrittenFile written = ParquetWriter.write(local, rows, codec);
             String key = table.newDataKey(rows.firstLsn(), rows.lastLsn());
-            store.putFile(key, local, Map.of());
+            upload(key, local);
             return new DataFile(table.uriOf(key), written.rowCount(), written.fileBytes(), partitionDay,
                     written.columns(), ChainHash.sha256(local));
         } finally {
             Files.deleteIfExists(local);
+        }
+    }
+
+    private void upload(String key, Path local) {
+        try {
+            store.putFile(key, local, Map.of());
+        } catch (ObjectStoreException failure) {
+            discard(key, failure);
+            throw failure;
+        }
+    }
+
+    private void discard(String key, ObjectStoreException failure) {
+        try {
+            store.delete(key);
+        } catch (ObjectStoreException cleanupFailure) {
+            failure.addSuppressed(cleanupFailure);
         }
     }
 }

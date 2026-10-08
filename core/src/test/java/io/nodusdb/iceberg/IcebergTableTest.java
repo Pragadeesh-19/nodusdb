@@ -293,6 +293,31 @@ class IcebergTableTest {
     }
 
     @Test
+    void withoutATableEveryDataFileIsAnOrphan() throws IOException {
+        IcebergFixture fixture = fixture();
+        DataFile stray = fixture.dataFile(1, 10, micros(0, 0), 1);
+
+        int removed = fixture.table.removeOrphanData(-1);
+
+        assertEquals(1, removed);
+        assertFalse(fixture.store.exists(fixture.table.keyOf(stray.path())));
+        assertEquals(0, fixture.table.removeOrphanData(-1));
+    }
+
+    @Test
+    void removingOrphanDataLeavesMetadataAlone() throws IOException {
+        IcebergFixture fixture = fixture();
+        Head head = fixture.commit(Optional.empty(), Map.of(), fixture.dataFile(1, 10, micros(0, 0), 1));
+        fixture.table.prepareAppend(Optional.of(head), List.of(fixture.dataFile(11, 10, micros(0, 20), 1)), Map.of());
+
+        fixture.table.removeOrphanData(10);
+
+        assertEquals(1, fixture.table.load().orElseThrow().version());
+        assertTrue(fixture.store.list("iceberg/metadata/", "", 100).entries().stream()
+                .filter(entry -> entry.key().endsWith(".avro")).count() >= 4);
+    }
+
+    @Test
     void aCommittedFileThatStartsAtTheCommittedLsnIsNotAnOrphan() throws IOException {
         IcebergFixture fixture = fixture();
         DataFile single = fixture.dataFile(10, 1, micros(0, 0), 1);

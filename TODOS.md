@@ -162,4 +162,28 @@
 **Priority:** P2
 **Depends on:** Build Steps 2 and 3
 
+### Merge Iceberg manifests
+
+**What:** Merge the small manifests the projector writes (one per commit) into larger ones, and drop the manifests of expired snapshots.
+
+**Why:** Each commit adds a manifest and every manifest list names all of them, so a table committed every minute grows its list by about 1,400 entries a day. Reads and commits slow down as the list grows.
+
+**Context:** Build Step 2 writes one manifest per commit and carries all earlier ones forward. Snapshot expiry bounds the metadata file but not the manifest list. A merge needs a manifest entry reader, which the Avro decoder now makes straightforward.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Build Step 2
+
+### Orphan data files by manifest reference
+
+**What:** Find and delete data files that no manifest references, by reading the manifests instead of comparing LSN ranges.
+
+**Why:** The LSN rule removes files from a crashed commit but not a stray copy left when an upload failed and its cleanup delete also failed.
+
+**Context:** The data-file writer deletes a failed upload itself, so a leak needs two failures in a row. A reference-based sweep needs the same manifest entry reader as the merge above.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Merge Iceberg manifests
+
 ## Completed
