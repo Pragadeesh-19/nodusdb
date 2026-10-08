@@ -83,7 +83,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install the Python packages that judge the Parquet, Avro and Iceberg output
+        run: python -m pip install "pyiceberg[pyarrow]" fastavro pyarrow tzdata
+
       - name: Java tests
+        env:
+          NODUS_REQUIRE_PYTHON_VERIFIERS: "1"
         run: mvn -B -ntp test
 
       - name: Build native shared library
@@ -113,10 +118,14 @@ jobs:
       - name: Python tests
         env:
           NODUSDB_REQUIRE_PYARROW: "1"
+          NODUS_REQUIRE_PYTHON_VERIFIERS: "1"
         run: python -m pytest python/tests -v -ra
 
       - name: Native performance gate
         run: python python/benchmarks/native_ratio.py
+
+      - name: Shipping overhead gate
+        run: python python/benchmarks/shipping_ratio.py
 
       - name: Upload native library
         uses: actions/upload-artifact@v4

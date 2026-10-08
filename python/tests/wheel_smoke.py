@@ -1,3 +1,4 @@
+import pathlib
 import tempfile
 import uuid
 
@@ -20,6 +21,18 @@ def main():
             durable.add_edge("user:alice", "role:admin")
         with nodusdb.Graph(path=directory) as reopened:
             assert reopened.has_edge("user:alice", "role:admin")
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = pathlib.Path(directory)
+        nodusdb.generate_signing_key(root / "signing.pem", root / "signing.pub")
+        shipping = nodusdb.Shipping.directory(
+            root / "bucket", key_file=root / "signing.pem", key_id=1, public_key_file=root / "signing.pub")
+        with nodusdb.Graph(path=root / "graph", sync_mode="sync", shipping=shipping) as shipped:
+            shipped.apply_schema("schema 1\ntype user\ntype document {\n  relation viewer: user\n}\n")
+            token = shipped.write(
+                nodusdb.Transaction().add("document:a", "viewer", "user:alice"), durability="lake")
+            assert shipped.stats()["shipping"]["shipped_lsn"] >= token.lsn
+        assert any((root / "bucket" / "_nodus" / "chain").glob("*.obj"))
 
     with nodusdb.LakeTable(tempfile.mkdtemp(), {"amount": "int64"}) as table:
         table.upsert(1, {"amount": 5})
