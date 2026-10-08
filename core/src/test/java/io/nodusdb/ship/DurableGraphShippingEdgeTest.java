@@ -233,6 +233,26 @@ class DurableGraphShippingEdgeTest {
     }
 
     @Test
+    void stagedSnapshotsLeftByACrashedRunAreRemovedAtOpen() throws IOException {
+        ShippingFixture fixture = ShippingFixture.in(root);
+        Path graph = root.resolve("graph");
+        Path staging = Files.createDirectories(graph.resolve("ship-staging"));
+        Files.writeString(staging.resolve("00000000000000000042-1.nsnap"), "left behind");
+        GraphKernel kernel = open(graph, fixture);
+        try {
+            Token token = schemaStore(kernel).write(grant("document:a"), Durability.LAKE);
+            kernel.checkpoint();
+            await(() -> referencedLsns(fixture.store()).contains(token.lsn()), "the checkpoint reference");
+
+            try (Stream<Path> left = Files.list(staging)) {
+                assertTrue(left.noneMatch(file -> file.getFileName().toString().startsWith("00000000000000000042")));
+            }
+        } finally {
+            kernel.close();
+        }
+    }
+
+    @Test
     void aWrongSigningKeyForAnExistingChainRefusesTheOpen() throws IOException {
         ShippingFixture fixture = ShippingFixture.in(root);
         Path graph = root.resolve("graph");
