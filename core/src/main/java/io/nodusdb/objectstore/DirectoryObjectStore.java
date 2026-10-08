@@ -153,7 +153,7 @@ public final class DirectoryObjectStore implements ObjectStore {
     @Override
     public void putFile(String key, Path file, Map<String, String> metadata) {
         validate(key, metadata);
-        Path staged = temporary.resolve(UUID.randomUUID().toString());
+        Path staged = stagingPath();
         try {
             Files.copy(file, staged, StandardCopyOption.REPLACE_EXISTING);
             seal(staged);
@@ -309,8 +309,17 @@ public final class DirectoryObjectStore implements ObjectStore {
         }
     }
 
+    private Path stagingPath() {
+        try {
+            Files.createDirectories(temporary);
+        } catch (IOException e) {
+            throw new TransientStoreException("directory store write failed: " + e.getMessage(), 0, e);
+        }
+        return temporary.resolve(UUID.randomUUID().toString());
+    }
+
     private Path stage(byte[] content) throws IOException {
-        Path staged = temporary.resolve(UUID.randomUUID().toString());
+        Path staged = stagingPath();
         try (FileChannel channel = FileChannel.open(staged, StandardOpenOption.CREATE_NEW,
                 StandardOpenOption.WRITE)) {
             ByteBuffer buffer = ByteBuffer.wrap(content);
@@ -370,7 +379,7 @@ public final class DirectoryObjectStore implements ObjectStore {
         }
         Path sidecar = sidecars.resolve(key);
         Files.createDirectories(sidecar.getParent());
-        Path staged = temporary.resolve(UUID.randomUUID().toString());
+        Path staged = stagingPath();
         try {
             Files.writeString(staged, text, StandardCharsets.US_ASCII);
             moveOver(staged, sidecar);

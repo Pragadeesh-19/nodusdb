@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,6 +46,45 @@ class DirectoryObjectStoreTest extends ObjectStoreContractTest {
         try (Stream<Path> staged = Files.list(root().resolve(".tmp"))) {
             return staged.map(path -> path.getFileName().toString()).toList();
         }
+    }
+
+    @Test
+    void writesWorkAgainAfterTheRootWasRemovedAndComesBack() throws IOException {
+        store.put("kept/before", bytes("1"));
+        try (Stream<Path> walk = Files.walk(root())) {
+            for (Path entry : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
+                Files.delete(entry);
+            }
+        }
+        Path file = scratch.resolve("upload.bin");
+        Files.write(file, bytes("3"));
+
+        assertEquals(PutResult.CREATED, store.putIfAbsent("kept/after", bytes("2"), Map.of("note", "x")));
+        store.putFile("kept/file", file, Map.of("note", "y"));
+        store.put("kept/plain", bytes("4"));
+
+        assertArrayEquals(bytes("2"), store.get("kept/after").orElseThrow());
+        assertArrayEquals(bytes("3"), store.get("kept/file").orElseThrow());
+        assertEquals("y", store.head("kept/file").orElseThrow().metadata().get("note"));
+        assertEquals(Optional.empty(), store.get("kept/before"));
+        assertEquals(List.of(), stagedFiles());
+    }
+
+    @Test
+    void aRootThatIsAFileFailsWritesAsTransientAndRecoversWhenItIsReplacedByADirectory() throws IOException {
+        Path blocker = root();
+        try (Stream<Path> walk = Files.walk(blocker)) {
+            for (Path entry : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
+                Files.delete(entry);
+            }
+        }
+        Files.writeString(blocker, "not a directory");
+
+        assertThrows(TransientStoreException.class, () -> store.put("a", bytes("1")));
+        Files.delete(blocker);
+
+        store.put("a", bytes("1"));
+        assertArrayEquals(bytes("1"), store.get("a").orElseThrow());
     }
 
     @Test
