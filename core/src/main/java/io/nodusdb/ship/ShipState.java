@@ -168,6 +168,12 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
         }
     }
 
+    public boolean durabilityWanted() {
+        synchronized (monitor) {
+            return waiters > 0 || stopRequested;
+        }
+    }
+
     public void awaitWork(long maxNanos) {
         if (maxNanos <= 0) {
             return;

@@ -79,7 +79,7 @@ final class ShippingRuntime implements AutoCloseable {
         ShippingConfig config = reconciled.config();
         ShipSettings settings = config.ship();
         OpenReconciler.Start start = reconciled.start();
-        LogFeed feed = new LogFeed(log, new LogTailReader(files, start.shippedLsn()));
+        LogFeed feed = new LogFeed(log, new LogTailReader(files, start.shippedLsn()), state::durabilityWanted);
         EpochClaims claims = new EpochClaims(reconciled.store(), reconciled.identity().nonce(),
                 reconciled.identity().key().keyId(), DurableGraph::wallClockMicros);
         ShipperCore core = new ShipperCore(reconciled.store(), claims, reconciled.identity(), start, feed, state,
