@@ -10,6 +10,7 @@ import io.nodusdb.kernel.symbols.SymbolTable;
 import io.nodusdb.kernel.traversal.KHopTraversal;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.log.LogStore;
+import io.nodusdb.log.ShipWatermark;
 import io.nodusdb.log.VolatileLog;
 import io.nodusdb.log.record.RecordBatch;
 import io.nodusdb.log.record.RecordReader;
@@ -33,6 +34,7 @@ public final class GraphKernel implements AutoCloseable {
     private final ThreadLocal<KHopTraversal> traversals = ThreadLocal.withInitial(KHopTraversal::new);
     private LogStore log = new VolatileLog();
     private DurableStorage storage;
+    private volatile ShipWatermark shipWatermark = ShipWatermark.NONE;
     private volatile long appliedLsn;
     private boolean closed;
     private boolean faulted;
@@ -79,6 +81,23 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             writer.unlock();
         }
+    }
+
+    public void attachShipping(ShipWatermark watermark) {
+        Objects.requireNonNull(watermark, "watermark");
+        writer.lock();
+        try {
+            if (shipWatermark.configured()) {
+                throw new IllegalStateException("shipping is already attached");
+            }
+            this.shipWatermark = watermark;
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public ShipWatermark shipWatermark() {
+        return shipWatermark;
     }
 
     public boolean isDurable() {

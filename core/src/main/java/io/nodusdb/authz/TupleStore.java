@@ -13,17 +13,23 @@ import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.symbols.SymbolTable;
+import io.nodusdb.log.ShipWatermark;
 import io.nodusdb.log.record.RecordBatch;
 import io.nodusdb.log.record.RecordFormat;
 import io.nodusdb.log.record.RecordType;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
 public final class TupleStore {
 
     public static final int DEFAULT_DEPTH_LIMIT = 32;
+    public static final Duration DEFAULT_SHIP_WAIT = Duration.ofSeconds(30);
+
+    private static final long MAX_WAIT_NANOS = TimeUnit.DAYS.toNanos(3_650);
 
     private final GraphKernel kernel;
     private final NodeTypes types;
@@ -113,11 +119,49 @@ public final class TupleStore {
     }
 
     public Token write(TupleTransaction transaction, Durability durability) {
+        return write(transaction, durability, DEFAULT_SHIP_WAIT);
+    }
+
+    public Token write(TupleTransaction transaction, Durability durability, Duration shipTimeout) {
         Objects.requireNonNull(transaction, "transaction");
-        if (durability == Durability.LAKE) {
-            throw new UnsupportedFeatureException("lake durability needs the segment shipper, which this version "
-                    + "does not have");
+        Objects.requireNonNull(shipTimeout, "shipTimeout");
+        if (durability != Durability.LAKE) {
+            return writeLocal(transaction);
         }
+        requireShipping();
+        Token token = writeLocal(transaction);
+        awaitShipped(token, shipTimeout);
+        return token;
+    }
+
+    public void awaitShipped(Token token, Duration timeout) {
+        Objects.requireNonNull(token, "token");
+        Objects.requireNonNull(timeout, "timeout");
+        if (timeout.isZero() || timeout.isNegative()) {
+            throw new IllegalArgumentException("the shipping wait must be positive: " + timeout);
+        }
+        ShipWatermark watermark = requireShipping();
+        requireFresh(token);
+        watermark.awaitShipped(token.epoch(), token.lsn(), waitNanos(timeout));
+    }
+
+    private ShipWatermark requireShipping() {
+        ShipWatermark watermark = kernel.shipWatermark();
+        if (!watermark.configured()) {
+            throw new UnsupportedFeatureException("shipping is not configured for this graph");
+        }
+        return watermark;
+    }
+
+    private static long waitNanos(Duration timeout) {
+        try {
+            return Math.min(timeout.toNanos(), MAX_WAIT_NANOS);
+        } catch (ArithmeticException tooLong) {
+            return MAX_WAIT_NANOS;
+        }
+    }
+
+    private Token writeLocal(TupleTransaction transaction) {
         writer.lock();
         try {
             claimStringKeys();

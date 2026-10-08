@@ -186,7 +186,7 @@ class TupleStoreTest {
     }
 
     @Test
-    void lakeDurabilityIsNotAvailableYet() {
+    void lakeDurabilityNeedsShippingToBeConfigured() {
         loadSchema();
         TupleTransaction transaction = new TupleTransaction().add("document:x", "viewer", "user:alice");
 
