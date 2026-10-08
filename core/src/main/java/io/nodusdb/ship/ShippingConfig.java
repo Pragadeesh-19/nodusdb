@@ -10,6 +10,7 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 
 public record ShippingConfig(Store store, CredentialSource credentials, Signing signing, ShipSettings ship,
                              Duration requestTimeout, Iceberg iceberg) {
@@ -167,18 +168,30 @@ public record ShippingConfig(Store store, CredentialSource credentials, Signing 
     private static ShipSettings ship(JsonObject block) {
         ShipSettings settings = ShipSettings.defaults();
         if (block.has("interval_ms")) {
-            settings = settings.withInterval(Duration.ofMillis(bounded(block, "interval_ms", MAX_MILLIS)));
+            Duration interval = Duration.ofMillis(bounded(block, "interval_ms", MAX_MILLIS));
+            settings = named("interval_ms", settings, current -> current.withInterval(interval));
         }
         if (block.has("max_object_bytes")) {
-            settings = settings.withMaxObjectBytes(Math.toIntExact(bounded(block, "max_object_bytes", Integer.MAX_VALUE)));
+            int bytes = Math.toIntExact(bounded(block, "max_object_bytes", Integer.MAX_VALUE));
+            settings = named("max_object_bytes", settings, current -> current.withMaxObjectBytes(bytes));
         }
         if (block.has("backlog_cap_bytes")) {
-            settings = settings.withBacklogCapBytes(bounded(block, "backlog_cap_bytes", MAX_BYTES));
+            long bytes = bounded(block, "backlog_cap_bytes", MAX_BYTES);
+            settings = named("backlog_cap_bytes", settings, current -> current.withBacklogCapBytes(bytes));
         }
         if (block.has("retention_days")) {
-            settings = settings.withRetention(Duration.ofDays(bounded(block, "retention_days", MAX_DAYS)));
+            Duration retention = Duration.ofDays(bounded(block, "retention_days", MAX_DAYS));
+            settings = named("retention_days", settings, current -> current.withRetention(retention));
         }
         return settings;
+    }
+
+    private static ShipSettings named(String key, ShipSettings current, UnaryOperator<ShipSettings> change) {
+        try {
+            return change.apply(current);
+        } catch (IllegalArgumentException refused) {
+            throw new IllegalArgumentException("field '" + key + "': " + refused.getMessage());
+        }
     }
 
     private static Duration requestTimeout(JsonObject block) {
