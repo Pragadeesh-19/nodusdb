@@ -1,6 +1,7 @@
 package io.nodusdb.ship;
 
 import io.nodusdb.error.LogBacklogException;
+import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.log.LogStore;
 import io.nodusdb.log.record.RecordBatch;
 
@@ -11,14 +12,27 @@ public final class ShippingLogStore implements LogStore {
         long shippedLsn();
 
         String refusal();
+
+        default String fencedReason() {
+            return null;
+        }
     }
+
+    private static final Runnable NOTHING = () -> {
+    };
 
     private final LogStore delegate;
     private final Gate gate;
+    private final Runnable beforeClose;
 
     public ShippingLogStore(LogStore delegate, Gate gate) {
+        this(delegate, gate, NOTHING);
+    }
+
+    public ShippingLogStore(LogStore delegate, Gate gate, Runnable beforeClose) {
         this.delegate = delegate;
         this.gate = gate;
+        this.beforeClose = beforeClose;
     }
 
     @Override
@@ -43,6 +57,10 @@ public final class ShippingLogStore implements LogStore {
 
     @Override
     public long append(RecordBatch batch) {
+        String fenced = gate.fencedReason();
+        if (fenced != null) {
+            throw new WriterFencedException(fenced);
+        }
         String refusal = gate.refusal();
         if (refusal != null) {
             throw new LogBacklogException(refusal);
@@ -72,6 +90,10 @@ public final class ShippingLogStore implements LogStore {
 
     @Override
     public void close() {
-        delegate.close();
+        try {
+            beforeClose.run();
+        } finally {
+            delegate.close();
+        }
     }
 }

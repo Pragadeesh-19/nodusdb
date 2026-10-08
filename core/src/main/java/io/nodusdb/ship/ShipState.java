@@ -114,6 +114,13 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     }
 
     @Override
+    public String fencedReason() {
+        synchronized (monitor) {
+            return phase == Phase.FENCED ? lastError : null;
+        }
+    }
+
+    @Override
     public String refusal() {
         synchronized (monitor) {
             return refusing ? "the unshipped log holds " + backlogBytes + " bytes, which reaches the cap of "

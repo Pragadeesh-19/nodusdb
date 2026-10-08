@@ -23,9 +23,7 @@ public record S3Config(URI endpoint, String region, String bucket, String prefix
     public S3Config {
         Objects.requireNonNull(endpoint, "endpoint");
         requireEndpoint(endpoint);
-        if (region == null || !REGION.matcher(region).matches()) {
-            throw new IllegalArgumentException("region must match [a-z0-9-]");
-        }
+        requireRegion(region);
         if (bucket == null || !BUCKET.matcher(bucket).matches()) {
             throw new IllegalArgumentException("bucket must be 3 to 63 characters from [a-z0-9.-]");
         }
@@ -39,6 +37,13 @@ public record S3Config(URI endpoint, String region, String bucket, String prefix
         if (!pathStyle && bucket.indexOf('.') >= 0 && "https".equals(endpoint.getScheme())) {
             throw new IllegalArgumentException("a bucket name with dots needs path-style addressing over https");
         }
+    }
+
+    public static String requireRegion(String region) {
+        if (region == null || !REGION.matcher(region).matches()) {
+            throw new IllegalArgumentException("region must match [a-z0-9-]");
+        }
+        return region;
     }
 
     public static S3Config of(URI endpoint, String region, String bucket) {

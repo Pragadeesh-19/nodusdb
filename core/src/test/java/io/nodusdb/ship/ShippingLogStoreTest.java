@@ -1,6 +1,7 @@
 package io.nodusdb.ship;
 
 import io.nodusdb.error.LogBacklogException;
+import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.log.LogStore;
 import io.nodusdb.log.record.RecordBatch;
 import org.junit.jupiter.api.Test;
@@ -151,6 +152,47 @@ class ShippingLogStoreTest {
 
         assertEquals(List.of("epoch", "lastLsn", "durableLsn", "lastCommitMicros", "awaitDurable 77", "force",
                 "rollSegment", "close"), log.calls);
+    }
+
+    @Test
+    void aFencedWriterRefusesEveryWriteBeforeLookingAtTheBacklog() {
+        RecordingLog log = new RecordingLog();
+        ShipState state = new ShipState(4, 40, 3, 1_000);
+        ShippingLogStore store = new ShippingLogStore(log, state);
+        state.backlog(1_000);
+
+        state.fenced("epoch 4 was superseded");
+
+        WriterFencedException refused = assertThrows(WriterFencedException.class,
+                () -> store.append(new RecordBatch()));
+        assertEquals("epoch 4 was superseded", refused.getMessage());
+        assertEquals(List.of(), log.calls);
+    }
+
+    @Test
+    void aStateThatIsNotFencedHasNoFencedReason() {
+        ShipState state = new ShipState(4, 40, 3, 1_000);
+
+        assertEquals(null, state.fencedReason());
+        state.failed("the store is down");
+        assertEquals(null, state.fencedReason());
+        state.fenced("lost");
+        assertEquals("lost", state.fencedReason());
+    }
+
+    @Test
+    void theHookRunsBeforeTheLogIsClosedAndTheLogClosesEvenIfItFails() {
+        RecordingLog log = new RecordingLog();
+        List<String> order = new ArrayList<>();
+        ShippingLogStore store = new ShippingLogStore(log, new FixedGate(), () -> {
+            order.add("hook sees " + log.calls);
+            throw new IllegalStateException("hook failed");
+        });
+
+        assertThrows(IllegalStateException.class, store::close);
+
+        assertEquals(List.of("hook sees []"), order);
+        assertEquals(List.of("close"), log.calls);
     }
 
     @Test
