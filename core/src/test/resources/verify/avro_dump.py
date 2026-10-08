@@ -1,3 +1,4 @@
+import datetime
 import json
 import sys
 
@@ -8,6 +9,8 @@ except ImportError:
 
 
 def plain(value):
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
     if isinstance(value, (bytes, bytearray)):
         return {"hex": bytes(value).hex()}
     if isinstance(value, dict):

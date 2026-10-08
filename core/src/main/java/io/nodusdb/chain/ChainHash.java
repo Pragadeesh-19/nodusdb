@@ -1,6 +1,10 @@
 package io.nodusdb.chain;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -9,7 +13,10 @@ import java.util.HexFormat;
 public final class ChainHash {
 
     public static final int BYTES = 32;
+
     public static final ChainHash ZERO = new ChainHash(new byte[BYTES]);
+
+    private static final int FILE_BUFFER_BYTES = 1 << 20;
 
     private final byte[] bytes;
 
@@ -30,6 +37,18 @@ public final class ChainHash {
 
     public static ChainHash sha256(byte[] data, int offset, int length) {
         return accumulator().update(data, offset, length).finish();
+    }
+
+    public static ChainHash sha256(Path file) throws IOException {
+        Accumulator hash = accumulator();
+        byte[] buffer = new byte[FILE_BUFFER_BYTES];
+        try (InputStream in = Files.newInputStream(file)) {
+            int read;
+            while ((read = in.read(buffer)) > 0) {
+                hash.update(buffer, 0, read);
+            }
+        }
+        return hash.finish();
     }
 
     public static Accumulator accumulator() {

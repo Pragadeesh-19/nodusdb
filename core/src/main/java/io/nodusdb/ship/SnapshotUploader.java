@@ -9,7 +9,6 @@ import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.objectstore.TransientStoreException;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -87,18 +86,10 @@ public final class SnapshotUploader {
     }
 
     private static Local measure(Path file) {
-        ChainHash.Accumulator hash = ChainHash.accumulator();
-        byte[] buffer = new byte[1 << 20];
-        long size = 0;
-        try (InputStream in = Files.newInputStream(file)) {
-            int read;
-            while ((read = in.read(buffer)) > 0) {
-                hash.update(buffer, 0, read);
-                size += read;
-            }
+        try {
+            return new Local(ChainHash.sha256(file), Files.size(file));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return new Local(hash.finish(), size);
     }
 }
