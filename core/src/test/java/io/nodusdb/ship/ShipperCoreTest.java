@@ -411,6 +411,28 @@ class ShipperCoreTest {
     }
 
     @Test
+    void theBacklogKeepsGrowingWhileOneObjectIsStuckBeingRetried() {
+        rig.close();
+        rig = new ShipperRig(new MemoryObjectStore(), ShipSettings.defaults().withBacklogCapBytes(1 << 20),
+                SyncMode.SYNC);
+        Session session = shippedUpToTheSnapshot();
+        rig.append(5);
+        rig.store.failNext(Operation.PUT_IF_ABSENT, 100, Fault.FAIL_BEFORE);
+        session.core().step();
+        long stuck = session.state().snapshot().backlogBytes();
+        assertEquals(null, session.state().refusal());
+
+        for (int i = 0; i < 40; i++) {
+            rig.append(1_000);
+        }
+        session.core().step();
+
+        assertTrue(session.state().snapshot().backlogBytes() > stuck + (1 << 19),
+                "the retry must count what was written meanwhile, was " + session.state().snapshot().backlogBytes());
+        assertTrue(session.state().refusal() != null, "the cap must refuse writes during the outage");
+    }
+
+    @Test
     void aBacklogPastTheCapRefusesWritesAndResumesOnceShippingCatchesUp() {
         rig.close();
         rig = new ShipperRig(new MemoryObjectStore(), ShipSettings.defaults().withBacklogCapBytes(1 << 20),

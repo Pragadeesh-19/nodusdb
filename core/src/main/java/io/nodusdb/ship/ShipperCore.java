@@ -60,6 +60,7 @@ public final class ShipperCore {
     private final ChainCursor cursor;
     private ChainObject pending;
     private long pendingLastLsn;
+    private int pendingRecordBytes;
     private int transientFailures;
     private int conflicts;
 
@@ -81,7 +82,11 @@ public final class ShipperCore {
             return Next.stop();
         }
         try {
-            return pending == null ? prepare() : commit();
+            if (pending == null) {
+                return prepare();
+            }
+            state.backlog(feed.unreadBytes() + pendingRecordBytes);
+            return commit();
         } catch (ObjectStoreException failure) {
             return storeFailed(failure);
         } catch (IOException | CorruptLogException failure) {
@@ -101,12 +106,14 @@ public final class ShipperCore {
         if (cursor.atStart()) {
             pending = sealReference(start.firstReference());
             pendingLastLsn = start.firstReference().lsn();
+            pendingRecordBytes = 0;
             return commit();
         }
         ChainBody.SnapshotRef reference = state.takeReference();
         if (reference != null) {
             pending = sealReference(reference);
             pendingLastLsn = cursor.lastLsn();
+            pendingRecordBytes = 0;
             return commit();
         }
         LogTailReader.Batch batch = feed.next(settings.maxObjectBytes());
@@ -124,6 +131,7 @@ public final class ShipperCore {
         pending = ChainCodec.seal(header(ChainKind.RECORDS),
                 new ChainBody.Records(batch.lsnFirst(), batch.lsnLast(), batch.records()), identity.key());
         pendingLastLsn = batch.lsnLast();
+        pendingRecordBytes = batch.records().length;
         state.backlog(feed.unreadBytes() + batch.records().length);
         return commit();
     }
