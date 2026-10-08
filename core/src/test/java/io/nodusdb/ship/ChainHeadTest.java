@@ -216,6 +216,26 @@ class ChainHeadTest {
     }
 
     @Test
+    void theNewestSnapshotLsnIsTheHighestKeyNotTheLastWritten() {
+        ChainHead head = new ChainHead(store, Keyring.empty());
+        assertEquals(ChainHead.NO_SNAPSHOT, head.newestSnapshotLsn());
+
+        store.put(ChainLayout.snapshotKey(900), new byte[]{1});
+        store.put(ChainLayout.snapshotKey(40), new byte[]{1});
+        store.put(ChainLayout.snapshotKey(7), new byte[]{1});
+        store.put("_nodus/snapshots/junk.txt", new byte[]{1});
+
+        assertEquals(900, head.newestSnapshotLsn());
+    }
+
+    @Test
+    void aSnapshotAtLsnZeroIsDistinguishedFromNoSnapshot() {
+        store.put(ChainLayout.snapshotKey(0), new byte[]{1});
+
+        assertEquals(0, new ChainHead(store, Keyring.empty()).newestSnapshotLsn());
+    }
+
+    @Test
     void aStoreFailureWhileFindingTheHeadIsPassedOn() {
         ChainBuilder chain = new ChainBuilder(store, 1).epoch(2);
         chain.snapshotRef(100, 1);

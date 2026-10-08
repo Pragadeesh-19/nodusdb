@@ -18,10 +18,14 @@ import java.util.Optional;
 public final class ChainHead {
 
     public static final String FLOOR_METADATA = "chain-seq-floor";
+    public static final long NO_SNAPSHOT = -1;
 
     private static final int PAGE_KEYS = 1000;
 
     public record Found(ChainCursor cursor, ChainObject object) {
+    }
+
+    private record NewestSnapshot(long lsn, String key) {
     }
 
     private final ObjectStore store;
@@ -47,28 +51,33 @@ public final class ChainHead {
                 object));
     }
 
+    public long newestSnapshotLsn() {
+        return newestSnapshot().map(NewestSnapshot::lsn).orElse(NO_SNAPSHOT);
+    }
+
     private long snapshotFloor() {
-        long newestLsn = -1;
-        String newestKey = null;
+        return newestSnapshot()
+                .flatMap(newest -> store.head(newest.key()))
+                .map(info -> parseFloor(info.metadata().get(FLOOR_METADATA)))
+                .orElse(0L);
+    }
+
+    private Optional<NewestSnapshot> newestSnapshot() {
+        NewestSnapshot newest = null;
         String after = "";
         while (true) {
             ListPage page = store.list(ChainLayout.SNAPSHOT_PREFIX, after, PAGE_KEYS);
             for (ObjectInfo entry : page.entries()) {
-                long lsn = ChainLayout.snapshotLsn(entry.key()).orElse(-1);
-                if (lsn > newestLsn) {
-                    newestLsn = lsn;
-                    newestKey = entry.key();
+                long lsn = ChainLayout.snapshotLsn(entry.key()).orElse(NO_SNAPSHOT);
+                if (lsn > (newest == null ? NO_SNAPSHOT : newest.lsn())) {
+                    newest = new NewestSnapshot(lsn, entry.key());
                 }
             }
             if (!page.truncated()) {
-                break;
+                return Optional.ofNullable(newest);
             }
             after = page.lastKey();
         }
-        if (newestKey == null) {
-            return 0;
-        }
-        return store.head(newestKey).map(info -> parseFloor(info.metadata().get(FLOOR_METADATA))).orElse(0L);
     }
 
     private static long parseFloor(String text) {

@@ -14,7 +14,11 @@ import java.util.function.LongSupplier;
 
 public final class OpenReconciler {
 
-    public record Local(long lastLsn, long latestEpoch) {
+    public record Local(long lastLsn, long latestEpoch, long oldestRetainedLsn) {
+
+        public Local(long lastLsn, long latestEpoch) {
+            this(lastLsn, latestEpoch, 0);
+        }
     }
 
     public record Start(long epoch, ChainCursor cursor, ChainBody.SnapshotRef firstReference) {
@@ -75,6 +79,11 @@ public final class OpenReconciler {
             throw new WriterFencedException("the shipped chain reaches LSN " + head.lastLsn()
                     + " but this directory's log ends at LSN " + local.lastLsn()
                     + "; it is older than the chain and cannot continue it");
+        }
+        if (local.lastLsn() > head.lastLsn() && local.oldestRetainedLsn() > head.lastLsn() + 1) {
+            throw new WriterFencedException("the shipped chain ends at LSN " + head.lastLsn()
+                    + " but this directory's log starts at LSN " + local.oldestRetainedLsn()
+                    + "; the records in between were never shipped and are gone, so it cannot continue the chain");
         }
         if (head.epoch() > local.latestEpoch()) {
             throw new WriterFencedException("the chain was last written in epoch " + head.epoch()

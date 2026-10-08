@@ -132,6 +132,53 @@ class OpenReconcilerTest {
     }
 
     @Test
+    void aLogThatLostUnshippedRecordsIsRefusedAndClaimsNothing() {
+        ChainBuilder chain = new ChainBuilder(store, 9).epoch(3);
+        chain.snapshotRef(SNAPSHOT_LSN, 1);
+        chain.records(4);
+        int before = store.size();
+
+        WriterFencedException refused = assertThrows(WriterFencedException.class,
+                () -> reconciler().reconcile(new Local(chain.lastLsn() + 25, 3, chain.lastLsn() + 3)));
+
+        assertTrue(refused.getMessage().contains("never shipped"), refused.getMessage());
+        assertEquals(before, store.size());
+    }
+
+    @Test
+    void aLogThatStillStartsRightAfterTheChainHeadContinuesIt() {
+        ChainBuilder chain = new ChainBuilder(store, 9).epoch(3);
+        chain.snapshotRef(SNAPSHOT_LSN, 1);
+        chain.records(4);
+
+        Start start = reconciler().reconcile(new Local(chain.lastLsn() + 25, 3, chain.lastLsn() + 1));
+
+        assertEquals(4, start.epoch());
+        assertEquals(chain.lastLsn(), start.shippedLsn());
+    }
+
+    @Test
+    void aLogOneRecordShortOfTheChainHeadIsRefused() {
+        ChainBuilder chain = new ChainBuilder(store, 9).epoch(3);
+        chain.snapshotRef(SNAPSHOT_LSN, 1);
+        chain.records(4);
+
+        assertThrows(WriterFencedException.class,
+                () -> reconciler().reconcile(new Local(chain.lastLsn() + 25, 3, chain.lastLsn() + 2)));
+    }
+
+    @Test
+    void aFullyShippedDirectoryMayHaveTrimmedItsWholeLog() {
+        ChainBuilder chain = new ChainBuilder(store, 9).epoch(3);
+        chain.snapshotRef(SNAPSHOT_LSN, 1);
+        chain.records(4);
+
+        Start start = reconciler().reconcile(new Local(chain.lastLsn(), 3, chain.lastLsn() + 1));
+
+        assertEquals(4, start.epoch());
+    }
+
+    @Test
     void aDirectoryThatNeverSawTheChainsEpochIsRefusedAndClaimsNothing() {
         ChainBuilder chain = new ChainBuilder(store, 9).epoch(8);
         chain.snapshotRef(SNAPSHOT_LSN, 1);
