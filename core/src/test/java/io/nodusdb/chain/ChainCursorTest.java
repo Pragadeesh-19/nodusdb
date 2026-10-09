@@ -27,6 +27,47 @@ class ChainCursorTest {
     }
 
     @Test
+    void aCursorCanStartAfterARecordsObjectInTheMiddleOfAChain() {
+        ChainObject anchor = opaqueRecordsObject(40, ChainHash.sha256(new byte[]{9}), 2, 500, 520);
+
+        ChainCursor cursor = ChainCursor.startingAfter(anchor);
+
+        assertEquals(40, cursor.seq());
+        assertEquals(anchor.digest(), cursor.digest());
+        assertEquals(2, cursor.epoch());
+        assertEquals(520, cursor.lastLsn());
+        assertFalse(cursor.atStart());
+        ChainObject next = opaqueRecordsObject(41, anchor.digest(), 2, 521, 530);
+        cursor.accept(next);
+        assertEquals(530, cursor.lastLsn());
+    }
+
+    @Test
+    void aCursorStartedAfterAReferenceContinuesFromTheSnapshotLsn() {
+        ChainObject anchor = snapshotRef(7, ChainHash.sha256(new byte[]{9}), 1, 100);
+
+        ChainCursor cursor = ChainCursor.startingAfter(anchor);
+
+        assertEquals(100, cursor.lastLsn());
+        cursor.accept(opaqueRecordsObject(8, anchor.digest(), 1, 101, 110));
+        assertEquals(110, cursor.lastLsn());
+    }
+
+    @Test
+    void aCursorStartedInTheMiddleStillEnforcesLinksSequenceEpochAndLsns() {
+        ChainObject anchor = opaqueRecordsObject(40, ChainHash.sha256(new byte[]{9}), 2, 500, 520);
+
+        assertThrows(ChainTrustException.class, () -> ChainCursor.startingAfter(anchor)
+                .accept(opaqueRecordsObject(42, anchor.digest(), 2, 521, 530)));
+        assertThrows(ChainTrustException.class, () -> ChainCursor.startingAfter(anchor)
+                .accept(opaqueRecordsObject(41, ChainHash.ZERO, 2, 521, 530)));
+        assertThrows(ChainTrustException.class, () -> ChainCursor.startingAfter(anchor)
+                .accept(opaqueRecordsObject(41, anchor.digest(), 1, 521, 530)));
+        assertThrows(ChainTrustException.class, () -> ChainCursor.startingAfter(anchor)
+                .accept(opaqueRecordsObject(41, anchor.digest(), 2, 522, 530)));
+    }
+
+    @Test
     void aChainCannotStartWithRecords() {
         ChainCursor cursor = ChainCursor.beforeFirst();
 

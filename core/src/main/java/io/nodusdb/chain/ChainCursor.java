@@ -29,6 +29,14 @@ public final class ChainCursor {
         return new ChainCursor(seq, Objects.requireNonNull(digest, "digest"), epoch, lastLsn);
     }
 
+    public static ChainCursor startingAfter(ChainObject anchor) {
+        long lastLsn = switch (anchor.body()) {
+            case ChainBody.Records records -> records.lsnLast();
+            case ChainBody.SnapshotRef reference -> reference.lsn();
+        };
+        return after(anchor.seq(), anchor.digest(), anchor.epoch(), lastLsn);
+    }
+
     public long seq() {
         return seq;
     }
