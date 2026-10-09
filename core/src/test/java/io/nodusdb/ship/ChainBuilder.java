@@ -49,7 +49,7 @@ public final class ChainBuilder {
         return Keyring.single(KEY_ID, PAIR.getPublic());
     }
 
-    static byte[] transaction(long firstLsn, int tuples) {
+    public static byte[] transaction(long firstLsn, int tuples) {
         RecordBatch batch = new RecordBatch();
         for (int i = 0; i < tuples; i++) {
             batch.tuple(RecordType.TUPLE_ADD, i, 1, 0, i + 1);
