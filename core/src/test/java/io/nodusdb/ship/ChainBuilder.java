@@ -118,7 +118,7 @@ public final class ChainBuilder {
         return object;
     }
 
-    ChainBuilder many(int objects, int tuples) {
+    public ChainBuilder many(int objects, int tuples) {
         for (int i = 0; i < objects; i++) {
             records(tuples);
         }
