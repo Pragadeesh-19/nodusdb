@@ -25,6 +25,7 @@ public final class AnchorFinder {
 
     private static final int PAGE_KEYS = 1_000;
     private static final long NO_HINT = 1;
+    private static final long FIRST_SEQ = 1;
 
     private record Candidate(String key, long lsn) {
     }
@@ -116,7 +117,7 @@ public final class AnchorFinder {
                 return OptionalLong.of(seq);
             }
         }
-        return OptionalLong.of(reference.seq());
+        return OptionalLong.of(FIRST_SEQ);
     }
 
     private final class Candidates implements Iterator<Anchor> {

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-final class ChainAudit {
+public final class ChainAudit {
 
     record Result(int objects, long lastLsn, long snapshotLsn, List<Long> epochs) {
     }
@@ -64,7 +64,7 @@ final class ChainAudit {
         return new Result(keys.size(), cursor.lastLsn(), snapshotLsn, List.copyOf(epochs));
     }
 
-    static List<String> chainKeys(ObjectStore store) {
+    public static List<String> chainKeys(ObjectStore store) {
         List<String> keys = new ArrayList<>();
         String after = "";
         ListPage page;

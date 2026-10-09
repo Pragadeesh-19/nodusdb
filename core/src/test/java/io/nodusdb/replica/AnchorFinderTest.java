@@ -101,6 +101,15 @@ class AnchorFinderTest {
     }
 
     @Test
+    void aReferenceCommittedBeforeTheRecordsItCoversStartsAtTheFirstObjectOfTheChain() {
+        chain.snapshotRef(0, 1);
+        chain.snapshotRef(2, 2);
+        chain.many(1, 1);
+
+        assertEquals(List.of("L2 ref2 from1", "L0 ref1 from1"), described(all()));
+    }
+
+    @Test
     void consecutiveReferencesWithNoRecordsBetweenThemStartAtTheLaterReference() {
         chain.snapshotRef(10, 1);
         chain.snapshotRef(10, 2);
