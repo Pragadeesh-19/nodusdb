@@ -1,13 +1,9 @@
 package io.nodusdb.ship;
 
 import io.nodusdb.chain.ChainBody;
-import io.nodusdb.chain.ChainCodec;
 import io.nodusdb.chain.ChainCursor;
 import io.nodusdb.chain.ChainLayout;
 import io.nodusdb.chain.ChainObject;
-import io.nodusdb.chain.ChainRecords;
-import io.nodusdb.chain.ChainTrustException;
-import io.nodusdb.chain.ChainVerifier;
 import io.nodusdb.chain.Keyring;
 import io.nodusdb.objectstore.ListPage;
 import io.nodusdb.objectstore.ObjectInfo;
@@ -29,11 +25,15 @@ public final class ChainHead {
     }
 
     private final ObjectStore store;
-    private final Keyring keyring;
+    private final ChainFetch chainFetch;
 
     public ChainHead(ObjectStore store, Keyring keyring) {
+        this(store, keyring, ChainFetch.Trust.WHEN_KEY_KNOWN);
+    }
+
+    public ChainHead(ObjectStore store, Keyring keyring, ChainFetch.Trust trust) {
         this.store = store;
-        this.keyring = keyring;
+        this.chainFetch = new ChainFetch(store, keyring, trust);
     }
 
     public Optional<Found> find() {
@@ -45,7 +45,7 @@ public final class ChainHead {
         if (head == 0) {
             return Optional.empty();
         }
-        ChainObject object = fetch(head);
+        ChainObject object = chainFetch.require(head);
         long lastLsn = lastLsn(object);
         return Optional.of(new Found(ChainCursor.after(object.seq(), object.digest(), object.epoch(), lastLsn),
                 object));
@@ -106,22 +106,6 @@ public final class ChainHead {
         }
     }
 
-    private ChainObject fetch(long seq) {
-        byte[] bytes = store.get(ChainLayout.chainKey(seq)).orElseThrow(() -> new ChainTrustException(
-                "object " + seq + " was listed but cannot be read"));
-        ChainObject object = ChainCodec.decode(bytes);
-        if (object.seq() != seq) {
-            throw new ChainTrustException("object " + seq + " carries sequence number " + object.seq());
-        }
-        if (keyring.find(object.header().keyId()).isPresent()) {
-            new ChainVerifier(keyring).verifySignature(object);
-        }
-        if (object.body() instanceof ChainBody.Records records) {
-            ChainRecords.verify(records);
-        }
-        return object;
-    }
-
     private long lastLsn(ChainObject head) {
         ChainObject current = head;
         while (true) {
@@ -133,7 +117,7 @@ public final class ChainHead {
                     if (current.seq() == 1) {
                         return ref.lsn();
                     }
-                    current = fetch(current.seq() - 1);
+                    current = chainFetch.require(current.seq() - 1);
                 }
             }
         }
