@@ -1,5 +1,6 @@
 package io.nodusdb.ship;
 
+import io.nodusdb.config.StoreFactory;
 import io.nodusdb.objectstore.ObjectStore;
 
 import java.security.SecureRandom;
@@ -25,7 +26,7 @@ public final class ShippingBootstrap {
     static Reconciled reconcile(ShippingConfig config, OpenReconciler.Local local, SnapshotSource source,
                                 LongSupplier clockMicros, LongSupplier nonce) {
         ShippingKeys.Loaded keys = ShippingKeys.load(config.signing());
-        ShippingStores.Opened opened = ShippingStores.open(config);
+        StoreFactory.Opened opened = StoreFactory.open(config.storage());
         ObjectStore store = opened.store();
         try {
             WriterIdentity identity = new WriterIdentity(keys.signing(), nonce.getAsLong());

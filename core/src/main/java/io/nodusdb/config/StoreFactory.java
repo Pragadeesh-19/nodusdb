@@ -1,5 +1,7 @@
-package io.nodusdb.ship;
+package io.nodusdb.config;
 
+import io.nodusdb.config.StoreConfig.CredentialSource;
+import io.nodusdb.config.StoreConfig.Store;
 import io.nodusdb.objectstore.DirectoryObjectStore;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.objectstore.s3.Credentials;
@@ -15,36 +17,36 @@ import java.time.Duration;
 import java.util.Map;
 import java.util.function.Supplier;
 
-public final class ShippingStores {
+public final class StoreFactory {
 
     public record Opened(ObjectStore store, String icebergLocation) {
     }
 
     private static final String ICEBERG_FOLDER = "iceberg";
 
-    private ShippingStores() {
+    private StoreFactory() {
     }
 
-    public static Opened open(ShippingConfig config) {
-        ShippingConfig.Store spec = config.store();
+    public static Opened open(StoreConfig config) {
+        Store spec = config.store();
         return switch (spec.type()) {
             case DIRECTORY -> directory(spec);
             case S3 -> s3(config);
         };
     }
 
-    private static Opened directory(ShippingConfig.Store spec) {
+    private static Opened directory(Store spec) {
         String root = spec.directory().toAbsolutePath().toString().replace('\\', '/');
         return new Opened(new DirectoryObjectStore(spec.directory()), trimTrailingSlash(root) + "/" + ICEBERG_FOLDER);
     }
 
-    private static Opened s3(ShippingConfig config) {
+    private static Opened s3(StoreConfig config) {
         S3Config s3 = s3Config(config.store(), config.requestTimeout());
         return new Opened(new S3ObjectStore(s3, provider(config.credentials(), System::getenv)),
                 "s3://" + s3.bucket() + "/" + s3.prefix() + ICEBERG_FOLDER);
     }
 
-    static S3Config s3Config(ShippingConfig.Store spec, Duration requestTimeout) {
+    static S3Config s3Config(Store spec, Duration requestTimeout) {
         String region = S3Config.requireRegion(spec.region());
         URI endpoint = spec.endpoint() != null ? spec.endpoint()
                 : URI.create("https://s3." + region + ".amazonaws.com");
@@ -58,8 +60,7 @@ public final class ShippingStores {
         return s3.withTimeouts(S3Config.DEFAULT_CONNECT_TIMEOUT, requestTimeout, S3Config.DEFAULT_TRANSFER_TIMEOUT);
     }
 
-    static CredentialsProvider provider(ShippingConfig.CredentialSource source,
-                                        Supplier<Map<String, String>> environment) {
+    static CredentialsProvider provider(CredentialSource source, Supplier<Map<String, String>> environment) {
         return switch (source.kind()) {
             case STATIC -> new StaticCredentialsProvider(new Credentials(source.accessKeyId(),
                     source.secretAccessKey(), source.sessionToken()));

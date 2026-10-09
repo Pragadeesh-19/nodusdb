@@ -1,7 +1,8 @@
 package io.nodusdb.ship;
 
-import io.nodusdb.ship.ShippingConfig.CredentialKind;
-import io.nodusdb.ship.ShippingConfig.StoreType;
+import io.nodusdb.config.ConfigFields;
+import io.nodusdb.config.StoreConfig.CredentialKind;
+import io.nodusdb.config.StoreConfig.StoreType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -36,14 +37,14 @@ class ShippingConfigTest {
     void aMinimalDirectoryConfigGetsTheDefaults() {
         ShippingConfig parsed = ShippingConfig.parse(config(DIRECTORY, SIGNING));
 
-        assertEquals(StoreType.DIRECTORY, parsed.store().type());
-        assertEquals(Path.of("/data/bucket"), parsed.store().directory());
-        assertNull(parsed.credentials());
+        assertEquals(StoreType.DIRECTORY, parsed.storage().store().type());
+        assertEquals(Path.of("/data/bucket"), parsed.storage().store().directory());
+        assertNull(parsed.storage().credentials());
         assertEquals(Path.of("/keys/writer.key"), parsed.signing().keyFile());
         assertEquals(4, parsed.signing().keyId());
         assertNull(parsed.signing().publicKeyFile());
         assertEquals(ShipSettings.defaults(), parsed.ship());
-        assertEquals(ShippingConfig.DEFAULT_REQUEST_TIMEOUT, parsed.requestTimeout());
+        assertEquals(ConfigFields.DEFAULT_REQUEST_TIMEOUT, parsed.storage().requestTimeout());
         assertFalse(parsed.iceberg().enabled());
         assertEquals(Duration.ofSeconds(60), parsed.iceberg().commitInterval());
         assertEquals(Duration.ofDays(7), parsed.iceberg().tableRetention());
@@ -60,7 +61,7 @@ class ShippingConfigTest {
         assertEquals(2_097_152, parsed.ship().maxObjectBytes());
         assertEquals(5_242_880, parsed.ship().backlogCapBytes());
         assertEquals(Duration.ofDays(3), parsed.ship().retention());
-        assertEquals(Duration.ofMillis(2500), parsed.requestTimeout());
+        assertEquals(Duration.ofMillis(2500), parsed.storage().requestTimeout());
         assertTrue(parsed.iceberg().enabled());
         assertEquals(Duration.ofSeconds(15), parsed.iceberg().commitInterval());
         assertEquals(Duration.ofDays(30), parsed.iceberg().tableRetention());
@@ -79,16 +80,16 @@ class ShippingConfigTest {
     void aMinimalS3ConfigTargetsAwsWithVirtualHostStyle() {
         ShippingConfig parsed = ShippingConfig.parse(config(S3_STATIC, SIGNING));
 
-        assertEquals(StoreType.S3, parsed.store().type());
-        assertEquals("graphs", parsed.store().bucket());
-        assertEquals("eu-west-1", parsed.store().region());
-        assertEquals("", parsed.store().prefix());
-        assertNull(parsed.store().endpoint());
-        assertNull(parsed.store().pathStyle());
-        assertNull(parsed.store().caBundle());
-        assertEquals(CredentialKind.STATIC, parsed.credentials().kind());
-        assertEquals("AKIAEXAMPLE", parsed.credentials().accessKeyId());
-        assertNull(parsed.credentials().sessionToken());
+        assertEquals(StoreType.S3, parsed.storage().store().type());
+        assertEquals("graphs", parsed.storage().store().bucket());
+        assertEquals("eu-west-1", parsed.storage().store().region());
+        assertEquals("", parsed.storage().store().prefix());
+        assertNull(parsed.storage().store().endpoint());
+        assertNull(parsed.storage().store().pathStyle());
+        assertNull(parsed.storage().store().caBundle());
+        assertEquals(CredentialKind.STATIC, parsed.storage().credentials().kind());
+        assertEquals("AKIAEXAMPLE", parsed.storage().credentials().accessKeyId());
+        assertNull(parsed.storage().credentials().sessionToken());
     }
 
     @Test
@@ -100,11 +101,11 @@ class ShippingConfigTest {
                         + "\"credentials\":{\"source\":\"static\",\"access_key_id\":\"a\",\"secret_access_key\":\"s\","
                         + "\"session_token\":\"t\"}", SIGNING));
 
-        assertEquals(URI.create("https://seaweed.internal:8333"), parsed.store().endpoint());
-        assertEquals("team/a/", parsed.store().prefix());
-        assertTrue(parsed.store().pathStyle());
-        assertEquals(Path.of("/ca.pem"), parsed.store().caBundle());
-        assertEquals("t", parsed.credentials().sessionToken());
+        assertEquals(URI.create("https://seaweed.internal:8333"), parsed.storage().store().endpoint());
+        assertEquals("team/a/", parsed.storage().store().prefix());
+        assertTrue(parsed.storage().store().pathStyle());
+        assertEquals(Path.of("/ca.pem"), parsed.storage().store().caBundle());
+        assertEquals("t", parsed.storage().credentials().sessionToken());
     }
 
     @Test
@@ -118,11 +119,11 @@ class ShippingConfigTest {
         ShippingConfig namedProfile = ShippingConfig.parse(config(store, SIGNING,
                 "\"credentials\":{\"source\":\"file\",\"path\":\"/c\",\"profile\":\"prod\"}"));
 
-        assertEquals(CredentialKind.ENVIRONMENT, environment.credentials().kind());
-        assertEquals(CredentialKind.FILE, defaultProfile.credentials().kind());
-        assertEquals("default", defaultProfile.credentials().profile());
-        assertEquals(Path.of("/home/x/.aws/credentials"), defaultProfile.credentials().file());
-        assertEquals("prod", namedProfile.credentials().profile());
+        assertEquals(CredentialKind.ENVIRONMENT, environment.storage().credentials().kind());
+        assertEquals(CredentialKind.FILE, defaultProfile.storage().credentials().kind());
+        assertEquals("default", defaultProfile.storage().credentials().profile());
+        assertEquals(Path.of("/home/x/.aws/credentials"), defaultProfile.storage().credentials().file());
+        assertEquals("prod", namedProfile.storage().credentials().profile());
     }
 
     @Test
@@ -227,8 +228,8 @@ class ShippingConfigTest {
     void theCredentialSourceNeverPrintsItsSecrets() {
         ShippingConfig parsed = ShippingConfig.parse(config(S3_STATIC, SIGNING));
 
-        assertFalse(parsed.credentials().toString().contains("s3cr3tValue"));
-        assertFalse(parsed.credentials().toString().contains("AKIAEXAMPLE"));
+        assertFalse(parsed.storage().credentials().toString().contains("s3cr3tValue"));
+        assertFalse(parsed.storage().credentials().toString().contains("AKIAEXAMPLE"));
         assertFalse(parsed.toString().contains("s3cr3tValue"));
     }
 }

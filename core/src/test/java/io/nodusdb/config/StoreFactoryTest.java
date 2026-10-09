@@ -1,5 +1,6 @@
-package io.nodusdb.ship;
+package io.nodusdb.config;
 
+import io.nodusdb.json.JsonParser;
 import io.nodusdb.objectstore.DirectoryObjectStore;
 import io.nodusdb.objectstore.s3.Credentials;
 import io.nodusdb.objectstore.s3.CredentialsProvider;
@@ -21,25 +22,28 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class ShippingStoresTest {
+class StoreFactoryTest {
 
-    private static final String SIGNING = "\"signing\":{\"key_file\":\"/k\",\"key_id\":1}";
     private static final String STATIC = "\"credentials\":{\"source\":\"static\",\"access_key_id\":\"a\","
             + "\"secret_access_key\":\"s\"}";
 
     @TempDir
     Path root;
 
-    private static ShippingConfig s3(String store, String credentials) {
-        return ShippingConfig.parse("{" + store + "," + credentials + "," + SIGNING + "}");
+    private static StoreConfig parsed(String document) {
+        return StoreConfigParser.parse(JsonParser.parseObject(document));
+    }
+
+    private static StoreConfig s3(String store, String credentials) {
+        return parsed("{" + store + "," + credentials + "}");
     }
 
     @Test
     void aDirectoryStoreIsOpenedAtItsRootWithTheTableBesideIt() {
-        ShippingConfig config = ShippingConfig.parse("{\"store\":{\"type\":\"directory\",\"directory\":\""
-                + root.toString().replace("\\", "\\\\") + "\"}," + SIGNING + "}");
+        StoreConfig config = parsed("{\"store\":{\"type\":\"directory\",\"directory\":\""
+                + root.toString().replace("\\", "\\\\") + "\"}}");
 
-        ShippingStores.Opened opened = ShippingStores.open(config);
+        StoreFactory.Opened opened = StoreFactory.open(config);
 
         assertInstanceOf(DirectoryObjectStore.class, opened.store());
         assertEquals(root.toAbsolutePath().toString().replace('\\', '/') + "/iceberg", opened.icebergLocation());
@@ -47,10 +51,10 @@ class ShippingStoresTest {
 
     @Test
     void anS3StoreKeepsItsBucketAndPrefixInTheTableLocation() {
-        ShippingConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"eu-west-1\","
+        StoreConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"eu-west-1\","
                 + "\"prefix\":\"team/a\"}", STATIC);
 
-        ShippingStores.Opened opened = ShippingStores.open(config);
+        StoreFactory.Opened opened = StoreFactory.open(config);
 
         assertInstanceOf(S3ObjectStore.class, opened.store());
         assertEquals("s3://graphs/team/a/iceberg", opened.icebergLocation());
@@ -59,10 +63,10 @@ class ShippingStoresTest {
 
     @Test
     void anS3StoreWithoutAPrefixPutsTheTableAtTheBucketRoot() {
-        ShippingConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"us-east-1\"}",
+        StoreConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"us-east-1\"}",
                 STATIC);
 
-        ShippingStores.Opened opened = ShippingStores.open(config);
+        StoreFactory.Opened opened = StoreFactory.open(config);
 
         assertEquals("s3://graphs/iceberg", opened.icebergLocation());
         opened.store().close();
@@ -70,10 +74,10 @@ class ShippingStoresTest {
 
     @Test
     void aCustomEndpointWithPathStyleAddressingIsAccepted() {
-        ShippingConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"us-east-1\","
+        StoreConfig config = s3("\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"us-east-1\","
                 + "\"endpoint\":\"http://localhost:8333\",\"path_style\":true}", STATIC);
 
-        ShippingStores.Opened opened = ShippingStores.open(config);
+        StoreFactory.Opened opened = StoreFactory.open(config);
 
         assertInstanceOf(S3ObjectStore.class, opened.store());
         opened.store().close();
@@ -93,8 +97,8 @@ class ShippingStoresTest {
 
     @Test
     void theStaticCredentialsKindBuildsAFixedProvider() {
-        CredentialsProvider fixed = ShippingStores.provider(new ShippingConfig.CredentialSource(
-                ShippingConfig.CredentialKind.STATIC, "id", "secret", "token", null, null), Map::of);
+        CredentialsProvider fixed = StoreFactory.provider(new StoreConfig.CredentialSource(
+                StoreConfig.CredentialKind.STATIC, "id", "secret", "token", null, null), Map::of);
 
         assertInstanceOf(StaticCredentialsProvider.class, fixed);
         assertEquals(new Credentials("id", "secret", "token"), fixed.current());
@@ -103,10 +107,10 @@ class ShippingStoresTest {
 
     @Test
     void theEnvironmentKindReadsTheSuppliedEnvironment() {
-        ShippingConfig.CredentialSource source = new ShippingConfig.CredentialSource(
-                ShippingConfig.CredentialKind.ENVIRONMENT, null, null, null, null, null);
+        StoreConfig.CredentialSource source = new StoreConfig.CredentialSource(
+                StoreConfig.CredentialKind.ENVIRONMENT, null, null, null, null, null);
 
-        CredentialsProvider provider = ShippingStores.provider(source,
+        CredentialsProvider provider = StoreFactory.provider(source,
                 () -> Map.of("AWS_ACCESS_KEY_ID", "envid", "AWS_SECRET_ACCESS_KEY", "envsecret"));
 
         assertInstanceOf(EnvironmentCredentialsProvider.class, provider);
@@ -115,11 +119,11 @@ class ShippingStoresTest {
 
     @Test
     void anEnvironmentWithoutCredentialsIsRefusedWithoutEchoingAnything() {
-        ShippingConfig.CredentialSource source = new ShippingConfig.CredentialSource(
-                ShippingConfig.CredentialKind.ENVIRONMENT, null, null, null, null, null);
+        StoreConfig.CredentialSource source = new StoreConfig.CredentialSource(
+                StoreConfig.CredentialKind.ENVIRONMENT, null, null, null, null, null);
 
         IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
-                () -> ShippingStores.provider(source, () -> Map.of("AWS_ACCESS_KEY_ID", "partial")));
+                () -> StoreFactory.provider(source, () -> Map.of("AWS_ACCESS_KEY_ID", "partial")));
 
         assertTrue(refused.getMessage().contains("AWS_SECRET_ACCESS_KEY"));
         assertFalse(refused.getMessage().contains("partial"));
@@ -131,8 +135,8 @@ class ShippingStoresTest {
         Files.writeString(credentials, "[default]\naws_access_key_id=wrong\naws_secret_access_key=wrong\n"
                 + "[prod]\naws_access_key_id=fileid\naws_secret_access_key=filesecret\n");
 
-        CredentialsProvider file = ShippingStores.provider(new ShippingConfig.CredentialSource(
-                ShippingConfig.CredentialKind.FILE, null, null, null, credentials, "prod"), Map::of);
+        CredentialsProvider file = StoreFactory.provider(new StoreConfig.CredentialSource(
+                StoreConfig.CredentialKind.FILE, null, null, null, credentials, "prod"), Map::of);
 
         assertInstanceOf(FileCredentialsProvider.class, file);
         assertEquals(new Credentials("fileid", "filesecret"), file.current());
@@ -140,19 +144,19 @@ class ShippingStoresTest {
 
     @Test
     void aMissingProfileFileIsRefused() {
-        ShippingConfig.CredentialSource source = new ShippingConfig.CredentialSource(
-                ShippingConfig.CredentialKind.FILE, null, null, null, root.resolve("absent"), "default");
+        StoreConfig.CredentialSource source = new StoreConfig.CredentialSource(
+                StoreConfig.CredentialKind.FILE, null, null, null, root.resolve("absent"), "default");
 
-        assertThrows(RuntimeException.class, () -> ShippingStores.provider(source, Map::of));
+        assertThrows(RuntimeException.class, () -> StoreFactory.provider(source, Map::of));
     }
 
     @Test
     void anEmptyStaticCredentialIsRejectedByNameWhenTheConfigIsParsed() {
         String document = "{\"store\":{\"type\":\"s3\",\"bucket\":\"graphs\",\"region\":\"r\"},\"credentials\":"
-                + "{\"source\":\"static\",\"access_key_id\":\"\",\"secret_access_key\":\"s\"}," + SIGNING + "}";
+                + "{\"source\":\"static\",\"access_key_id\":\"\",\"secret_access_key\":\"s\"}}";
 
         IllegalArgumentException refused = assertThrows(IllegalArgumentException.class,
-                () -> ShippingConfig.parse(document));
+                () -> parsed(document));
 
         assertTrue(refused.getMessage().contains("access_key_id"), refused.getMessage());
     }
