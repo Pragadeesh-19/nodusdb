@@ -8,10 +8,13 @@ import io.nodusdb.chain.ChainRecords;
 import io.nodusdb.chain.ChainTrustException;
 import io.nodusdb.chain.ChainVerifier;
 import io.nodusdb.chain.Keyring;
+import io.nodusdb.objectstore.ListPage;
+import io.nodusdb.objectstore.ObjectInfo;
 import io.nodusdb.objectstore.ObjectStore;
 
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 public final class ChainFetch {
 
@@ -19,6 +22,8 @@ public final class ChainFetch {
         WHEN_KEY_KNOWN,
         REQUIRED
     }
+
+    private static final int LIST_PAGE_KEYS = 100;
 
     private final ObjectStore store;
     private final Keyring keyring;
@@ -53,5 +58,30 @@ public final class ChainFetch {
     public ChainObject require(long seq) {
         return fetch(seq).orElseThrow(() -> new ChainTrustException(
                 "object " + seq + " was listed but cannot be read"));
+    }
+
+    public OptionalLong oldestSeq() {
+        return firstSeqAfter("");
+    }
+
+    public boolean hasObjectAfter(long seq) {
+        return firstSeqAfter(ChainLayout.chainKey(seq)).isPresent();
+    }
+
+    private OptionalLong firstSeqAfter(String startAfter) {
+        String after = startAfter;
+        while (true) {
+            ListPage page = store.list(ChainLayout.CHAIN_PREFIX, after, LIST_PAGE_KEYS);
+            for (ObjectInfo entry : page.entries()) {
+                OptionalLong seq = ChainLayout.chainSeq(entry.key());
+                if (seq.isPresent()) {
+                    return seq;
+                }
+            }
+            if (!page.truncated()) {
+                return OptionalLong.empty();
+            }
+            after = page.lastKey();
+        }
     }
 }

@@ -21,6 +21,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import java.security.KeyPair;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -136,6 +137,45 @@ class ChainFetchTest {
             int cut = length;
             assertThrows(RuntimeException.class, () -> reader.fetch(2), "cut to " + cut);
         }
+    }
+
+    @Test
+    void theOldestSequenceIsTheFirstChainKeyAndAnEmptyChainHasNone() {
+        ChainFetch reader = fetch(ChainBuilder.keyring(), Trust.REQUIRED);
+        assertEquals(OptionalLong.empty(), reader.oldestSeq());
+
+        chain.snapshotRef(100, 1);
+        chain.records(1);
+        chain.records(1);
+        store.put("_nodus/chain/notes.txt", new byte[]{1});
+        assertEquals(1, reader.oldestSeq().getAsLong());
+
+        store.delete(ChainLayout.chainKey(1));
+        assertEquals(2, reader.oldestSeq().getAsLong());
+    }
+
+    @Test
+    void anObjectAfterASequenceIsDetectedEvenWhenTheNextOneIsGone() {
+        chain.snapshotRef(100, 1);
+        chain.records(1);
+        chain.records(1);
+        ChainFetch reader = fetch(ChainBuilder.keyring(), Trust.REQUIRED);
+
+        assertTrue(reader.hasObjectAfter(0));
+        assertTrue(reader.hasObjectAfter(1));
+        assertTrue(reader.hasObjectAfter(2));
+        assertEquals(false, reader.hasObjectAfter(3));
+        store.delete(ChainLayout.chainKey(2));
+        assertTrue(reader.hasObjectAfter(1));
+        assertEquals(false, reader.hasObjectAfter(99));
+    }
+
+    @Test
+    void foreignKeysInTheChainFolderAreNotObjects() {
+        store.put("_nodus/chain/notes.txt", new byte[]{1});
+
+        assertEquals(false, fetch(ChainBuilder.keyring(), Trust.REQUIRED).hasObjectAfter(0));
+        assertEquals(OptionalLong.empty(), fetch(ChainBuilder.keyring(), Trust.REQUIRED).oldestSeq());
     }
 
     @Test
