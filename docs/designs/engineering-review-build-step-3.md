@@ -75,6 +75,7 @@ functions through thousands of seeded failure orders and checks six invariants a
 | D125 | Takeover shape | `Takeover` is a small orchestrator over three injected steps (claim, restore, open) so the simulator can substitute the open and unit tests can inject faults between steps |
 | D126 | Read gate | The staleness bound and the token wait time live in `FollowerGate`, consulted by `GraphSession` in the one place every read already passes through (`requireOpen`). The token wait uses `read_wait_ms` from the config, so `nodus_check` does not change |
 | D127 | Replica apply contract (build time) | `applyReplicated` checks a whole chunk before it applies any of it, then applies one transaction per write section and publishes the position inside that section. A prepare failure leaves the last whole transaction applied. A failure inside the section faults the replica. The position and fault flag live in `GraphState`. `restorePosition` and a public `requireWritable` were added |
+| D128 | Restore and error -15 (build time) | Format and trust exceptions of the chain both carry -15. `GraphInstaller` stages in `<target>.restore-tmp` and renames; `Restore` checks the target first, downloads into `<target>.restore-scratch`, always verifies with `Trust.REQUIRED` and keeps the snapshot salt |
 
 ## 4. Bootstrap algorithm
 

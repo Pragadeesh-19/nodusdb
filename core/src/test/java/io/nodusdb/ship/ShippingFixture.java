@@ -67,6 +67,12 @@ public final class ShippingFixture {
                 + "\"ship\":{" + ship + "},\"iceberg\":{" + iceberg + "}}";
     }
 
+    public String followerJson() {
+        return "{\"store\":{\"type\":\"directory\",\"directory\":\"" + escape(bucket) + "\"},"
+                + "\"trust\":{\"key_id\":" + ChainBuilder.KEY_ID + ",\"public_key_file\":\"" + escape(publicKey)
+                + "\"}}";
+    }
+
     public ShippingConfig config() {
         return ShippingConfig.parse(json());
     }
