@@ -31,13 +31,13 @@ class ChainReplayEndToEndTest {
         ObjectStore store = shipping.store();
         ChainFetch fetch = new ChainFetch(store, ChainBuilder.keyring(), Trust.REQUIRED);
         ChainReplay replay = new ChainReplay(store, fetch, new SnapshotDownloader(store, 3), root);
-        KernelSink sink = new KernelSink();
+        KernelReplicaSink sink = new KernelReplicaSink(GraphKernel.NO_MEMORY_LIMIT);
         ReplayPosition position = replay.bootstrap(sink).orElseThrow();
         replay.catchUp(position, sink);
         return new Replayed(sink, position);
     }
 
-    private record Replayed(KernelSink sink, ReplayPosition position) {
+    private record Replayed(KernelReplicaSink sink, ReplayPosition position) {
     }
 
     @Test
@@ -58,15 +58,15 @@ class ChainReplayEndToEndTest {
 
             Replayed replicated = replicate(shipping);
 
-            assertEquals(GraphDigest.of(writer), GraphDigest.of(replicated.sink().kernel));
+            assertEquals(GraphDigest.of(writer), GraphDigest.of(replicated.sink().kernel()));
             assertEquals(last.lsn(), replicated.position().appliedLsn());
-            TupleStore copy = TupleStore.open(replicated.sink().kernel);
+            TupleStore copy = TupleStore.open(replicated.sink().kernel());
             assertEquals(2, copy.schemaVersion());
             assertTrue(copy.check("document:a0", "view", "user:u0"));
             assertTrue(copy.check("document:b3", "view", "user:u3"));
             assertTrue(copy.check("document:last", "view", "user:alice"));
             assertFalse(copy.check("document:a0", "view", "user:nobody"));
-            assertEquals(writer.epochHistory().latestEpoch(), replicated.sink().kernel.epochHistory().latestEpoch());
+            assertEquals(writer.epochHistory().latestEpoch(), replicated.sink().kernel().epochHistory().latestEpoch());
         }
     }
 
@@ -80,8 +80,8 @@ class ChainReplayEndToEndTest {
 
             Replayed replicated = replicate(shipping);
 
-            assertEquals(GraphDigest.of(bucket.kernel()), GraphDigest.of(replicated.sink().kernel));
-            assertTrue(TupleStore.open(replicated.sink().kernel).check("document:z", "view", "user:alice"));
+            assertEquals(GraphDigest.of(bucket.kernel()), GraphDigest.of(replicated.sink().kernel()));
+            assertTrue(TupleStore.open(replicated.sink().kernel()).check("document:z", "view", "user:alice"));
         }
     }
 
@@ -100,9 +100,9 @@ class ChainReplayEndToEndTest {
 
             Replayed replicated = replicate(shipping);
 
-            assertEquals(GraphDigest.of(second.kernel()), GraphDigest.of(replicated.sink().kernel));
-            assertEquals(2, replicated.sink().kernel.epochHistory().size());
-            assertEquals(second.kernel().epoch(), replicated.sink().kernel.epoch());
+            assertEquals(GraphDigest.of(second.kernel()), GraphDigest.of(replicated.sink().kernel()));
+            assertEquals(2, replicated.sink().kernel().epochHistory().size());
+            assertEquals(second.kernel().epoch(), replicated.sink().kernel().epoch());
         }
     }
 }

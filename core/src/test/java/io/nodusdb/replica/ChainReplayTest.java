@@ -25,6 +25,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
@@ -327,6 +328,40 @@ class ChainReplayTest {
         sink.failOnApply = new IllegalStateException("memory");
 
         assertThrows(IllegalStateException.class, () -> replay.advance(position, sink));
+    }
+
+    @Test
+    void aGuardThatRefusesAnObjectStopsItBeforeAnythingIsAppliedAndTheCursorStaysPut() throws IOException {
+        chain.snapshotRef(10, 1);
+        chain.many(2, 1);
+        ChainReplay replay = replay(store);
+        ReplayPosition position = replay.bootstrap(sink).orElseThrow();
+        int appliedBefore = sink.applied.size();
+
+        assertThrows(ChainTrustException.class, () -> replay.advance(position, sink, object -> {
+            throw new ChainTrustException("refused " + object.seq());
+        }));
+
+        assertEquals(appliedBefore, sink.applied.size());
+        assertEquals(1, position.cursor().seq());
+        assertTrue(replay.advance(position, sink).isPresent());
+        assertEquals(2, position.cursor().seq());
+    }
+
+    @Test
+    void theGuardSeesEachFetchedObjectAndNothingWhenThereIsNoNextObject() throws IOException {
+        chain.snapshotRef(10, 1);
+        chain.many(2, 1);
+        ChainReplay replay = replay(store);
+        ReplayPosition position = replay.bootstrap(sink).orElseThrow();
+        List<Long> seen = new ArrayList<>();
+
+        replay.advance(position, sink, object -> seen.add(object.seq()));
+        replay.advance(position, sink, object -> seen.add(object.seq()));
+        Optional<ChainObject> none = replay.advance(position, sink, object -> seen.add(object.seq()));
+
+        assertEquals(List.of(2L, 3L), seen);
+        assertEquals(Optional.empty(), none);
     }
 
     private ChainObject forge(long seq, ChainHash prev, long epoch, long firstLsn, SigningKey key) {

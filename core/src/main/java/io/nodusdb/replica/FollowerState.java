@@ -101,6 +101,10 @@ public final class FollowerState {
         }
     }
 
+    public void note(String message) {
+        events.add(message);
+    }
+
     public void waitingForSnapshot() {
         synchronized (monitor) {
             if (!waitingLogged && !isTerminal()) {

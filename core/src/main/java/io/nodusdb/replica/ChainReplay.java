@@ -12,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 public final class ChainReplay {
 
@@ -40,10 +41,15 @@ public final class ChainReplay {
     }
 
     public Optional<ChainObject> advance(ReplayPosition position, ReplicaSink sink) {
+        return advance(position, sink, object -> { });
+    }
+
+    public Optional<ChainObject> advance(ReplayPosition position, ReplicaSink sink, Consumer<ChainObject> guard) {
         Optional<ChainObject> next = chainFetch.fetch(position.cursor().seq() + 1);
         if (next.isEmpty()) {
             return next;
         }
+        guard.accept(next.get());
         position.cursor().accept(next.get());
         position.requirePinnedUnchanged(next.get());
         applyRecords(next.get(), position, sink);

@@ -60,7 +60,7 @@ public final class Restore {
         ChainFetch fetch = new ChainFetch(store, keyring, Trust.REQUIRED);
         ChainReplay replay = new ChainReplay(store, fetch, new SnapshotDownloader(store, downloadParallelism),
                 scratch);
-        RestoreSink sink = new RestoreSink();
+        KernelReplicaSink sink = new KernelReplicaSink(GraphKernel.NO_MEMORY_LIMIT);
         ReplayPosition position = replay.bootstrap(sink).orElseThrow(() -> new IllegalStateException(
                 "the object store holds no snapshot with the chain after it to restore from"));
         replay.catchUp(position, sink);

@@ -10,17 +10,23 @@ public final class ReplayPosition {
     private final ChainCursor cursor;
     private final long pinnedSeq;
     private final ChainHash pinnedDigest;
+    private final long snapshotLsn;
     private long appliedLsn;
 
-    ReplayPosition(ChainCursor cursor, long appliedLsn, ChainObject pinned) {
+    ReplayPosition(ChainCursor cursor, long snapshotLsn, ChainObject pinned) {
         this.cursor = cursor;
-        this.appliedLsn = appliedLsn;
+        this.snapshotLsn = snapshotLsn;
+        this.appliedLsn = snapshotLsn;
         this.pinnedSeq = pinned.seq();
         this.pinnedDigest = pinned.digest();
     }
 
     public ChainCursor cursor() {
         return cursor;
+    }
+
+    public long snapshotLsn() {
+        return snapshotLsn;
     }
 
     public long appliedLsn() {

@@ -7,14 +7,31 @@ import io.nodusdb.storage.snapshot.SnapshotReader;
 import java.io.IOException;
 import java.nio.file.Path;
 
-final class KernelSink implements ReplicaSink {
+final class KernelReplicaSink implements ReplicaSink {
 
-    final GraphKernel kernel = GraphKernel.openReplica(GraphKernel.NO_MEMORY_LIMIT);
+    private final GraphKernel kernel;
+    private SnapshotMeta loaded;
+
+    KernelReplicaSink(long maxMemoryBytes) {
+        this.kernel = GraphKernel.openReplica(maxMemoryBytes);
+    }
+
+    GraphKernel kernel() {
+        return kernel;
+    }
+
+    SnapshotMeta loaded() {
+        if (loaded == null) {
+            throw new IllegalStateException("no snapshot was loaded");
+        }
+        return loaded;
+    }
 
     @Override
     public long load(Path snapshotFile) throws IOException {
         SnapshotMeta meta = SnapshotReader.load(snapshotFile, kernel);
         kernel.restorePosition(meta.lsn(), meta.lastCommitMicros());
+        loaded = meta;
         return meta.lsn();
     }
 
