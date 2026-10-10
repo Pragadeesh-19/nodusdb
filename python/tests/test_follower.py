@@ -285,27 +285,32 @@ class FollowerTest(unittest.TestCase):
             Graph(path=self.root / "taken", takeover=True)
 
     def test_salvage_lists_the_transactions_the_old_writer_never_shipped(self):
-        slow = Shipping.directory(
-            self.bucket, key_file=self.private_key, key_id=7, public_key_file=self.public_key, interval_ms=3_600_000)
-        writer = Graph(path=self.root / "graph", sync_mode="sync", shipping=slow)
-        self.graphs.append(writer)
-        writer.apply_schema(SCHEMA)
+        shipped = self.writer()
         for index in range(3):
-            writer.write(Transaction().add(f"document:s{index}", "viewer", "user:alice"), durability="lake")
+            shipped.write(Transaction().add(f"document:s{index}", "viewer", "user:alice"), durability="lake")
+        shipped.close()
+        local = Graph(path=self.root / "graph", sync_mode="sync")
+        self.graphs.append(local)
         for index in range(2):
-            writer.write(Transaction().add(f"document:l{index}", "viewer", "user:alice"))
+            local.write(Transaction().add(f"document:l{index}", "viewer", "user:alice"))
         image = self.root / "image"
         shutil.copytree(self.root / "graph", image, ignore=shutil.ignore_patterns("nodus.lock"))
 
         report = salvage(self.description(), image)
 
+        additions = [transaction for transaction in report.transactions
+                     if any(change.kind == "add" for change in transaction.changes)]
         self.assertTrue(report.provisional)
-        self.assertEqual(2, len(report.transactions))
-        change = report.transactions[0].changes[0]
+        self.assertEqual(2, len(additions))
+        self.assertEqual(report.handoff_lsn + 1, report.transactions[0].first_lsn)
+        self.assertEqual(report.local_last_lsn, report.transactions[-1].last_lsn)
+        self.assertEqual(0, report.unavailable_through_lsn)
+        change = additions[0].changes[0]
         self.assertEqual(("add", "document:l0", "viewer", "user:alice", ""),
                          (change.kind, change.object, change.relation, change.subject, change.subject_relation))
-        self.assertEqual(report.handoff_lsn + 1, report.transactions[0].first_lsn)
-        self.assertEqual(0, report.unavailable_through_lsn)
+        second = additions[1].changes[0]
+        self.assertEqual(("add", "document:l1", "viewer", "user:alice", ""),
+                         (second.kind, second.object, second.relation, second.subject, second.subject_relation))
 
     def test_salvage_refuses_a_directory_that_is_open(self):
         writer = self.writer()
