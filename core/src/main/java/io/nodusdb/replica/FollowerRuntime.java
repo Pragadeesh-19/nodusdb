@@ -22,6 +22,7 @@ public final class FollowerRuntime implements AutoCloseable {
     private final GraphKernel kernel;
     private final TupleStore tuples;
     private final FollowerState state;
+    private final FollowerGate gate;
     private final FollowerConfig.Follow follow;
     private final FollowerRunner runner;
     private final ObjectStore store;
@@ -33,6 +34,7 @@ public final class FollowerRuntime implements AutoCloseable {
         this.kernel = kernel;
         this.tuples = tuples;
         this.state = state;
+        this.gate = new FollowerGate(kernel, state, follow, System::nanoTime);
         this.follow = follow;
         this.runner = runner;
         this.store = store;
@@ -78,6 +80,14 @@ public final class FollowerRuntime implements AutoCloseable {
 
     public FollowerState state() {
         return state;
+    }
+
+    public FollowerGate gate() {
+        return gate;
+    }
+
+    public String statsJson() {
+        return FollowerStats.json(kernel, state, System.nanoTime());
     }
 
     public FollowerConfig.Follow follow() {

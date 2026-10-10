@@ -2,6 +2,8 @@ package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogConfig;
+import io.nodusdb.replica.FollowerConfig;
+import io.nodusdb.replica.FollowerRuntime;
 import io.nodusdb.ship.ShippingConfig;
 import io.nodusdb.storage.DurableGraph;
 
@@ -32,6 +34,16 @@ public final class GraphSessions {
             throws IOException {
         GraphKernel kernel = DurableGraph.open(directory, config, maxMemoryBytes, shipping).kernel();
         return table.open(new GraphSession(kernel));
+    }
+
+    public long openFollower(FollowerConfig config, long maxMemoryBytes) throws IOException {
+        FollowerRuntime runtime = FollowerRuntime.start(config, maxMemoryBytes);
+        try {
+            return table.open(new GraphSession(runtime));
+        } catch (RuntimeException failure) {
+            runtime.close();
+            throw failure;
+        }
     }
 
     public GraphSession get(long handle) {

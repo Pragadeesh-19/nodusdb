@@ -7,6 +7,7 @@ import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
+import io.nodusdb.replica.FollowerRuntime;
 import io.nodusdb.ship.ShipStats;
 
 import java.time.Duration;
@@ -20,6 +21,7 @@ public final class GraphSession implements AutoCloseable {
     private final GraphKernel kernel;
     private final StringKeys strings;
     private final TupleStore tuples;
+    private final FollowerRuntime follower;
     private final ThreadLocal<long[]> results = ThreadLocal.withInitial(() -> new long[INITIAL_RESULT_CAPACITY]);
     private volatile boolean closed;
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
@@ -32,6 +34,14 @@ public final class GraphSession implements AutoCloseable {
             kernel.claimKeyKind(KeyKind.INTEGER);
         }
         this.tuples = TupleStore.open(kernel);
+        this.follower = null;
+    }
+
+    public GraphSession(FollowerRuntime follower) {
+        this.kernel = follower.kernel();
+        this.strings = new StringKeys(kernel);
+        this.tuples = follower.tuples();
+        this.follower = follower;
     }
 
     public synchronized void checkpoint() {
@@ -50,6 +60,10 @@ public final class GraphSession implements AutoCloseable {
             return;
         }
         closed = true;
+        if (follower != null) {
+            follower.close();
+            return;
+        }
         kernel.close();
     }
 
@@ -73,7 +87,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public long lookup(byte[] utf8, int offset, int length) {
-        requireOpen();
+        requireReadable();
         if (kernel.keyKind() == KeyKind.INTEGER) {
             throw new IllegalStateException("graph is keyed by integers");
         }
@@ -81,7 +95,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public byte[] resolve(long id) {
-        requireOpen();
+        requireReadable();
         return strings.resolve(id);
     }
 
@@ -112,17 +126,17 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public boolean hasEdge(long u, long v) {
-        requireOpen();
+        requireReadable();
         return kernel.hasEdge(u, v);
     }
 
     public int degree(long u) {
-        requireOpen();
+        requireReadable();
         return kernel.getDegree(u);
     }
 
     public int inDegree(long v) {
-        requireOpen();
+        requireReadable();
         return kernel.getInDegree(v);
     }
 
@@ -148,7 +162,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public int commonNeighbors(long u, long v) {
-        requireOpen();
+        requireReadable();
         while (true) {
             try {
                 return kernel.commonNeighbors(u, v, results.get());
@@ -159,7 +173,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public int khop(long start, int maxDepth) {
-        requireOpen();
+        requireReadable();
         while (true) {
             try {
                 return kernel.kHop(start, maxDepth, results.get());
@@ -170,7 +184,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public long result(int index) {
-        requireOpen();
+        requireReadable();
         return results.get()[index];
     }
 
@@ -196,6 +210,9 @@ public final class GraphSession implements AutoCloseable {
 
     public String statsJson() {
         requireOpen();
+        if (follower != null) {
+            return follower.statsJson();
+        }
         return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark());
     }
 
@@ -206,22 +223,33 @@ public final class GraphSession implements AutoCloseable {
 
     public boolean check(String object, String permission, String subject, Token atLeast) {
         requireOpen();
+        if (follower != null && atLeast != null) {
+            follower.gate().awaitToken(atLeast);
+        }
+        requireReadable();
         return tuples.check(object, permission, subject, atLeast);
     }
 
     public Token token() {
-        requireOpen();
+        requireReadable();
         return tuples.token();
     }
 
     public int schemaVersion() {
-        requireOpen();
+        requireReadable();
         return tuples.schemaVersion();
     }
 
     private void requireOpen() {
         if (closed) {
             throw new IllegalStateException("graph is closed");
+        }
+    }
+
+    private void requireReadable() {
+        requireOpen();
+        if (follower != null) {
+            follower.gate().requireReadable();
         }
     }
 

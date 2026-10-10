@@ -35,6 +35,7 @@ public final class FollowerState {
     private long confirmedNanos;
     private boolean waitingLogged;
     private boolean stopRequested;
+    private long version;
 
     public Phase phase() {
         synchronized (monitor) {
@@ -68,7 +69,7 @@ public final class FollowerState {
             phase = Phase.CATCHING_UP;
             settle(wasLagging);
             events.add("bootstrapped from the snapshot at LSN " + snapshot + " and applied through LSN " + lsn);
-            monitor.notifyAll();
+            changed();
         }
     }
 
@@ -83,7 +84,7 @@ public final class FollowerState {
             bytesApplied += bytes;
             phase = Phase.CATCHING_UP;
             settle(wasLagging);
-            monitor.notifyAll();
+            changed();
         }
     }
 
@@ -97,12 +98,37 @@ public final class FollowerState {
             confirmed = true;
             confirmedNanos = nowNanos;
             settle(wasLagging);
-            monitor.notifyAll();
+            changed();
         }
     }
 
     public void note(String message) {
         events.add(message);
+    }
+
+    public long version() {
+        synchronized (monitor) {
+            return version;
+        }
+    }
+
+    public long awaitChange(long knownVersion, long nanos) {
+        long deadline = System.nanoTime() + nanos;
+        synchronized (monitor) {
+            while (version == knownVersion) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0) {
+                    break;
+                }
+                try {
+                    TimeUnit.NANOSECONDS.timedWait(monitor, remaining);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+            return version;
+        }
     }
 
     public void waitingForSnapshot() {
@@ -125,7 +151,7 @@ public final class FollowerState {
                 phase = Phase.LAGGING;
                 events.add("falling behind: " + reason);
             }
-            monitor.notifyAll();
+            changed();
         }
     }
 
@@ -137,21 +163,21 @@ public final class FollowerState {
             phase = Phase.STALLED;
             stallReason = reason;
             events.add("stalled: " + reason);
-            monitor.notifyAll();
+            changed();
         }
     }
 
     public void closed() {
         synchronized (monitor) {
             phase = Phase.CLOSED;
-            monitor.notifyAll();
+            changed();
         }
     }
 
     public void requestStop() {
         synchronized (monitor) {
             stopRequested = true;
-            monitor.notifyAll();
+            changed();
         }
     }
 
@@ -189,6 +215,11 @@ public final class FollowerState {
 
     private boolean isTerminal() {
         return phase == Phase.STALLED || phase == Phase.CLOSED;
+    }
+
+    private void changed() {
+        version++;
+        monitor.notifyAll();
     }
 
     private void moveTo(long seq, long lsn, long newEpoch) {

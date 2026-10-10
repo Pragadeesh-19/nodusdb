@@ -206,6 +206,47 @@ class FollowerStateTest {
     }
 
     @Test
+    void everyChangeAdvancesTheVersionAndAWaiterReturnsWithTheNewOne() throws Exception {
+        long before = state.version();
+        long[] seen = new long[1];
+        CountDownLatch waiting = new CountDownLatch(1);
+        Thread waiter = new Thread(() -> {
+            waiting.countDown();
+            seen[0] = state.awaitChange(before, TimeUnit.SECONDS.toNanos(30));
+        });
+        waiter.start();
+        waiting.await();
+
+        state.bootstrapped(40, 40, 3, 1);
+        waiter.join(10_000);
+
+        assertFalse(waiter.isAlive());
+        assertTrue(seen[0] > before);
+        assertEquals(state.version(), seen[0]);
+    }
+
+    @Test
+    void awaitingAnOutdatedVersionReturnsAtOnce() {
+        state.bootstrapped(40, 40, 3, 1);
+        long before = System.nanoTime();
+
+        long version = state.awaitChange(0, TimeUnit.SECONDS.toNanos(30));
+
+        assertEquals(state.version(), version);
+        assertTrue(System.nanoTime() - before < TimeUnit.SECONDS.toNanos(5));
+    }
+
+    @Test
+    void awaitingTheCurrentVersionTimesOutWithoutAChange() {
+        long begin = System.nanoTime();
+
+        long version = state.awaitChange(state.version(), TimeUnit.MILLISECONDS.toNanos(60));
+
+        assertEquals(state.version(), version);
+        assertTrue(System.nanoTime() - begin >= TimeUnit.MILLISECONDS.toNanos(50));
+    }
+
+    @Test
     void aPauseThatIsNotInterruptedLastsItsWholeDuration() {
         long begin = System.nanoTime();
 
