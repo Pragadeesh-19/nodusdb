@@ -64,18 +64,6 @@
 
 ## Engine
 
-### Deterministic simulation harness for the distributed steps
-
-**What:** Run the writer, the lake shipper, a fake S3 and followers on a simulated clock, inject failures from a seed, and replay any failure exactly.
-
-**Why:** Split-brain, lost-write and stale-read bugs live in rare interleavings of the commit protocol, followers and takeover; seeded simulation finds and reproduces them.
-
-**Context:** Gate for Build Step 3, scheduled as milestone M5 in `docs/designs/engineering-review-build-step-3.md` (D117). The local every-prefix crash harness (D73) is the seed. The protocol to simulate is in `docs/designs/engineering-review-authz-wedge.md` sections 8 and 9.
-
-**Effort:** L
-**Priority:** P1
-**Depends on:** Build Step 1 (LogStore I/O seam)
-
 ### Low-latency writer-to-follower tail stream
 
 **What:** An optional TCP stream of committed records from the writer to followers, verified against the signed lake chain.
@@ -186,18 +174,6 @@
 **Priority:** P3
 **Depends on:** Merge Iceberg manifests
 
-### Restore a graph from the bucket
-
-**What:** A tool that downloads the newest snapshot reference, verifies it and the chain after it, and rebuilds a graph directory.
-
-**Why:** Shipping is one-way today. The chain and the snapshots hold everything needed, but only the projector reads them back.
-
-**Context:** Scheduled as milestone M1 of Build Step 3 (`docs/designs/engineering-review-build-step-3.md`, D105 to D120). `ChainHead`, `ChainVerifier`, `ChainCursor` and the snapshot reader already do the hard parts. Open reconciliation refuses a directory that is behind the chain, so a restore also decides what happens to a stale directory.
-
-**Effort:** M
-**Priority:** P1
-**Depends on:** Build Step 2
-
 ### Start a new chain after an unshipped gap
 
 **What:** A deliberate operation that ends the old chain at its head and starts a new one from a fresh snapshot, for a directory that wrote while shipping was off.
@@ -270,4 +246,24 @@
 **Priority:** P3
 **Depends on:** none
 
+### Salvage a large directory without loading its snapshot into memory
+
+**What:** Read only the symbol table, the schema and the epoch history of the old directory's snapshot when salvaging, instead of loading the whole graph into a scratch kernel.
+
+**Why:** Salvage decodes names with the same loader recovery uses, so a 30 million edge directory needs about as much memory as opening it.
+
+**Context:** `storage/GraphSurvey` loads `snapshot.bin` into a throwaway `GraphKernel` and replays the log copy on top of it. The loader's adjacency step is the part to skip; `SnapshotReader` already reads the sections one by one.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** none
+
 ## Completed
+
+### Deterministic simulation harness for the distributed steps
+
+Done in Build Step 3. `ChainSimulation` (`core/src/test/java/io/nodusdb/ship`) drives the real shipper and follower step functions over a faulty store with a virtual clock from a seed, and checks the prefix, monotone, no-fork, fencing and convergence invariants. CI runs 300 seeds, and `-Dnodus.sim.seed=N` replays one. `S3ChaosTest` repeats the worst network cases over HTTP through `FaultProxy`.
+
+### Restore a graph from the bucket
+
+Done in Build Step 3. `Restore` and `restore()` rebuild a graph directory from the newest verified snapshot and the chain after it, with `GraphInstaller` renaming a complete directory into place. `WriterTakeover` and `Graph(takeover=True)` build a new writer on top of it, and `Salvage` lists what an old writer never shipped.
