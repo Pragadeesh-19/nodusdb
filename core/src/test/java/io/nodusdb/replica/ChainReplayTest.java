@@ -28,6 +28,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -278,6 +279,30 @@ class ChainReplayTest {
         assertEquals(0, replay.catchUp(position, sink));
         chain.many(1, 1);
         assertEquals(1, replay.catchUp(position, sink));
+    }
+
+    @Test
+    void anObjectThatAppearsBetweenThePollAndTheListingIsNotAGap() throws IOException {
+        chain.snapshotRef(10, 1);
+        chain.many(4, 1);
+        AtomicBoolean hidden = new AtomicBoolean(true);
+        ForwardingObjectStore lagging = new ForwardingObjectStore(store) {
+            @Override
+            public Optional<byte[]> get(String key) {
+                if (key.equals(ChainLayout.chainKey(3)) && hidden.getAndSet(false)) {
+                    return Optional.empty();
+                }
+                return super.get(key);
+            }
+        };
+        ChainReplay replay = replay(lagging);
+        ReplayPosition position = replay.bootstrap(sink).orElseThrow();
+        replay.advance(position, sink);
+
+        assertEquals(0, replay.catchUp(position, sink));
+        assertEquals(3, replay.catchUp(position, sink));
+
+        assertEquals(chain.seq(), position.cursor().seq());
     }
 
     @Test

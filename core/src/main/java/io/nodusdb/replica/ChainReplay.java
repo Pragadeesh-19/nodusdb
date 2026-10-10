@@ -67,7 +67,7 @@ public final class ChainReplay {
 
     public void requireNoGap(ReplayPosition position) {
         long next = position.cursor().seq() + 1;
-        if (chainFetch.hasObjectAfter(next - 1)) {
+        if (chainFetch.hasObjectAfter(next) && chainFetch.fetch(next).isEmpty()) {
             throw new ChainGapException(next);
         }
     }
