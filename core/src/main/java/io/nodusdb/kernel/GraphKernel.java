@@ -1,5 +1,6 @@
 package io.nodusdb.kernel;
 
+import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.adjacency.AdjacencyTable;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.adjacency.EdgeTables;
@@ -24,10 +25,14 @@ public final class GraphKernel implements AutoCloseable {
     public static final long NO_MEMORY_LIMIT = 0L;
     public static final long UNCHANGED = -1L;
 
+    private static final String FAULTED_MESSAGE =
+            "the graph state is inconsistent with its log; reopen the graph";
+
     private final GraphState state;
     private final WriteSequence sequence;
     private final RecordApplier applier;
     private final WriteReservation reservation;
+    private final ReplicaWriter replicaWriter;
     private final ReentrantLock writer = new ReentrantLock();
     private final RecordBatch scratch = new RecordBatch();
     private final RecordReader applyReader = new RecordReader();
@@ -35,15 +40,17 @@ public final class GraphKernel implements AutoCloseable {
     private LogStore log = new VolatileLog();
     private DurableStorage storage;
     private volatile ShipWatermark shipWatermark = ShipWatermark.NONE;
-    private volatile long appliedLsn;
     private boolean closed;
-    private boolean faulted;
 
     public GraphKernel() {
         this(NO_MEMORY_LIMIT);
     }
 
     public GraphKernel(long maxMemoryBytes) {
+        this(maxMemoryBytes, false);
+    }
+
+    private GraphKernel(long maxMemoryBytes, boolean replica) {
         if (maxMemoryBytes < NO_MEMORY_LIMIT) {
             throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
         }
@@ -53,10 +60,19 @@ public final class GraphKernel implements AutoCloseable {
         this.sequence = state.sequence();
         this.applier = new RecordApplier(state);
         this.reservation = new WriteReservation(state);
+        this.replicaWriter = replica ? new ReplicaWriter(state, applier, reservation) : null;
     }
 
     public static GraphKernel openInMemory() {
         return new GraphKernel();
+    }
+
+    public static GraphKernel openReplica(long maxMemoryBytes) {
+        return new GraphKernel(maxMemoryBytes, true);
+    }
+
+    public boolean isReplica() {
+        return replicaWriter != null;
     }
 
     public long memoryUsedBytes() {
@@ -68,6 +84,7 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public void attachLog(LogStore log, DurableStorage storage) {
+        requireWritable();
         Objects.requireNonNull(log, "log");
         Objects.requireNonNull(storage, "storage");
         writer.lock();
@@ -77,13 +94,14 @@ public final class GraphKernel implements AutoCloseable {
             }
             this.log = log;
             this.storage = storage;
-            this.appliedLsn = log.lastLsn();
+            state.appliedLsn(log.lastLsn());
         } finally {
             writer.unlock();
         }
     }
 
     public void attachShipping(ShipWatermark watermark) {
+        requireWritable();
         Objects.requireNonNull(watermark, "watermark");
         writer.lock();
         try {
@@ -105,15 +123,19 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public long epoch() {
-        return log.epoch();
+        return isReplica() ? state.epochs().latestEpoch() : log.epoch();
     }
 
     public long appliedLsn() {
-        return appliedLsn;
+        return state.appliedLsn();
+    }
+
+    public long lastCommitMicros() {
+        return isReplica() ? state.lastCommitMicros() : log.lastCommitMicros();
     }
 
     public Token token() {
-        return new Token(log.epoch(), appliedLsn);
+        return new Token(epoch(), state.appliedLsn());
     }
 
     public KeyKind keyKind() {
@@ -133,6 +155,7 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public void checkpoint() {
+        requireWritable();
         writer.lock();
         try {
             requireOpen();
@@ -171,6 +194,7 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public long commit(RecordBatch batch) {
+        requireWritable();
         if (batch.isEmpty() || !batch.isCommitted()) {
             throw new IllegalArgumentException("a transaction must hold records and end with a commit");
         }
@@ -184,6 +208,7 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public long claimKeyKind(KeyKind kind) {
+        requireWritable();
         if (kind == KeyKind.UNSET) {
             throw new IllegalArgumentException("a graph cannot be claimed as unset");
         }
@@ -191,7 +216,7 @@ public final class GraphKernel implements AutoCloseable {
         try {
             requireOpen();
             if (state.keyKind() == kind) {
-                return appliedLsn;
+                return state.appliedLsn();
             }
             RecordBatch claim = new RecordBatch();
             claim.graphConfig(kind.code());
@@ -203,37 +228,49 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public boolean addEdge(long u, long v) {
+        requireWritable();
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
         return writeSingle(RecordType.TUPLE_ADD, (int) u, 0, 0, (int) v, true) != UNCHANGED;
     }
 
     public boolean removeEdge(long u, long v) {
+        requireWritable();
         NodeIds.checkValid(u);
         NodeIds.checkValid(v);
         return writeSingle(RecordType.TUPLE_REMOVE, (int) u, 0, 0, (int) v, true) != UNCHANGED;
     }
 
     public long addTuple(int object, int relation, int subjectRelation, int subject) {
+        requireWritable();
         NodeIds.checkValid(object);
         NodeIds.checkValid(subject);
         return writeSingle(RecordType.TUPLE_ADD, object, relation, subjectRelation, subject, true);
     }
 
     public long removeTuple(int object, int relation, int subjectRelation, int subject) {
+        requireWritable();
         NodeIds.checkValid(object);
         NodeIds.checkValid(subject);
         return writeSingle(RecordType.TUPLE_REMOVE, object, relation, subjectRelation, subject, true);
     }
 
     public int addEdges(long[] pairs, int pairCount) {
+        requireWritable();
         validatePairs(pairs, pairCount);
         return writePairs(RecordType.TUPLE_ADD, pairs, pairCount);
     }
 
     public int removeEdges(long[] pairs, int pairCount) {
+        requireWritable();
         validatePairs(pairs, pairCount);
         return writePairs(RecordType.TUPLE_REMOVE, pairs, pairCount);
+    }
+
+    public void requireWritable() {
+        if (isReplica()) {
+            throw new UnsupportedFeatureException("this graph is a follower and cannot be written");
+        }
     }
 
     public boolean hasEdge(long u, long v) {
@@ -374,6 +411,36 @@ public final class GraphKernel implements AutoCloseable {
         applier.apply(record);
     }
 
+    public void restorePosition(long lsn, long lastCommitMicros) {
+        requireReplica("restore a position");
+        if (lsn < 0 || lastCommitMicros < 0) {
+            throw new IllegalArgumentException("a position is non-negative: " + lsn + ", " + lastCommitMicros);
+        }
+        writer.lock();
+        try {
+            requireOpen();
+            if (state.appliedLsn() != 0 || state.lastCommitMicros() != 0) {
+                throw new IllegalStateException("the follower already holds position " + state.appliedLsn());
+            }
+            state.lastCommitMicros(lastCommitMicros);
+            state.appliedLsn(lsn);
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public void applyReplicated(byte[] records, long lsnFirst, long lsnLast) {
+        Objects.requireNonNull(records, "records");
+        requireReplica("apply replicated records");
+        writer.lock();
+        try {
+            requireOpen();
+            replicaWriter.apply(records, lsnFirst, lsnLast);
+        } finally {
+            writer.unlock();
+        }
+    }
+
     public void restoreSymbol(int id, byte[] utf8) {
         state.symbols().append(id, utf8, 0, utf8.length);
     }
@@ -455,9 +522,9 @@ public final class GraphKernel implements AutoCloseable {
             } else {
                 applier.applyTuple(false, object, relation, subjectRelation, subject);
             }
-            appliedLsn = lsn;
+            state.appliedLsn(lsn);
         } catch (RuntimeException | Error e) {
-            faulted = true;
+            state.fault();
             throw e;
         } finally {
             sequence.endWrite();
@@ -540,9 +607,9 @@ public final class GraphKernel implements AutoCloseable {
         sequence.beginWrite();
         try {
             applyBatch(batch);
-            appliedLsn = lsn;
+            state.appliedLsn(lsn);
         } catch (RuntimeException | Error e) {
-            faulted = true;
+            state.fault();
             throw e;
         } finally {
             sequence.endWrite();
@@ -641,8 +708,14 @@ public final class GraphKernel implements AutoCloseable {
         if (closed) {
             throw new IllegalStateException("graph is closed");
         }
-        if (faulted) {
-            throw new IllegalStateException("the graph state is inconsistent with its log; reopen the graph");
+        if (state.faulted()) {
+            throw new IllegalStateException(FAULTED_MESSAGE);
+        }
+    }
+
+    private void requireReplica(String action) {
+        if (!isReplica()) {
+            throw new IllegalStateException("only a follower can " + action);
         }
     }
 

@@ -134,6 +134,7 @@ record what Build Step 1 settled while implementing them.
 | D124 | Event log | `EventLog` extracted from `ShipState` and shared with the follower state | Step 3 review 2026-10-08 |
 | D125 | Takeover shape | An orchestrator over three injected steps so the simulator can substitute the open | Step 3 review 2026-10-08 |
 | D126 | Read gate | `FollowerGate` in `GraphSession.requireOpen`; the token wait uses `read_wait_ms`, so `nodus_check` keeps its signature | Step 3 review 2026-10-08 |
+| D127 | Replica apply contract | `applyReplicated` checks a whole chunk before it applies any of it: every record's CRC, contiguous LSNs from the position, whole transactions, and the declared range. Then each transaction is prepared outside the write section and applied in one write section that also publishes the position. A prepare failure leaves the last whole transaction applied and the replica usable; a failure inside the section faults the replica and refuses further applies while reads keep serving. The applied LSN and the fault flag moved from `GraphKernel` into `GraphState` so the primary and replica writers share one place. `restorePosition` is a loader hook, `requireWritable` is public so `TupleStore` refuses before it resolves anything | Build Step 3 item 1.6 |
 
 ## Build Step 1 implementation notes
 

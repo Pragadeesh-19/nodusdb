@@ -19,11 +19,38 @@ final class GraphState {
     private EdgeTables indirect;
     private volatile RelationCatalog catalog = RelationCatalog.EMPTY;
     private volatile KeyKind keyKind = KeyKind.UNSET;
+    private volatile long appliedLsn;
+    private volatile long lastCommitMicros;
+    private boolean faulted;
 
     GraphState(MemoryBudget budget) {
         this.budget = budget;
         this.symbols = new SymbolTable(arena, budget);
         this.direct = new EdgeTables(arena, budget);
+    }
+
+    long appliedLsn() {
+        return appliedLsn;
+    }
+
+    void appliedLsn(long lsn) {
+        appliedLsn = lsn;
+    }
+
+    long lastCommitMicros() {
+        return lastCommitMicros;
+    }
+
+    void lastCommitMicros(long micros) {
+        lastCommitMicros = micros;
+    }
+
+    boolean faulted() {
+        return faulted;
+    }
+
+    void fault() {
+        faulted = true;
     }
 
     MemoryBudget budget() {
