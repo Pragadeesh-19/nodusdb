@@ -85,7 +85,7 @@ public final class ShipStats {
 
     private static void events(JsonWriter json, ShipState state) {
         json.name("events").beginArray();
-        for (ShipState.Event event : state.recentEvents()) {
+        for (EventLog.Event event : state.recentEvents()) {
             json.beginObject().name("seq").value(event.seq()).name("message").value(event.message()).endObject();
         }
         json.endArray();

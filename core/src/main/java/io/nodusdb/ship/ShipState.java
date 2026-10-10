@@ -5,9 +5,6 @@ import io.nodusdb.error.ShipTimeoutException;
 import io.nodusdb.error.WriterFencedException;
 import io.nodusdb.log.ShipWatermark;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -27,9 +24,6 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                            RetentionStatus retention, ProjectionStatus projection) {
     }
 
-    public record Event(long seq, String message) {
-    }
-
     public record ReferenceStatus(long seq, long lsn, long committedNanos, long failures, String lastError) {
     }
 
@@ -45,15 +39,13 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
                                    long lastCommitNanos, long commits, long rows, long failures, String lastError) {
     }
 
-    private static final int MAX_EVENTS = 64;
     private static final long DEFAULT_RING_BYTES = 32L << 20;
 
     private final Object monitor = new Object();
     private final long epoch;
     private final long backlogCapBytes;
     private final ChainRing ring;
-    private final Deque<Event> events = new ArrayDeque<>();
-    private long eventSeq;
+    private final EventLog events = new EventLog();
     private Phase phase = Phase.STARTING;
     private long shippedLsn;
     private long chainSeq;
@@ -485,27 +477,15 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     }
 
     public List<String> drainEvents() {
-        synchronized (monitor) {
-            List<String> drained = new ArrayList<>(events.size());
-            for (Event event : events) {
-                drained.add(event.message());
-            }
-            events.clear();
-            return drained;
-        }
+        return events.drain();
     }
 
-    public List<Event> recentEvents() {
-        synchronized (monitor) {
-            return List.copyOf(events);
-        }
+    public List<EventLog.Event> recentEvents() {
+        return events.recent();
     }
 
     private void event(String message) {
-        if (events.size() == MAX_EVENTS) {
-            events.removeFirst();
-        }
-        events.addLast(new Event(++eventSeq, message));
+        events.add(message);
     }
 
     private void failFastIfTerminal(long tokenEpoch, long lsn) {

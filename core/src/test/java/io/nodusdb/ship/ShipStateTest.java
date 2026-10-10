@@ -290,17 +290,17 @@ class ShipStateTest {
         state.active();
         state.failed("two");
 
-        List<ShipState.Event> first = state.recentEvents();
-        List<ShipState.Event> again = state.recentEvents();
+        List<EventLog.Event> first = state.recentEvents();
+        List<EventLog.Event> again = state.recentEvents();
 
-        assertEquals(List.of(new ShipState.Event(1, "shipping failed: one"),
-                new ShipState.Event(2, "shipping failed: two")), first);
+        assertEquals(List.of(new EventLog.Event(1, "shipping failed: one"),
+                new EventLog.Event(2, "shipping failed: two")), first);
         assertEquals(first, again);
         for (int i = 0; i < 100; i++) {
             state.active();
             state.failed("later " + i);
         }
-        List<ShipState.Event> bounded = state.recentEvents();
+        List<EventLog.Event> bounded = state.recentEvents();
         assertEquals(64, bounded.size());
         assertEquals(102, bounded.get(63).seq());
         assertEquals(39, bounded.get(0).seq());
