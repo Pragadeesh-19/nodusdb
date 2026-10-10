@@ -15,7 +15,16 @@ from .errors import (
     NodusUpgradeRequiredError,
     NodusWriterFencedError,
 )
-from .follower import Follower, Restored, restore
+from .follower import (
+    Follower,
+    Restored,
+    SalvagedChange,
+    SalvagedTransaction,
+    SalvageReport,
+    TakeoverReport,
+    restore,
+    salvage,
+)
 from .graph import Graph, Token, Transaction
 from .lake import LakeTable, key_hash
 from .shipping import (
@@ -46,7 +55,11 @@ __all__ = [
     "NodusUpgradeRequiredError",
     "NodusWriterFencedError",
     "Restored",
+    "SalvageReport",
+    "SalvagedChange",
+    "SalvagedTransaction",
     "Shipping",
+    "TakeoverReport",
     "Token",
     "Transaction",
     "UpgradeReport",
@@ -56,6 +69,7 @@ __all__ = [
     "generate_signing_key",
     "key_hash",
     "restore",
+    "salvage",
     "static_credentials",
     "upgrade",
     "upgrade_cleanup",

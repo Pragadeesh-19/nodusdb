@@ -9,6 +9,8 @@ from .errors import error_for
 from .stores import directory_store, s3_store, without_none
 
 Path = typing.Union[str, os.PathLike]
+SALVAGE_CAPACITY = 1 << 16
+SALVAGE_ATTEMPTS = 3
 
 
 @dataclasses.dataclass(frozen=True)
@@ -93,3 +95,89 @@ def restore(follower, target, library_path=None):
         detail = _native.last_error_message(library, thread)
         raise error_for(code, f"restore failed: {detail}" if detail else "restore failed")
     return Restored(applied_lsn=report[0], epoch=report[1], snapshot_lsn=report[2])
+
+
+@dataclasses.dataclass(frozen=True)
+class TakeoverReport:
+    """What a takeover did: the epoch it claimed to fence the old writer, the epoch the new writer runs in, the
+    last LSN of the old writer it carries over, and how many restores it needed."""
+
+    claimed_epoch: int
+    epoch: int
+    handoff_lsn: int
+    attempts: int
+
+
+@dataclasses.dataclass(frozen=True)
+class SalvagedChange:
+    kind: str
+    object: str
+    relation: str
+    subject: str
+    subject_relation: str
+
+
+@dataclasses.dataclass(frozen=True)
+class SalvagedTransaction:
+    first_lsn: int
+    last_lsn: int
+    commit_micros: int
+    changes: typing.Tuple[SalvagedChange, ...]
+
+
+@dataclasses.dataclass(frozen=True)
+class SalvageReport:
+    """What an old writer's directory holds above the point where the chain moved on.
+
+    handoff_lsn is the last LSN the chain keeps. It is provisional when no later writer has taken over yet, and
+    then it is only the end of the chain. unavailable_through_lsn is non-zero when a checkpoint trimmed
+    transactions above the handoff from the log, so they cannot be listed."""
+
+    handoff_lsn: int
+    provisional: bool
+    local_last_lsn: int
+    unavailable_through_lsn: int
+    transactions: typing.Tuple[SalvagedTransaction, ...]
+
+
+def salvage(follower, directory, library_path=None):
+    """List the transactions in an old writer's directory that never reached the chain. Nothing is written.
+
+    The directory must not be open in any process."""
+    if not isinstance(follower, Follower):
+        raise TypeError(f"expected a Follower, got {type(follower).__name__}")
+    library, isolate = _native.load(library_path)
+    if not hasattr(library, "nodus_salvage_json"):
+        raise error_for(-10, "this libnodusdb has no salvage support; rebuild or upgrade it")
+    function = library.nodus_salvage_json
+    function.restype = ctypes.c_int
+    function.argtypes = [_native.THREAD, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_char_p,
+                         ctypes.c_int]
+    document = follower.to_json().encode("utf-8")
+    thread = _native.current_thread(library, isolate)
+    capacity = SALVAGE_CAPACITY
+    for _ in range(SALVAGE_ATTEMPTS):
+        buffer = ctypes.create_string_buffer(capacity)
+        length = function(thread, document, len(document), os.fsencode(os.fspath(directory)), buffer, capacity)
+        if length < 0:
+            detail = _native.last_error_message(library, thread)
+            raise error_for(length, f"salvage failed: {detail}" if detail else "salvage failed")
+        if length <= capacity:
+            return _salvage_report(json.loads(buffer.raw[:length].decode("utf-8")))
+        capacity = length
+    raise error_for(-1, "the salvage report kept growing while it was being read")
+
+
+def _salvage_report(document):
+    transactions = tuple(
+        SalvagedTransaction(
+            first_lsn=item["first_lsn"], last_lsn=item["last_lsn"], commit_micros=item["commit_micros"],
+            changes=tuple(
+                SalvagedChange(kind=change["kind"], object=change["object"], relation=change["relation"],
+                               subject=change["subject"], subject_relation=change["subject_relation"])
+                for change in item["changes"]))
+        for item in document["transactions"])
+    return SalvageReport(
+        handoff_lsn=document["handoff_lsn"], provisional=document["provisional"],
+        local_last_lsn=document["local_last_lsn"], unavailable_through_lsn=document["unavailable_through_lsn"],
+        transactions=transactions)

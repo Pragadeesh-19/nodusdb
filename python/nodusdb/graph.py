@@ -13,7 +13,7 @@ import weakref
 from . import _native
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
 from .errors import NodusShipTimeoutError, NodusStaleReadError, NodusUnsupportedError
-from .follower import Follower
+from .follower import Follower, TakeoverReport
 from .shipping import Shipping
 
 LOGGER = logging.getLogger("nodusdb")
@@ -143,10 +143,11 @@ def _int32_pointer(column):
 
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async",
-                 max_memory_mb=None, shipping=None, follow=None):
+                 max_memory_mb=None, shipping=None, follow=None, takeover=False):
         limit = _memory_limit_bytes(max_memory_mb)
         configuration = _shipping_document(shipping, path)
         follower = _follower_document(follow, path, shipping)
+        _require_takeover_inputs(takeover, path, shipping, follow)
         self._lib, self._isolate = _native.load(library_path)
         self._lock = threading.RLock()
         self._events = _EventLog()
@@ -154,7 +155,8 @@ class Graph:
         self._max_memory_mb = max_memory_mb
         self._shipping = configuration is not None
         self._follower = follower is not None
-        handle = self._open(path, sync_mode, limit, configuration, follower)
+        self.takeover_report = None
+        handle = self._open(path, sync_mode, limit, configuration, follower, takeover)
         self._owned = _native.OwnedHandle(
             self._lib, self._isolate, handle, _destroyer(self._lib),
             "graph close failed; the final checkpoint did not complete")
@@ -178,11 +180,18 @@ class Graph:
     def _handle(self):
         return self._owned.value
 
-    def _open(self, path, sync_mode, limit, configuration, follower=None):
+    def _open(self, path, sync_mode, limit, configuration, follower=None, takeover=False):
         if path is not None and sync_mode not in SYNC_MODES:
             raise ValueError(f"sync_mode must be 'async' or 'sync', got {sync_mode!r}")
         status = ctypes.c_int(0)
-        if follower is not None:
+        if takeover:
+            report = (ctypes.c_int64 * 4)()
+            handle = self._follower_export("nodus_takeover")(
+                self._thread, os.fsencode(os.fspath(path)), SYNC_MODES[sync_mode], limit, configuration,
+                len(configuration), report, ctypes.byref(status))
+            if handle:
+                self.takeover_report = TakeoverReport(report[0], report[1], report[2], report[3])
+        elif follower is not None:
             handle = self._follower_export("nodus_open_follower")(
                 self._thread, follower, len(follower), limit, ctypes.byref(status))
         elif path is None:
@@ -284,6 +293,12 @@ class Graph:
             lib.nodus_open_follower.restype = _native.HANDLE
             lib.nodus_open_follower.argtypes = [
                 thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.POINTER(ctypes.c_int),
+            ]
+        if hasattr(lib, "nodus_takeover"):
+            lib.nodus_takeover.restype = _native.HANDLE
+            lib.nodus_takeover.argtypes = [
+                thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.c_char_p, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int),
             ]
 
     def _shipping_export(self, name):
@@ -691,6 +706,15 @@ def _shipping_document(shipping, path):
     if isinstance(shipping, str):
         return shipping.encode("utf-8")
     raise TypeError(f"shipping must be a Shipping or a JSON document, got {type(shipping).__name__}")
+
+
+def _require_takeover_inputs(takeover, path, shipping, follow):
+    if not takeover:
+        return
+    if path is None or shipping is None:
+        raise ValueError("a takeover needs path= for the new directory and shipping= for the chain")
+    if follow is not None:
+        raise ValueError("a takeover opens a writer: do not pass follow=")
 
 
 def _follower_document(follow, path, shipping):

@@ -14,12 +14,14 @@ from nodusdb import (  # noqa: E402
     NodusChainTrustError,
     NodusError,
     NodusStaleReadError,
+    NodusWriterFencedError,
     NodusUnsupportedError,
     Shipping,
     Transaction,
     find_library,
     generate_signing_key,
     restore,
+    salvage,
 )
 
 SCHEMA = """
@@ -48,7 +50,8 @@ def _native_has_follower_exports():
     except NodusError:
         return False
     loaded = ctypes.CDLL(str(library))
-    return hasattr(loaded, "nodus_open_follower") and hasattr(loaded, "nodus_restore")
+    return all(hasattr(loaded, name) for name in (
+        "nodus_open_follower", "nodus_restore", "nodus_takeover", "nodus_salvage_json"))
 
 
 @unittest.skipUnless(_native_has_follower_exports(), "libnodusdb lacks the follower exports; rebuild the native library")
@@ -239,6 +242,81 @@ class FollowerTest(unittest.TestCase):
     def test_a_restore_needs_a_follower_description(self):
         with self.assertRaises(TypeError):
             restore({"store": {}}, self.root / "restored")
+
+    def shipping(self, **settings):
+        return Shipping.directory(
+            self.bucket, key_file=self.private_key, key_id=7, public_key_file=self.public_key, **settings)
+
+    def test_a_takeover_fences_the_old_writer_and_opens_the_graph_in_a_new_epoch(self):
+        writer = self.writer()
+        token = writer.write(Transaction().add("document:a", "viewer", "user:alice"), durability="lake")
+
+        taken = Graph(path=self.root / "taken", sync_mode="sync", shipping=self.shipping(interval_ms=10),
+                      takeover=True)
+        self.graphs.append(taken)
+
+        report = taken.takeover_report
+        self.assertEqual(token.epoch + 1, report.claimed_epoch)
+        self.assertEqual(token.epoch + 2, report.epoch)
+        self.assertEqual(token.lsn, report.handoff_lsn)
+        self.assertEqual(1, report.attempts)
+        self.assertTrue(taken.check("document:a", "view", "user:alice"))
+        fresh = taken.write(Transaction().add("document:b", "viewer", "user:alice"), durability="lake")
+        self.assertEqual(report.epoch, fresh.epoch)
+        with self.assertRaises(NodusWriterFencedError):
+            writer.write(Transaction().add("document:c", "viewer", "user:alice"), durability="lake")
+
+    def test_a_takeover_refuses_a_directory_that_is_not_empty(self):
+        writer = self.writer()
+        writer.write(Transaction().add("document:a", "viewer", "user:alice"), durability="lake")
+        occupied = self.root / "occupied"
+        occupied.mkdir()
+        (occupied / "keep.txt").write_text("keep")
+
+        with self.assertRaises(NodusUnsupportedError):
+            Graph(path=occupied, shipping=self.shipping(interval_ms=10), takeover=True)
+
+        self.assertEqual("keep", (occupied / "keep.txt").read_text())
+
+    def test_a_takeover_needs_a_path_and_shipping(self):
+        with self.assertRaises(ValueError):
+            Graph(takeover=True)
+        with self.assertRaises(ValueError):
+            Graph(path=self.root / "taken", takeover=True)
+
+    def test_salvage_lists_the_transactions_the_old_writer_never_shipped(self):
+        slow = Shipping.directory(
+            self.bucket, key_file=self.private_key, key_id=7, public_key_file=self.public_key, interval_ms=3_600_000)
+        writer = Graph(path=self.root / "graph", sync_mode="sync", shipping=slow)
+        self.graphs.append(writer)
+        writer.apply_schema(SCHEMA)
+        for index in range(3):
+            writer.write(Transaction().add(f"document:s{index}", "viewer", "user:alice"), durability="lake")
+        for index in range(2):
+            writer.write(Transaction().add(f"document:l{index}", "viewer", "user:alice"))
+        image = self.root / "image"
+        shutil.copytree(self.root / "graph", image, ignore=shutil.ignore_patterns("nodus.lock"))
+
+        report = salvage(self.description(), image)
+
+        self.assertTrue(report.provisional)
+        self.assertEqual(2, len(report.transactions))
+        change = report.transactions[0].changes[0]
+        self.assertEqual(("add", "document:l0", "viewer", "user:alice", ""),
+                         (change.kind, change.object, change.relation, change.subject, change.subject_relation))
+        self.assertEqual(report.handoff_lsn + 1, report.transactions[0].first_lsn)
+        self.assertEqual(0, report.unavailable_through_lsn)
+
+    def test_salvage_refuses_a_directory_that_is_open(self):
+        writer = self.writer()
+        writer.write(Transaction().add("document:a", "viewer", "user:alice"), durability="lake")
+
+        with self.assertRaises(NodusError):
+            salvage(self.description(), self.root / "graph")
+
+    def test_salvage_needs_a_follower_description(self):
+        with self.assertRaises(TypeError):
+            salvage({"store": {}}, self.root / "graph")
 
 
 if __name__ == "__main__":
