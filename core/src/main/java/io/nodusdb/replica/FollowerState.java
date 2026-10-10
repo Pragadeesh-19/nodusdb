@@ -68,7 +68,6 @@ public final class FollowerState {
             bootstraps++;
             phase = Phase.CATCHING_UP;
             settle(wasLagging);
-            events.add("bootstrapped from the snapshot at LSN " + snapshot + " and applied through LSN " + lsn);
             changed();
         }
     }

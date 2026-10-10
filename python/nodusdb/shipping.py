@@ -6,13 +6,14 @@ import typing
 
 from . import _native
 from .errors import error_for
+from .stores import directory_store, s3_store, without_none
 
 Path = typing.Union[str, os.PathLike]
 
 
 def static_credentials(access_key_id, secret_access_key, session_token=None):
     """Fixed S3 credentials. Prefer environment_credentials() or file_credentials() outside tests."""
-    return _without_none({
+    return without_none({
         "source": "static",
         "access_key_id": access_key_id,
         "secret_access_key": secret_access_key,
@@ -27,7 +28,7 @@ def environment_credentials():
 
 def file_credentials(path=None, profile=None):
     """Read a profile from an AWS credentials file (the default location and profile when omitted)."""
-    return _without_none({
+    return without_none({
         "source": "file",
         "path": None if path is None else os.fspath(path),
         "profile": profile,
@@ -59,20 +60,12 @@ class Shipping:
     @classmethod
     def directory(cls, path, **settings):
         """Ship into a local directory. Meant for tests and single-machine setups."""
-        return cls(store={"type": "directory", "directory": os.fspath(path)}, **settings)
+        return cls(store=directory_store(path), **settings)
 
     @classmethod
     def s3(cls, bucket, region, *, prefix=None, endpoint=None, path_style=None, ca_bundle=None, **settings):
         """Ship into an S3 bucket, or any S3-compatible server when endpoint is given."""
-        store = _without_none({
-            "type": "s3",
-            "bucket": bucket,
-            "region": region,
-            "prefix": prefix,
-            "endpoint": endpoint,
-            "path_style": path_style,
-            "ca_bundle": None if ca_bundle is None else os.fspath(ca_bundle),
-        })
+        store = s3_store(bucket, region, prefix, endpoint, path_style, ca_bundle)
         return cls(store=store, **settings)
 
     def to_json(self):
@@ -80,7 +73,7 @@ class Shipping:
             raise TypeError(f"key_id must be an int, got {type(self.key_id).__name__}")
         document = {
             "store": dict(self.store),
-            "signing": _without_none({
+            "signing": without_none({
                 "key_file": os.fspath(self.key_file),
                 "key_id": self.key_id,
                 "public_key_file": None if self.public_key_file is None else os.fspath(self.public_key_file),
@@ -88,7 +81,7 @@ class Shipping:
         }
         if self.credentials is not None:
             document["credentials"] = dict(self.credentials)
-        ship = _without_none({
+        ship = without_none({
             "interval_ms": self.interval_ms,
             "max_object_bytes": self.max_object_bytes,
             "backlog_cap_bytes": self.backlog_cap_bytes,
@@ -97,7 +90,7 @@ class Shipping:
         })
         if ship:
             document["ship"] = ship
-        iceberg = _without_none({
+        iceberg = without_none({
             "enabled": bool(self.iceberg),
             "commit_interval_s": self.iceberg_commit_interval_s,
             "table_retention_days": self.iceberg_table_retention_days,
@@ -120,7 +113,3 @@ def generate_signing_key(private_path, public_path, library_path=None):
     if code != 0:
         detail = _native.last_error_message(library, thread)
         raise error_for(code, f"generate_signing_key failed: {detail}" if detail else "generate_signing_key failed")
-
-
-def _without_none(values):
-    return {key: value for key, value in values.items() if value is not None}

@@ -73,10 +73,10 @@ class FollowerStatsTest {
         assertEquals("STALLED", follower.requireString("phase"));
         assertEquals("object 9 does not extend object 8", follower.requireString("stall_reason"));
         JsonArray events = follower.requireArray("events");
-        assertEquals(2, events.size());
+        assertEquals(1, events.size());
         assertEquals("stalled: object 9 does not extend object 8",
-                ((JsonObject) events.get(1)).requireString("message"));
-        assertEquals(2, ((JsonObject) events.get(1)).requireLong("seq"));
+                ((JsonObject) events.get(0)).requireString("message"));
+        assertEquals(1, ((JsonObject) events.get(0)).requireLong("seq"));
     }
 
     @Test

@@ -5,17 +5,21 @@ import logging
 import math
 import os
 import threading
+import time
 import typing
 import uuid
 import weakref
 
 from . import _native
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
-from .errors import NodusShipTimeoutError, NodusUnsupportedError
+from .errors import NodusShipTimeoutError, NodusStaleReadError, NodusUnsupportedError
+from .follower import Follower
 from .shipping import Shipping
 
 LOGGER = logging.getLogger("nodusdb")
 DEFAULT_SHIP_TIMEOUT = 30.0
+DEFAULT_FOLLOW_TIMEOUT = 30.0
+FOLLOW_POLL_SECONDS = 0.01
 INITIAL_STATS_CAPACITY = 1 << 14
 STATS_ATTEMPTS = 3
 MAX_WAIT_MILLISECONDS = 2**62
@@ -139,16 +143,18 @@ def _int32_pointer(column):
 
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async",
-                 max_memory_mb=None, shipping=None):
+                 max_memory_mb=None, shipping=None, follow=None):
         limit = _memory_limit_bytes(max_memory_mb)
         configuration = _shipping_document(shipping, path)
+        follower = _follower_document(follow, path, shipping)
         self._lib, self._isolate = _native.load(library_path)
         self._lock = threading.RLock()
         self._events = _EventLog()
         self._bind_signatures()
         self._max_memory_mb = max_memory_mb
         self._shipping = configuration is not None
-        handle = self._open(path, sync_mode, limit, configuration)
+        self._follower = follower is not None
+        handle = self._open(path, sync_mode, limit, configuration, follower)
         self._owned = _native.OwnedHandle(
             self._lib, self._isolate, handle, _destroyer(self._lib),
             "graph close failed; the final checkpoint did not complete")
@@ -172,11 +178,14 @@ class Graph:
     def _handle(self):
         return self._owned.value
 
-    def _open(self, path, sync_mode, limit, configuration):
+    def _open(self, path, sync_mode, limit, configuration, follower=None):
         if path is not None and sync_mode not in SYNC_MODES:
             raise ValueError(f"sync_mode must be 'async' or 'sync', got {sync_mode!r}")
         status = ctypes.c_int(0)
-        if path is None:
+        if follower is not None:
+            handle = self._follower_export("nodus_open_follower")(
+                self._thread, follower, len(follower), limit, ctypes.byref(status))
+        elif path is None:
             handle = self._lib.nodus_create_limited(self._thread, limit, ctypes.byref(status))
         elif configuration is None:
             handle = self._lib.nodus_open_durable_limited(
@@ -271,11 +280,22 @@ class Graph:
         if hasattr(lib, "nodus_stats_json"):
             lib.nodus_stats_json.restype = ctypes.c_int
             lib.nodus_stats_json.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int]
+        if hasattr(lib, "nodus_open_follower"):
+            lib.nodus_open_follower.restype = _native.HANDLE
+            lib.nodus_open_follower.argtypes = [
+                thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.POINTER(ctypes.c_int),
+            ]
 
     def _shipping_export(self, name):
         function = getattr(self._lib, name, None)
         if function is None:
             raise error_for(NodusUnsupportedError.code, "this libnodusdb has no shipping support; rebuild or upgrade it")
+        return function
+
+    def _follower_export(self, name):
+        function = getattr(self._lib, name, None)
+        if function is None:
+            raise error_for(NodusUnsupportedError.code, "this libnodusdb has no follower support; rebuild or upgrade it")
         return function
 
     @serialized
@@ -354,6 +374,23 @@ class Graph:
                 return document
             capacity = length
         raise NodusError("stats kept growing while being read")
+
+    def wait_until_current(self, timeout=DEFAULT_FOLLOW_TIMEOUT):
+        """Wait, for at most timeout seconds, until a follower has loaded its snapshot and reached the chain head.
+
+        Raises NodusStaleReadError when the time runs out, and NodusError when the follower has stalled."""
+        if not self._follower:
+            raise NodusUnsupportedError("only a follower waits to become current")
+        deadline = time.monotonic() + _wait_milliseconds(timeout) / 1000
+        while True:
+            follower = self.stats()["follower"]
+            if follower["phase"] == "CURRENT":
+                return
+            if follower["phase"] == "STALLED":
+                raise NodusError(f"the follower is stalled: {follower['stall_reason']}")
+            if time.monotonic() >= deadline:
+                raise NodusStaleReadError(f"the follower is {follower['phase']} and has not reached the chain head")
+            time.sleep(FOLLOW_POLL_SECONDS)
 
     @serialized
     def _write_locally(self, transaction):
@@ -513,6 +550,8 @@ class Graph:
         if len(kinds) > 1:
             raise TypeError("an edge must use one kind of node key, not a mix of integers and strings")
         kind = kinds.pop()
+        if self._follower and self._kind == KIND_UNSET:
+            self._refresh_kind()
         if self._kind not in (KIND_UNSET, kind):
             raise TypeError(f"this graph uses {KIND_NAMES[self._kind]}; got {KIND_NAMES[kind]}")
         if kind == KIND_INTEGER:
@@ -654,6 +693,20 @@ def _shipping_document(shipping, path):
     raise TypeError(f"shipping must be a Shipping or a JSON document, got {type(shipping).__name__}")
 
 
+def _follower_document(follow, path, shipping):
+    if follow is None:
+        return None
+    if path is not None:
+        raise ValueError("a follower keeps no graph directory of its own: do not pass path=")
+    if shipping is not None:
+        raise ValueError("a follower does not ship: pass either follow= or shipping=")
+    if isinstance(follow, Follower):
+        return follow.to_json().encode("utf-8")
+    if isinstance(follow, str):
+        return follow.encode("utf-8")
+    raise TypeError(f"follow must be a Follower or a JSON document, got {type(follow).__name__}")
+
+
 def _wait_milliseconds(timeout):
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
         raise TypeError(f"timeout must be a number of seconds, got {type(timeout).__name__}")
@@ -675,15 +728,15 @@ def _token_parts(token):
 class _EventLog:
     def __init__(self):
         self._lock = threading.Lock()
-        self._seen = 0
+        self._seen = {"shipping": 0, "follower": 0}
 
     def log_new(self, document):
-        events = document.get("shipping", {}).get("events", ())
         with self._lock:
-            for event in events:
-                if event["seq"] > self._seen:
-                    LOGGER.warning("%s", event["message"])
-                    self._seen = event["seq"]
+            for block in self._seen:
+                for event in document.get(block, {}).get("events", ()):
+                    if event["seq"] > self._seen[block]:
+                        LOGGER.warning("%s", event["message"])
+                        self._seen[block] = event["seq"]
 
 
 def _destroyer(library):
