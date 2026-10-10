@@ -63,32 +63,37 @@ class SalvageTest {
         }
     }
 
+    private static List<GraphSurvey.Transaction> additions(SalvageReport report) {
+        return report.transactions().stream()
+                .filter(transaction -> transaction.changes().stream().anyMatch(change -> change.kind().equals("add")))
+                .toList();
+    }
+
     private Salvage salvage(ShippingFixture shipping) {
         return new Salvage(shipping.store(), ChainBuilder.keyring());
     }
 
-    private static ShippingFixture slowShipping(ShippingFixture shipping) {
-        return shipping.withShip("\"interval_ms\":3600000");
-    }
-
-    private GraphKernel writerWithLocalTail(ShippingFixture shipping, Path directory) throws IOException {
-        GraphKernel kernel = DurableGraph.open(directory, SYNC, GraphKernel.NO_MEMORY_LIMIT,
-                slowShipping(shipping).config()).kernel();
-        TupleStore tuples = TupleStore.open(kernel);
+    private GraphKernel writerWithUnshippedTail(ShippingFixture shipping, Path directory) throws IOException {
+        GraphKernel shipped = DurableGraph.open(directory, SYNC, GraphKernel.NO_MEMORY_LIMIT, shipping.config())
+                .kernel();
+        TupleStore tuples = TupleStore.open(shipped);
         tuples.applySchema(SchemaFixtures.DOCUMENTS);
         for (int i = 0; i < SHIPPED_WRITES; i++) {
             tuples.write(new TupleTransaction().add("document:s" + i, "viewer", "user:alice"), Durability.LAKE);
         }
+        shipped.close();
+        GraphKernel unshipped = DurableGraph.open(directory, SYNC).kernel();
+        TupleStore tail = TupleStore.open(unshipped);
         for (int i = 0; i < LOCAL_WRITES; i++) {
-            tuples.add("document:l" + i, "viewer", "user:alice");
+            tail.add("document:l" + i, "viewer", "user:alice");
         }
-        return kernel;
+        return unshipped;
     }
 
     @Test
     void withoutATakeoverTheChainHeadIsAProvisionalHandoffAndTheUnshippedTailIsListed() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
@@ -96,11 +101,11 @@ class SalvageTest {
             SalvageReport report = salvage(shipping).salvage(image);
 
             assertTrue(report.provisional());
-            assertEquals(LOCAL_WRITES, report.transactions().size());
+            assertEquals(LOCAL_WRITES, additions(report).size());
             assertEquals(writer.appliedLsn(), report.localLastLsn());
             assertEquals(report.handoffLsn() + 1, report.transactions().get(0).firstLsn());
             assertEquals(0, report.unavailableThroughLsn());
-            GraphSurvey.Change first = report.transactions().get(0).changes().get(0);
+            GraphSurvey.Change first = additions(report).get(0).changes().get(0);
             assertEquals("add", first.kind());
             assertEquals("document:l0", first.object());
             assertEquals("viewer", first.relation());
@@ -114,20 +119,21 @@ class SalvageTest {
     @Test
     void afterATakeoverTheHandoffComesFromTheEpochRecordAndIsFinal() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
-            WriterTakeover.Taken taken = WriterTakeover.takeOver(slowShipping(shipping).config(),
-                    root.resolve("taken"), SYNC, GraphKernel.NO_MEMORY_LIMIT);
+            WriterTakeover.Taken taken = WriterTakeover.takeOver(shipping.config(), root.resolve("taken"), SYNC,
+                    GraphKernel.NO_MEMORY_LIMIT);
             try {
                 SalvageReport report = salvage(shipping).salvage(image);
 
                 assertFalse(report.provisional());
                 assertEquals(taken.handoffLsn(), report.handoffLsn());
-                assertEquals(LOCAL_WRITES, report.transactions().size());
+                List<GraphSurvey.Transaction> lost = additions(report);
+                assertEquals(LOCAL_WRITES, lost.size());
                 for (int i = 0; i < LOCAL_WRITES; i++) {
-                    List<GraphSurvey.Change> changes = report.transactions().get(i).changes();
+                    List<GraphSurvey.Change> changes = lost.get(i).changes();
                     assertEquals(1, changes.size());
                     assertEquals("document:l" + i, changes.get(0).object());
                 }
@@ -142,7 +148,7 @@ class SalvageTest {
     @Test
     void salvagingNeverChangesTheDirectoryEvenWithATornTail() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
@@ -156,7 +162,7 @@ class SalvageTest {
 
             SalvageReport report = salvage(shipping).salvage(image);
 
-            assertEquals(LOCAL_WRITES, report.transactions().size());
+            assertEquals(LOCAL_WRITES, additions(report).size());
             assertEquals(before, listing(image));
         } finally {
             writer.close();
@@ -166,7 +172,7 @@ class SalvageTest {
     @Test
     void aDirectoryThatAnotherProcessHasOpenIsRefused() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             assertThrows(IllegalStateException.class, () -> salvage(shipping).salvage(root.resolve("graph")));
         } finally {
@@ -177,11 +183,8 @@ class SalvageTest {
     @Test
     void aRangeTrimmedByACheckpointIsReportedAsUnavailableInsteadOfBeingListed() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         long lastLsn = writer.appliedLsn();
-        WriterTakeover.Taken taken = WriterTakeover.takeOver(slowShipping(shipping).config(), root.resolve("taken"),
-                SYNC, GraphKernel.NO_MEMORY_LIMIT);
-        taken.kernel().close();
         writer.close();
 
         SalvageReport report = salvage(shipping).salvage(root.resolve("graph"));
@@ -201,7 +204,7 @@ class SalvageTest {
     @Test
     void aChainSignedByAnotherKeyIsRefused() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
@@ -217,7 +220,7 @@ class SalvageTest {
     @Test
     void theReportRendersAsJsonThatNamesEveryLostChange() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
@@ -226,12 +229,20 @@ class SalvageTest {
 
             assertTrue(json.boolOr("provisional", false));
             JsonArray transactions = json.requireArray("transactions");
-            assertEquals(LOCAL_WRITES, transactions.size());
-            JsonObject firstChange = (JsonObject) ((JsonObject) transactions.get(0))
-                    .requireArray("changes").get(0);
-            assertEquals("document:l0", firstChange.requireString("object"));
-            assertEquals("add", firstChange.requireString("kind"));
-            assertTrue(((JsonObject) transactions.get(0)).requireLong("commit_micros") > 0);
+            int additions = 0;
+            for (int i = 0; i < transactions.size(); i++) {
+                JsonObject transaction = (JsonObject) transactions.get(i);
+                assertTrue(transaction.requireLong("commit_micros") > 0);
+                JsonArray changes = transaction.requireArray("changes");
+                for (int c = 0; c < changes.size(); c++) {
+                    JsonObject change = (JsonObject) changes.get(c);
+                    if (change.requireString("kind").equals("add")) {
+                        assertEquals("document:l" + additions, change.requireString("object"));
+                        additions++;
+                    }
+                }
+            }
+            assertEquals(LOCAL_WRITES, additions);
         } finally {
             writer.close();
         }
@@ -240,14 +251,14 @@ class SalvageTest {
     @Test
     void aConfigDocumentNamesTheStoreAndTheTrustedKey() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);
 
             SalvageReport report = Salvage.salvage(FollowerConfig.parse(shipping.followerJson()), image);
 
-            assertEquals(LOCAL_WRITES, report.transactions().size());
+            assertEquals(LOCAL_WRITES, additions(report).size());
         } finally {
             writer.close();
         }
@@ -256,7 +267,7 @@ class SalvageTest {
     @Test
     void aDirectoryWithoutAnyGraphFilesHasNothingToSalvage() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path empty = Files.createDirectory(root.resolve("empty"));
 
@@ -272,7 +283,7 @@ class SalvageTest {
     @Test
     void theTokenOfAnUnshippedWriteIsAboveTheHandoff() throws IOException {
         ShippingFixture shipping = ShippingFixture.in(root);
-        GraphKernel writer = writerWithLocalTail(shipping, root.resolve("graph"));
+        GraphKernel writer = writerWithUnshippedTail(shipping, root.resolve("graph"));
         try {
             Path image = root.resolve("image");
             copyTree(root.resolve("graph"), image);

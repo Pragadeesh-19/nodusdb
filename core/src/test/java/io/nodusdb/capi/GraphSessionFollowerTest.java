@@ -63,6 +63,10 @@ class GraphSessionFollowerTest {
         }
     }
 
+    private static long appliedLsn(GraphSession session) {
+        return JsonParser.parseObject(session.statsJson()).requireLong("applied_lsn");
+    }
+
     private static String phase(GraphSession session) {
         return JsonParser.parseObject(session.statsJson()).requireObject("follower").requireString("phase");
     }
@@ -174,7 +178,8 @@ class GraphSessionFollowerTest {
             writer.applySchema(SchemaFixtures.DOCUMENTS);
             Token token = writer.writeTuples(new TupleTransaction().add("document:a", "viewer", "user:alice"),
                     Durability.LAKE);
-            await(() -> "CURRENT".equals(phase(follower)), "the follower to become current");
+            await(() -> "CURRENT".equals(phase(follower))
+                    && appliedLsn(follower) >= token.lsn(), "the follower to apply the write and become current");
 
             JsonObject stats = JsonParser.parseObject(follower.statsJson());
 
