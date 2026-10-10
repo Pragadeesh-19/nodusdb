@@ -20,6 +20,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongFunction;
 
 final class ShipperRig implements AutoCloseable {
 
@@ -33,6 +34,7 @@ final class ShipperRig implements AutoCloseable {
     final FaultyObjectStore store;
     final ShipSettings settings;
     final SegmentedLog log;
+    LongFunction<String> snapshotContent = lsn -> "snapshot " + lsn;
     private final AtomicLong clock = new AtomicLong();
     private long localEpoch;
     private final AtomicInteger nextObject = new AtomicInteger(1);
@@ -89,7 +91,7 @@ final class ShipperRig implements AutoCloseable {
     }
 
     ChainBody.SnapshotRef referenceAt(long lsn) {
-        byte[] content = ("snapshot " + lsn).getBytes(StandardCharsets.UTF_8);
+        byte[] content = snapshotContent.apply(lsn).getBytes(StandardCharsets.UTF_8);
         String path = ChainLayout.snapshotKey(lsn);
         memory.put(path, content);
         return new ChainBody.SnapshotRef(path, ChainHash.sha256(content), lsn);
@@ -115,7 +117,7 @@ final class ShipperRig implements AutoCloseable {
     private SnapshotPublisher publisher() {
         return floor -> {
             long lsn = log.lastLsn();
-            byte[] content = ("snapshot " + lsn).getBytes(StandardCharsets.UTF_8);
+            byte[] content = snapshotContent.apply(lsn).getBytes(StandardCharsets.UTF_8);
             String path = ChainLayout.snapshotKey(lsn);
             store.put(path, content);
             return new ChainBody.SnapshotRef(path, ChainHash.sha256(content), lsn);
