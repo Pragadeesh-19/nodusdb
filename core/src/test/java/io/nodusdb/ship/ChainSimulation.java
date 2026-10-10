@@ -229,7 +229,8 @@ final class ChainSimulation implements AutoCloseable {
         }
         EpochClaims intruder = new EpochClaims(rig.memory, 0xF00D, 9, () -> 0);
         long claimed = intruder.claim(intruder.highestClaimed() + 1, 64);
-        fenceSeq = ChainAudit.chainKeys(rig.memory).size();
+        List<String> keys = ChainAudit.chainKeys(rig.memory);
+        fenceSeq = keys.isEmpty() ? 0 : ChainLayout.chainSeq(keys.get(keys.size() - 1)).orElseThrow();
         fenceEpoch = claimed;
     }
 
