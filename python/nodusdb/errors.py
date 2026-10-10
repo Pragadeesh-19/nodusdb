@@ -75,12 +75,18 @@ class NodusShipTimeoutError(NodusError):
     token = None
 
 
+class NodusChainTrustError(NodusError):
+    """The object store holds chain data that fails verification: a bad signature, an unknown signer, a broken link, a rollback or a fork."""
+
+    code = -15
+
+
 _BY_CODE = {
     error.code: error
     for error in (
         NodusMemoryError, NodusStaleReadError, NodusCheckDepthError, NodusSchemaError, NodusLogBacklogError,
         NodusWriterFencedError, NodusCorruptLogError, NodusUnsupportedError, NodusUpgradeRequiredError,
-        NodusIndeterminateError, NodusTokenLostError, NodusShipTimeoutError,
+        NodusIndeterminateError, NodusTokenLostError, NodusShipTimeoutError, NodusChainTrustError,
     )
 }
 

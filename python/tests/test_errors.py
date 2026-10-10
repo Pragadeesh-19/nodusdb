@@ -20,6 +20,7 @@ CONTRACT = {
     -12: errors.NodusIndeterminateError,
     -13: errors.NodusTokenLostError,
     -14: errors.NodusShipTimeoutError,
+    -15: errors.NodusChainTrustError,
 }
 
 
@@ -46,8 +47,8 @@ class ErrorContractTest(unittest.TestCase):
         error.token = (3, 40)
         self.assertEqual((3, 40), error.token)
 
-    def test_the_contract_is_contiguous_from_minus_one_to_minus_fourteen(self):
-        self.assertEqual(set(range(-14, 0)) - {-2}, set(CONTRACT))
+    def test_the_contract_is_contiguous_from_minus_one_to_minus_fifteen(self):
+        self.assertEqual(set(range(-15, 0)) - {-2}, set(CONTRACT))
 
     def test_an_unknown_code_is_a_generic_error(self):
         self.assertIs(errors.NodusError, type(errors.error_for(-99, "unknown")))

@@ -1,5 +1,6 @@
 from ._native import find_library
 from .errors import (
+    NodusChainTrustError,
     NodusCheckDepthError,
     NodusCorruptLogError,
     NodusError,
@@ -28,6 +29,7 @@ from .upgrade import UpgradeReport, upgrade, upgrade_cleanup
 __all__ = [
     "Graph",
     "LakeTable",
+    "NodusChainTrustError",
     "NodusCheckDepthError",
     "NodusCorruptLogError",
     "NodusError",

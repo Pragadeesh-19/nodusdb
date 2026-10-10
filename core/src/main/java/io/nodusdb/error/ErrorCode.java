@@ -15,7 +15,8 @@ public enum ErrorCode {
     UPGRADE_REQUIRED(-11),
     INDETERMINATE(-12),
     TOKEN_LOST(-13),
-    SHIP_TIMEOUT(-14);
+    SHIP_TIMEOUT(-14),
+    CHAIN_TRUST(-15);
 
     private final int value;
 

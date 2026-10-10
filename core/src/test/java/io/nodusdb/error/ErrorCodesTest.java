@@ -1,6 +1,8 @@
 package io.nodusdb.error;
 
 import io.nodusdb.capi.Failures;
+import io.nodusdb.chain.ChainFormatException;
+import io.nodusdb.chain.ChainTrustException;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -16,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ErrorCodesTest {
 
     private static final int FIRST_CODE = -1;
-    private static final int LAST_CODE = -14;
+    private static final int LAST_CODE = -15;
 
     @Test
     void everyCodeIsUniqueAndInsideTheContractRange() {
@@ -29,7 +31,7 @@ class ErrorCodesTest {
     }
 
     @Test
-    void theCodesFormAContiguousRangeFromMinusOneToMinusFourteen() {
+    void theCodesFormAContiguousRangeFromMinusOneToMinusFifteen() {
         Set<Integer> values = Arrays.stream(ErrorCode.values()).map(ErrorCode::value).collect(Collectors.toSet());
 
         for (int value = FIRST_CODE; value >= LAST_CODE; value--) {
@@ -40,6 +42,8 @@ class ErrorCodesTest {
     @Test
     void everyExceptionReachesTheNativeCallerWithItsOwnCode() {
         Map<NodusException, ErrorCode> expected = new LinkedHashMap<>();
+        expected.put(new ChainTrustException("forged"), ErrorCode.CHAIN_TRUST);
+        expected.put(new ChainFormatException("damaged"), ErrorCode.CHAIN_TRUST);
         expected.put(new CheckDepthException("depth"), ErrorCode.CHECK_DEPTH);
         expected.put(new CorruptLogException("corrupt"), ErrorCode.CORRUPT_LOG);
         expected.put(new IndeterminateOutcomeException("indeterminate"), ErrorCode.INDETERMINATE);
