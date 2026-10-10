@@ -12,6 +12,7 @@ import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
+import io.nodusdb.kernel.catalog.RelationCatalog;
 import io.nodusdb.kernel.symbols.SymbolTable;
 import io.nodusdb.log.ShipWatermark;
 import io.nodusdb.log.record.RecordBatch;
@@ -35,6 +36,7 @@ public final class TupleStore {
     private final NodeTypes types;
     private final int depthLimit;
     private final ReentrantLock writer = new ReentrantLock();
+    private final ReentrantLock refresh = new ReentrantLock();
     private final ThreadLocal<CheckEvaluator> evaluators;
     private volatile CompiledSchema model;
 
@@ -64,7 +66,7 @@ public final class TupleStore {
     }
 
     public int schemaVersion() {
-        return model.version();
+        return currentModel().version();
     }
 
     public int depthLimit() {
@@ -76,6 +78,7 @@ public final class TupleStore {
     }
 
     public Token applySchema(String document) {
+        kernel.requireWritable();
         Objects.requireNonNull(document, "document");
         writer.lock();
         try {
@@ -91,7 +94,7 @@ public final class TupleStore {
                     plan.flags(), plan.canonicalDocument());
             batch.commit();
             long lsn = kernel.commit(batch);
-            model = SchemaCompiler.rebuild(kernel.catalog(), kernel.symbols());
+            refreshModel();
             return new Token(kernel.epoch(), lsn);
         } finally {
             writer.unlock();
@@ -123,6 +126,7 @@ public final class TupleStore {
     }
 
     public Token write(TupleTransaction transaction, Durability durability, Duration shipTimeout) {
+        kernel.requireWritable();
         Objects.requireNonNull(transaction, "transaction");
         Objects.requireNonNull(shipTimeout, "shipTimeout");
         if (durability != Durability.LAKE) {
@@ -165,7 +169,8 @@ public final class TupleStore {
         writer.lock();
         try {
             claimStringKeys();
-            Resolution resolution = new TupleResolver(model, kernel.symbols()).resolve(transaction.operations());
+            Resolution resolution = new TupleResolver(currentModel(), kernel.symbols())
+                    .resolve(transaction.operations());
             if (resolution.tuples().isEmpty()) {
                 return kernel.token();
             }
@@ -186,7 +191,7 @@ public final class TupleStore {
         if (atLeast != null) {
             requireFresh(atLeast);
         }
-        CompiledSchema current = model;
+        CompiledSchema current = currentModel();
         ObjectNames.requireSchema(current);
         int objectType = ObjectNames.typeIndex(current, object);
         ObjectNames.typeIndex(current, subject);
@@ -201,6 +206,29 @@ public final class TupleStore {
             return false;
         }
         return evaluators.get().check(current, objectNode, definition, subjectNode);
+    }
+
+    private CompiledSchema currentModel() {
+        CompiledSchema current = model;
+        if (current.version() == kernel.catalog().version()) {
+            return current;
+        }
+        return refreshModel();
+    }
+
+    private CompiledSchema refreshModel() {
+        refresh.lock();
+        try {
+            CompiledSchema current = model;
+            RelationCatalog catalog = kernel.catalog();
+            if (current.version() != catalog.version()) {
+                current = SchemaCompiler.rebuild(catalog, kernel.symbols());
+                model = current;
+            }
+            return current;
+        } finally {
+            refresh.unlock();
+        }
     }
 
     private void requireFresh(Token token) {
