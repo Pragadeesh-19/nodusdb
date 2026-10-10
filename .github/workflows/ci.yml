@@ -89,7 +89,7 @@ jobs:
       - name: Java tests
         env:
           NODUS_REQUIRE_PYTHON_VERIFIERS: "1"
-        run: mvn -B -ntp test -Dnodus.sim.seeds=300
+        run: mvn -B -ntp test "-Dnodus.sim.seeds=300"
 
       - name: Build native shared library
         run: mvn -B -ntp -Pnative -pl core package -DskipTests
