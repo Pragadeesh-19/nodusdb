@@ -52,6 +52,14 @@ public final class ShippingFixture {
         return new ShippingFixture(bucket, privateKey, publicKey, ship, members);
     }
 
+    public Path privateKeyFile() {
+        return privateKey;
+    }
+
+    public Path publicKeyFile() {
+        return publicKey;
+    }
+
     public Path bucket() {
         return bucket;
     }
