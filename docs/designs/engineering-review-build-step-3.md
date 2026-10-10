@@ -1,6 +1,6 @@
 # Engineering review: Build Step 3, followers, restore, takeover and the simulator
 
-Status: decisions D105 to D126 accepted on 2026-10-08. Implementation scope is Build Step 3 (section 12).
+Status: decisions D105 to D126 accepted on 2026-10-08. Implementation scope is Build Step 3 (section 12), built on branch feat/authz-step3. Decisions D127 to D134 record what the build refined (`docs/decisions.md`).
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 8 and 9, and
 [`engineering-review-build-step-2.md`](engineering-review-build-step-2.md). Where this document and those disagree
 about Build Step 3, this document wins (section 2 lists every amendment).
