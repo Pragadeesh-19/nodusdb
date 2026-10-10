@@ -7,12 +7,12 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 
-final class FileTrees {
+public final class FileTrees {
 
     private FileTrees() {
     }
 
-    static void deleteRecursively(Path root) throws IOException {
+    public static void deleteRecursively(Path root) throws IOException {
         if (!Files.exists(root)) {
             return;
         }
