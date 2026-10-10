@@ -97,6 +97,31 @@ class EpochClaimsTest {
     }
 
     @Test
+    void anEmptyStoreHasNoClaimedEpoch() {
+        assertEquals(0, claims.highestClaimed());
+    }
+
+    @Test
+    void theHighestClaimedEpochIsTheLargestNumberAmongTheClaimKeys() {
+        store.put(ChainLayout.epochKey(3), "{}".getBytes(StandardCharsets.UTF_8));
+        store.put(ChainLayout.epochKey(11), "{}".getBytes(StandardCharsets.UTF_8));
+        store.put(ChainLayout.epochKey(7), "{}".getBytes(StandardCharsets.UTF_8));
+        store.put("_nodus/epoch/not-a-claim.json", "{}".getBytes(StandardCharsets.UTF_8));
+        store.put(ChainLayout.chainKey(99), new byte[] {1});
+
+        assertEquals(11, claims.highestClaimed());
+    }
+
+    @Test
+    void theHighestClaimedEpochSpansMoreThanOnePageOfKeys() {
+        for (int epoch = 1; epoch <= 2_500; epoch++) {
+            store.put(ChainLayout.epochKey(epoch), new byte[] {1});
+        }
+
+        assertEquals(2_500, claims.highestClaimed());
+    }
+
+    @Test
     void concurrentClaimersAlwaysGetDistinctEpochs() throws Exception {
         int claimers = 12;
         ExecutorService pool = Executors.newFixedThreadPool(claimers);

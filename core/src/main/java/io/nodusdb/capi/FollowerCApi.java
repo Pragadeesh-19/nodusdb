@@ -1,7 +1,12 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.log.LogConfig;
+import io.nodusdb.log.SyncMode;
 import io.nodusdb.replica.FollowerConfig;
 import io.nodusdb.replica.Restore;
+import io.nodusdb.replica.Salvage;
+import io.nodusdb.replica.WriterTakeover;
+import io.nodusdb.ship.ShippingConfig;
 
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.c.function.CEntryPoint;
@@ -33,6 +38,49 @@ public final class FollowerCApi {
             NodusCApi.report(status, Failures.codeOf(e));
         }
         return WordFactory.nullPointer();
+    }
+
+    @CEntryPoint(name = "nodus_takeover")
+    public static VoidPointer takeover(IsolateThread thread, CCharPointer directory, int syncMode,
+                                       long maxMemoryBytes, CCharPointer configUtf8, int configLength,
+                                       CLongPointer reportOut, CIntPointer status) {
+        try {
+            LogConfig logConfig = LogConfig.withSyncMode(SyncMode.fromCode(syncMode));
+            ShippingConfig shipping = ShippingConfig.parse(
+                    new String(NodusCApi.readBytes(configUtf8, configLength), StandardCharsets.UTF_8));
+            WriterTakeover.Taken taken = WriterTakeover.takeOver(shipping, Path.of(NodusCApi.cString(directory)),
+                    logConfig, maxMemoryBytes);
+            long handle = NodusCApi.SESSIONS.adopt(taken.kernel());
+            if (reportOut.isNonNull()) {
+                reportOut.write(0, taken.claimedEpoch());
+                reportOut.write(1, taken.epoch());
+                reportOut.write(2, taken.handoffLsn());
+                reportOut.write(3, taken.attempts());
+            }
+            NodusCApi.report(status, NodusCApi.OK);
+            return WordFactory.pointer(handle);
+        } catch (IOException | RuntimeException e) {
+            NodusCApi.report(status, Failures.codeOf(e));
+        }
+        return WordFactory.nullPointer();
+    }
+
+    @CEntryPoint(name = "nodus_salvage_json")
+    public static int salvageJson(IsolateThread thread, CCharPointer configUtf8, int configLength,
+                                  CCharPointer directory, CCharPointer outBuf, int outCap) {
+        try {
+            FollowerConfig config = FollowerConfig.parse(
+                    new String(NodusCApi.readBytes(configUtf8, configLength), StandardCharsets.UTF_8));
+            byte[] json = Salvage.salvage(config, Path.of(NodusCApi.cString(directory))).toJson()
+                    .getBytes(StandardCharsets.UTF_8);
+            int count = Math.min(json.length, Math.max(outCap, 0));
+            for (int i = 0; i < count; i++) {
+                outBuf.write(i, json[i]);
+            }
+            return json.length;
+        } catch (IOException | RuntimeException e) {
+            return Failures.codeOf(e);
+        }
     }
 
     @CEntryPoint(name = "nodus_restore")

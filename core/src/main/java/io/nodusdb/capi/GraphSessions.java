@@ -36,6 +36,10 @@ public final class GraphSessions {
         return table.open(new GraphSession(kernel));
     }
 
+    public long adopt(GraphKernel kernel) {
+        return table.open(new GraphSession(kernel));
+    }
+
     public long openFollower(FollowerConfig config, long maxMemoryBytes) throws IOException {
         FollowerRuntime runtime = FollowerRuntime.start(config, maxMemoryBytes);
         try {
