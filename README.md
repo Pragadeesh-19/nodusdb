@@ -404,6 +404,44 @@ with Graph(path="graph", sync_mode="sync", shipping=shipping) as g:
 
 The bucket needs conditional writes (`If-None-Match`), which S3 supports, and an operator-owned signing key. NodusDB never trusts a key stored in the bucket: readers take the public key from their own configuration.
 
+## Reading the chain back
+
+The chain in the bucket holds everything a graph needs, so another process can rebuild the graph from it, follow it, or continue it as the writer. All of it verifies every object against a public key from its own configuration. NodusDB never trusts a key found in the bucket.
+
+```python
+from nodusdb import Follower, Graph, Shipping, environment_credentials, restore, salvage
+
+token = writer_token   # the Token a writer returned from write()
+
+follower = Follower.s3(
+    "my-bucket", "eu-west-1", prefix="graphs/prod",
+    public_key_file="signing.pub", key_id=1,
+    credentials=environment_credentials(),
+    read_wait_ms=1000,          # how long a check with a token waits for the follower to catch up
+    max_staleness_ms=30_000,    # optional: refuse reads once the head was not confirmed for this long
+    state_directory="/var/lib/nodus/follower",   # optional: remembers the furthest position it saw
+)
+
+with Graph(follow=follower) as replica:             # a read-only copy, rebuilt from the bucket
+    replica.wait_until_current()
+    replica.check("document:a", "view", "user:alice", at_least=token)   # waits for the write the token names
+    print(replica.stats()["follower"]["phase"])      # CURRENT, CATCHING_UP, LAGGING, STALLED
+
+restore(follower, "recovered-graph")                 # a durable graph directory, ready for Graph(path=...)
+```
+
+**A follower** downloads the newest snapshot it can verify, loads it, and then applies the chain object by object. Each transaction becomes visible whole. Writes raise `NodusUnsupportedError`. Reads raise `NodusStaleReadError` until the snapshot has loaded. By default a follower keeps answering from its last verified state when the store is down, and `stats()` says why it is behind. With `max_staleness_ms` it refuses instead. A check with `at_least=` waits up to `read_wait_ms` for the follower to reach the token, then raises `NodusStaleReadError`, or `NodusTokenLostError` when the write was acknowledged but a takeover dropped it.
+
+**What stops a follower.** A bad signature, an unknown signer, a broken link, a fork or a bucket that went backwards stops it with the reason in `stats()["follower"]["stall_reason"]`, and `restore()` and a takeover raise `NodusChainTrustError`. A follower that falls so far behind that retention deleted the objects it needs stops too ("fell behind retention; restart to rebuild"). It keeps serving what it has, and a restart rebuilds it from the newest snapshot. With `state_directory`, the follower writes a small checksummed file of the furthest object it has seen, so a restart against a rolled-back bucket is refused. A damaged file stops the start with `NodusCorruptLogError` naming it, and deleting it accepts the loss.
+
+**Restore.** `restore()` writes the directory into a sibling `.restore-tmp` and renames it into place when it is complete, so a crash never leaves something that looks like a graph. The target must not exist or must be empty.
+
+**Takeover.** To replace a dead writer, open a new directory with `Graph(path="new-graph", shipping=shipping, takeover=True)`. It claims the next epoch, which fences the old writer on its next commit, restores into the new directory, opens it as the writer, and waits until the chain holds its first object. `graph.takeover_report` has the epochs and the last LSN carried over. A `lake` write that returned before the takeover is in the new graph. A `local` write the old writer had not shipped is not, and `salvage()` lists it.
+
+**Salvage.** `salvage(follower, "old-graph")` reads the old writer's directory without writing to it, finds the last LSN the chain keeps, and returns the transactions above it with the names of what they changed. It refuses a directory another process has open. The handoff is `provisional` until a later writer has taken over. A checkpoint can have trimmed part of the range from the log, and `unavailable_through_lsn` says so.
+
+**Cost.** A follower makes one GET per `poll_interval_ms` (100 ms by default) when idle and one LIST per second. On the development laptop it applies about 2.5 million tuples a second on one core (`FollowerApplyBench`), and the check path pays nothing measurable for seeing a schema migration (`CheckModelBench`).
+
 ## Concurrency
 
 The kernel supports one writer and any number of readers. Every mutation runs inside a seqlock: a version counter is odd while an edge change is in progress and even otherwise. A reader checks the counter before and after each query. If a write overlapped the query, the reader discards the result and runs it again. Readers never take a lock and never block the writer, and a query never returns a half-applied change.
@@ -533,7 +571,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 - **Synchronous single calls are disk-bound.** On this laptop each one waits about 3.6 ms for its flush. Use batch calls for bulk loads.
 - **One writer.** The kernel allows one writer and many readers. Writes on one handle run one at a time.
 - **Schema retypes.** A schema version that turns a relation holding tuples into a tupleset relation, or retires it, is refused. Moving the tuples between the two table pairs in the same transaction is not built yet.
-- **Shipping is one-way.** The bucket receives the log, and nothing restores a graph from it yet. There is no follower or automatic failover. A directory that was written without shipping while a chain already existed, and has trimmed those records, is refused when shipping is turned back on.
+- **Failover is manual.** A follower, a restore and a takeover read the chain back, but nothing decides by itself that the writer is dead. A follower that fell behind retention needs a restart. A directory that was written without shipping while a chain already existed, and has trimmed those records, is refused when shipping is turned back on.
 - **Transactions are bounded.** A transaction must fit one write of 1 MiB. Split larger loads, or use `add_edges_from`, which writes one record per edge.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
