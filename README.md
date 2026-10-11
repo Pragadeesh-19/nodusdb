@@ -524,6 +524,14 @@ Prerequisites:
 - GraalVM with `native-image`, for the native library only: CE 22.0.2 locally, or Oracle GraalVM 25 as in CI. The toolchain changes the speed of the library. A local build with GraalVM CE 23 ran `add_edge` in about 1.2 ms where CE 22.0.2 took 9 microseconds, because memory-segment access was not optimized. Check a new toolchain with a timing before you trust it.
 - On Windows, Visual Studio 2022 with the C++ build tools.
 
+CI runs the Java tests on Oracle GraalVM 25 with 3 to 4 cores and a slow disk. A test that passes on a 16-core machine can fail there when it assumes a background thread is idle, has finished, or has not started. Before you push a change that touches threads, shipping, followers or any test that waits, run the suite pinned to two cores with CPU spinners on them (Windows):
+
+```powershell
+$env:JAVA_HOME = "C:\path\to\graalvm-jdk-25"
+powershell -File scripts\contention.ps1 "mvn -B -ntp -pl core test"
+powershell -File scripts\contention.ps1 "python -m pytest python/tests -q" -Cores 2 -Spinners 4
+```
+
 ```sh
 # Java tests. The Parquet, Avro and Iceberg tests judge their output with real readers:
 # pip install "pyiceberg[pyarrow]" fastavro pyarrow tzdata
