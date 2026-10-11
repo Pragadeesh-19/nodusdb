@@ -7,8 +7,15 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Comparator;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
+import java.util.stream.Stream;
 
 public final class ShippingFixture {
+
+    private static final long BREAK_DEADLINE_NANOS = TimeUnit.SECONDS.toNanos(10);
+    private static final long BREAK_RETRY_NANOS = TimeUnit.MILLISECONDS.toNanos(10);
 
     private final Path bucket;
     private final Path privateKey;
@@ -66,6 +73,33 @@ public final class ShippingFixture {
 
     public DirectoryObjectStore store() {
         return new DirectoryObjectStore(bucket);
+    }
+
+    public void breakStore() {
+        long deadline = System.nanoTime() + BREAK_DEADLINE_NANOS;
+        while (true) {
+            try {
+                deleteTree(bucket);
+                Files.writeString(bucket, "not a directory");
+                return;
+            } catch (IOException | UncheckedIOException raced) {
+                if (System.nanoTime() > deadline) {
+                    throw new IllegalStateException("the bucket directory could not be replaced", raced);
+                }
+                LockSupport.parkNanos(BREAK_RETRY_NANOS);
+            }
+        }
+    }
+
+    private static void deleteTree(Path path) throws IOException {
+        if (!Files.exists(path)) {
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(path)) {
+            for (Path entry : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
+                Files.deleteIfExists(entry);
+            }
+        }
     }
 
     public String json() {

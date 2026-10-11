@@ -28,7 +28,6 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -189,8 +188,7 @@ class DurableGraphShippingEdgeTest {
         try {
             TupleStore store = schemaStore(kernel);
             store.write(grant("document:a"), Durability.LAKE);
-            deleteTree(fixture.bucket());
-            Files.writeString(fixture.bucket(), "not a directory");
+            fixture.breakStore();
 
             ShipTimeoutException failed = assertThrows(ShipTimeoutException.class,
                     () -> store.write(grant("document:b"), Durability.LAKE, Duration.ofMillis(500)));
@@ -329,14 +327,4 @@ class DurableGraphShippingEdgeTest {
         return count;
     }
 
-    private static void deleteTree(Path path) throws IOException {
-        if (!Files.exists(path)) {
-            return;
-        }
-        try (Stream<Path> walk = Files.walk(path)) {
-            for (Path entry : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
-                Files.delete(entry);
-            }
-        }
-    }
 }

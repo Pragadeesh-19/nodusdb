@@ -17,14 +17,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Comparator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -107,8 +104,7 @@ class GraphSessionShippingTest {
         try {
             session.applySchema(SchemaFixtures.DOCUMENTS);
             session.writeTuples(grant("document:a"), Durability.LAKE);
-            deleteTree(fixture.bucket());
-            Files.writeString(fixture.bucket(), "not a directory");
+            fixture.breakStore();
             Token token = session.writeTuples(grant("document:b"), Durability.LOCAL);
 
             ShipTimeoutException timeout = assertThrows(ShipTimeoutException.class,
@@ -131,8 +127,7 @@ class GraphSessionShippingTest {
         GraphSession session = shipped(fixture);
         session.applySchema(SchemaFixtures.DOCUMENTS);
         session.writeTuples(grant("document:a"), Durability.LAKE);
-        deleteTree(fixture.bucket());
-        Files.writeString(fixture.bucket(), "not a directory");
+        fixture.breakStore();
         Token before = session.token();
 
         CompletableFuture<Token> waiting = CompletableFuture.supplyAsync(
@@ -162,14 +157,6 @@ class GraphSessionShippingTest {
                     .boolOr("configured", true));
         } finally {
             sessions.close(handle);
-        }
-    }
-
-    private static void deleteTree(Path path) throws IOException {
-        try (Stream<Path> walk = Files.walk(path)) {
-            for (Path entry : (Iterable<Path>) walk.sorted(Comparator.reverseOrder())::iterator) {
-                Files.delete(entry);
-            }
         }
     }
 }
