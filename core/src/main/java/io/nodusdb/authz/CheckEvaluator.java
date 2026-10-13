@@ -83,6 +83,9 @@ final class CheckEvaluator {
             if (kernel.probeTuple(node, relation, 0, subjectNode)) {
                 return FOUND;
             }
+            if (kernel.closureCovers(node, relation)) {
+                return kernel.closureReachesMember(node, relation, subjectNode) ? FOUND : EXHAUSTED;
+            }
             stack[base + CURSOR] = 0;
         }
         int degree = kernel.probeDegree(Partition.INDIRECT, node);

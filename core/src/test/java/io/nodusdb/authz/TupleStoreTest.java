@@ -9,6 +9,7 @@ import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
+import io.nodusdb.kernel.closure.ClosureLimits;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.SyncMode;
 import io.nodusdb.storage.DurableGraph;
@@ -30,6 +31,10 @@ class TupleStoreTest {
     Path directory;
 
     private final TupleStore store = TupleStore.open(new GraphKernel());
+
+    private static GraphKernel evaluatorOnly() {
+        return new GraphKernel(GraphKernel.NO_MEMORY_LIMIT, ClosureLimits.DEFAULT.disabled());
+    }
 
     private void loadSchema() {
         store.applySchema(SchemaFixtures.DOCUMENTS);
@@ -222,8 +227,8 @@ class TupleStoreTest {
     }
 
     @Test
-    void aDeepChainRaisesTheDepthErrorWhenItCannotDecide() {
-        TupleStore shallow = TupleStore.open(new GraphKernel(), 5);
+    void withoutTheIndexADeepChainRaisesTheDepthErrorWhenTheEvaluatorCannotDecide() {
+        TupleStore shallow = TupleStore.open(evaluatorOnly(), 5);
         shallow.applySchema(SchemaFixtures.DOCUMENTS);
         for (int i = 0; i < 10; i++) {
             shallow.add("group:g" + i, "member", "group:g" + (i + 1), "member");
@@ -237,8 +242,8 @@ class TupleStoreTest {
     }
 
     @Test
-    void aShortAnswerIsReturnedEvenWhenAnotherBranchIsTooDeep() {
-        TupleStore shallow = TupleStore.open(new GraphKernel(), 4);
+    void withoutTheIndexAShortAnswerIsReturnedEvenWhenAnotherBranchIsTooDeep() {
+        TupleStore shallow = TupleStore.open(evaluatorOnly(), 4);
         shallow.applySchema(SchemaFixtures.DOCUMENTS);
         for (int i = 0; i < 10; i++) {
             shallow.add("group:g" + i, "member", "group:g" + (i + 1), "member");

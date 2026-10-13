@@ -52,6 +52,27 @@ class TupleStoreFollowerTest {
     }
 
     @Test
+    void aFollowerKeepsItsOwnReachabilityIndexCurrentAsNestingArrives() {
+        primary.applySchema(SchemaFixtures.DOCUMENTS);
+        TupleTransaction chain = new TupleTransaction();
+        for (int i = 0; i < 40; i++) {
+            chain.add("group:g" + i, "member", "group:g" + (i + 1), "member");
+        }
+        chain.add("group:g40", "member", "user:alice");
+        primary.write(chain);
+
+        replicate();
+
+        assertTrue(follower.check("group:g0", "member", "user:alice"));
+        assertTrue(followerKernel.closureStats().incrementalUpdates() > 0);
+        primary.remove("group:g20", "member", "group:g21", "member");
+        replicate();
+        assertFalse(follower.check("group:g0", "member", "user:alice"));
+        assertTrue(follower.check("group:g21", "member", "user:alice"));
+        assertEquals(primaryKernel.closureStats().entries(), followerKernel.closureStats().entries());
+    }
+
+    @Test
     void aFollowerOpenedBeforeAnySchemaAnswersChecksOnceTheSchemaArrives() {
         assertEquals(0, follower.schemaVersion());
         primary.applySchema(SchemaFixtures.DOCUMENTS);
