@@ -94,6 +94,20 @@ public final class RelationCatalog {
         return (flagsOf(relation) & TUPLESET) != 0;
     }
 
+    public boolean isMembership(int relation) {
+        return (flagsOf(relation) & MEMBERSHIP) != 0;
+    }
+
+    public boolean changesMembershipFrom(RelationCatalog previous) {
+        for (int i = 0; i < ids.length; i++) {
+            int id = ids[i];
+            if (previous.has(id) && ((previous.flagsOf(id) ^ flags[i]) & MEMBERSHIP) != 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public boolean isRetired(int relation) {
         return (flagsOf(relation) & RETIRED) != 0;
     }

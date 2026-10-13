@@ -2,13 +2,16 @@ package io.nodusdb.kernel;
 
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.closure.ClosureIndex;
+import io.nodusdb.kernel.closure.ClosureLimits;
+import io.nodusdb.kernel.closure.TupleGraph;
 import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.kernel.memory.MemoryBudget;
 import io.nodusdb.kernel.symbols.SymbolTable;
 
 import java.lang.foreign.Arena;
 
-final class GraphState {
+final class GraphState implements TupleGraph {
 
     private final Arena arena = Arena.ofAuto();
     private final MemoryBudget budget;
@@ -21,12 +24,14 @@ final class GraphState {
     private volatile KeyKind keyKind = KeyKind.UNSET;
     private volatile long appliedLsn;
     private volatile long lastCommitMicros;
+    private final ClosureIndex closure;
     private boolean faulted;
 
-    GraphState(MemoryBudget budget) {
+    GraphState(MemoryBudget budget, ClosureLimits closureLimits) {
         this.budget = budget;
         this.symbols = new SymbolTable(arena, budget);
         this.direct = new EdgeTables(arena, budget);
+        this.closure = new ClosureIndex(this, arena, budget, closureLimits);
     }
 
     long appliedLsn() {
@@ -69,11 +74,13 @@ final class GraphState {
         return epochs;
     }
 
-    EdgeTables direct() {
+    @Override
+    public EdgeTables direct() {
         return direct;
     }
 
-    EdgeTables indirectOrNull() {
+    @Override
+    public EdgeTables indirectOrNull() {
         return indirect;
     }
 
@@ -90,12 +97,19 @@ final class GraphState {
         return partition == Partition.DIRECT ? direct : indirect;
     }
 
-    RelationCatalog catalog() {
+    @Override
+    public RelationCatalog catalog() {
         return catalog;
     }
 
     void catalog(RelationCatalog next) {
+        RelationCatalog previous = catalog;
         catalog = next;
+        closure.catalogChanged(previous, next);
+    }
+
+    ClosureIndex closure() {
+        return closure;
     }
 
     KeyKind keyKind() {
@@ -106,7 +120,8 @@ final class GraphState {
         keyKind = kind;
     }
 
-    int nodeCapacity() {
+    @Override
+    public int nodeCapacity() {
         return direct.capacity();
     }
 

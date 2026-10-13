@@ -41,12 +41,14 @@ final class RecordApplier {
         if (add) {
             state.ensureNodes(Math.max(object, subject) + 1L);
             EdgeTables tables = partition == Partition.DIRECT ? state.direct() : state.ensureIndirect();
-            tables.add(object, objectKey, subject, subjectKey);
+            if (tables.add(object, objectKey, subject, subjectKey)) {
+                state.closure().tupleAdded(object, relation, subjectRelation, subject);
+            }
             return;
         }
         EdgeTables tables = state.tables(partition);
-        if (tables != null) {
-            tables.remove(object, objectKey, subject, subjectKey);
+        if (tables != null && tables.remove(object, objectKey, subject, subjectKey)) {
+            state.closure().tupleRemoved(object, relation, subjectRelation);
         }
     }
 
@@ -55,6 +57,7 @@ final class RecordApplier {
         assert tables != null && Math.max(object, subject) < tables.capacity() : "the nodes were not reserved";
         tables.addAbsent(object, EdgeKey.pack(relation, subjectRelation, subject), subject,
                 EdgeKey.pack(relation, subjectRelation, object));
+        state.closure().tupleAdded(object, relation, subjectRelation, subject);
     }
 
     private void applySymbol(RecordReader record) {

@@ -8,6 +8,7 @@ public final class EdgeTables {
 
     private final AdjacencyTable outgoing;
     private final AdjacencyTable incoming;
+    private long size;
 
     public EdgeTables(Arena arena, MemoryBudget budget) {
         this.outgoing = new AdjacencyTable(arena, budget);
@@ -55,17 +56,23 @@ public final class EdgeTables {
         return outgoing.isHighDegree(node);
     }
 
+    public long size() {
+        return size;
+    }
+
     public boolean add(long object, long objectKey, long subject, long subjectKey) {
         if (!outgoing.add(object, objectKey)) {
             return false;
         }
         incoming.addAbsent(subject, subjectKey);
+        size++;
         return true;
     }
 
     public void addAbsent(long object, long objectKey, long subject, long subjectKey) {
         outgoing.addAbsent(object, objectKey);
         incoming.addAbsent(subject, subjectKey);
+        size++;
     }
 
     public boolean remove(long object, long objectKey, long subject, long subjectKey) {
@@ -73,6 +80,7 @@ public final class EdgeTables {
         if (removed) {
             boolean mirrored = incoming.remove(subject, subjectKey);
             assert mirrored : "outgoing and incoming tables diverged on remove";
+            size--;
         }
         return removed;
     }
@@ -105,6 +113,11 @@ public final class EdgeTables {
     public void prepareBulkLoad(int[] forwardDegrees, int[] backwardDegrees) {
         outgoing.prepareBulkLoad(forwardDegrees);
         incoming.prepareBulkLoad(backwardDegrees);
+        long total = 0;
+        for (int degree : forwardDegrees) {
+            total += degree;
+        }
+        size = total;
     }
 
     public void fillBulkNode(boolean forward, int node, long[] keys, int degree) {

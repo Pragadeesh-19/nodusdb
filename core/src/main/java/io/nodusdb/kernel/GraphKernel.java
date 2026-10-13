@@ -5,6 +5,10 @@ import io.nodusdb.kernel.adjacency.AdjacencyTable;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.closure.ClosureIndex;
+import io.nodusdb.kernel.closure.ClosureLimits;
+import io.nodusdb.kernel.closure.ClosureMaintainer;
+import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.kernel.memory.MemoryBudget;
 import io.nodusdb.kernel.symbols.SymbolTable;
@@ -27,12 +31,14 @@ public final class GraphKernel implements AutoCloseable {
 
     private static final String FAULTED_MESSAGE =
             "the graph state is inconsistent with its log; reopen the graph";
+    private static final String MAINTAINER_THREAD = "nodusdb-closure";
 
     private final GraphState state;
     private final WriteSequence sequence;
     private final RecordApplier applier;
     private final WriteReservation reservation;
     private final ReplicaWriter replicaWriter;
+    private final ClosureMaintainer maintainer;
     private final ReentrantLock writer = new ReentrantLock();
     private final RecordBatch scratch = new RecordBatch();
     private final RecordReader applyReader = new RecordReader();
@@ -47,20 +53,27 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public GraphKernel(long maxMemoryBytes) {
-        this(maxMemoryBytes, false);
+        this(maxMemoryBytes, ClosureLimits.fromEnvironment());
     }
 
-    private GraphKernel(long maxMemoryBytes, boolean replica) {
+    public GraphKernel(long maxMemoryBytes, ClosureLimits closureLimits) {
+        this(maxMemoryBytes, closureLimits, false);
+    }
+
+    private GraphKernel(long maxMemoryBytes, ClosureLimits closureLimits, boolean replica) {
         if (maxMemoryBytes < NO_MEMORY_LIMIT) {
             throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
         }
+        Objects.requireNonNull(closureLimits, "closureLimits");
         MemoryBudget budget = maxMemoryBytes == NO_MEMORY_LIMIT
                 ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
-        this.state = new GraphState(budget);
+        this.state = new GraphState(budget, closureLimits);
         this.sequence = state.sequence();
         this.applier = new RecordApplier(state);
         this.reservation = new WriteReservation(state);
         this.replicaWriter = replica ? new ReplicaWriter(state, applier, reservation) : null;
+        this.maintainer = new ClosureMaintainer(new ClosureSlices(), MAINTAINER_THREAD);
+        state.closure().onDemand(maintainer::request);
     }
 
     public static GraphKernel openInMemory() {
@@ -68,7 +81,11 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public static GraphKernel openReplica(long maxMemoryBytes) {
-        return new GraphKernel(maxMemoryBytes, true);
+        return openReplica(maxMemoryBytes, ClosureLimits.fromEnvironment());
+    }
+
+    public static GraphKernel openReplica(long maxMemoryBytes, ClosureLimits closureLimits) {
+        return new GraphKernel(maxMemoryBytes, closureLimits, true);
     }
 
     public boolean isReplica() {
@@ -179,6 +196,7 @@ public final class GraphKernel implements AutoCloseable {
 
     @Override
     public void close() {
+        maintainer.stop();
         writer.lock();
         try {
             if (closed) {
@@ -343,6 +361,18 @@ public final class GraphKernel implements AutoCloseable {
         return sequence.validate(started);
     }
 
+    public boolean closureCovers(int node, int relation) {
+        return state.closure().covers(node, relation);
+    }
+
+    public boolean closureReachesMember(int node, int relation, int subject) {
+        return state.closure().reachesMember(node, relation, subject);
+    }
+
+    public ClosureStats closureStats() {
+        return state.closure().stats();
+    }
+
     public boolean probeTuple(int object, int relation, int subjectRelation, int subject) {
         EdgeTables tables = state.tables(state.partitionOf(relation, subjectRelation));
         return tables != null && tables.contains(object, EdgeKey.pack(relation, subjectRelation, subject));
@@ -471,6 +501,7 @@ public final class GraphKernel implements AutoCloseable {
         state.ensureNodes(forwardDegrees.length);
         EdgeTables tables = partition == Partition.DIRECT ? state.direct() : state.ensureIndirect();
         tables.prepareBulkLoad(forwardDegrees, backwardDegrees);
+        state.closure().contentReplaced();
     }
 
     public void loadBulkNode(boolean forward, long node, long[] neighbors, int degree) {
@@ -732,6 +763,44 @@ public final class GraphKernel implements AutoCloseable {
         }
         for (int i = 0; i < 2 * pairCount; i++) {
             NodeIds.checkValid(pairs[i]);
+        }
+    }
+
+    private final class ClosureSlices implements ClosureMaintainer.SliceRunner {
+
+        @Override
+        public ClosureMaintainer.Outcome runSlice() {
+            if (writer.hasQueuedThreads() || !writer.tryLock()) {
+                return ClosureMaintainer.Outcome.BUSY;
+            }
+            try {
+                if (closed) {
+                    return ClosureMaintainer.Outcome.CLOSED;
+                }
+                ClosureIndex index = state.closure();
+                if (!index.hasWork()) {
+                    return ClosureMaintainer.Outcome.IDLE;
+                }
+                sequence.beginWrite();
+                try {
+                    index.runSlice();
+                } finally {
+                    sequence.endWrite();
+                }
+                return index.hasWork() ? ClosureMaintainer.Outcome.MORE : ClosureMaintainer.Outcome.IDLE;
+            } finally {
+                writer.unlock();
+            }
+        }
+
+        @Override
+        public boolean hasWork() {
+            writer.lock();
+            try {
+                return !closed && state.closure().hasWork();
+            } finally {
+                writer.unlock();
+            }
         }
     }
 }
