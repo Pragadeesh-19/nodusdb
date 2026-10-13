@@ -122,7 +122,7 @@ final class TestGraph implements TupleGraph {
                 subjectRelation, subject), subject, EdgeKey.pack(relation, subjectRelation, object));
         if (removed) {
             tuples.remove(new Tuple(object, relation, subjectRelation, subject));
-            index.tupleRemoved(object, relation, subjectRelation);
+            index.tupleRemoved(object, relation, subjectRelation, subject);
         }
         return removed;
     }

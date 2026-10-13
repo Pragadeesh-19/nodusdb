@@ -78,6 +78,44 @@ class ClosureIndexTest {
     }
 
     @Test
+    void aRemovalIsRederivedFromTheBottomUpWhateverOrderTheAncestorsWereLinkedIn() {
+        TestGraph graph = new TestGraph(ClosureLimits.DEFAULT);
+        int target = 10;
+        int leaf = 11;
+        graph.add(target, MEMBER, MEMBER, leaf);
+        for (int group = 0; group < 3; group++) {
+            graph.add(group, MEMBER, MEMBER, target);
+        }
+        graph.add(0, MEMBER, MEMBER, 1);
+        graph.add(1, MEMBER, MEMBER, 2);
+        graph.remove(0, MEMBER, MEMBER, target);
+        graph.remove(1, MEMBER, MEMBER, target);
+
+        graph.remove(target, MEMBER, MEMBER, leaf);
+
+        for (int group = 0; group <= 2; group++) {
+            assertFalse(graph.storedClosure(group).contains(entry(MEMBER, MEMBER, leaf)), "group=" + group);
+            assertEquals(graph.naiveClosure(group), graph.storedClosure(group), "group=" + group);
+        }
+    }
+
+    @Test
+    void aRemovalInACycleFallsBackToTheSearchAndStaysExact() {
+        TestGraph graph = new TestGraph(ClosureLimits.DEFAULT);
+        graph.add(0, MEMBER, MEMBER, 1);
+        graph.add(1, MEMBER, MEMBER, 0);
+        graph.add(1, MEMBER, MEMBER, 2);
+        graph.add(0, MEMBER, MEMBER, 2);
+
+        graph.remove(1, MEMBER, MEMBER, 2);
+
+        for (int group = 0; group <= 2; group++) {
+            assertEquals(graph.naiveClosure(group), graph.storedClosure(group), "group=" + group);
+        }
+        assertTrue(graph.storedClosure(1).contains(entry(MEMBER, MEMBER, 2)));
+    }
+
+    @Test
     void aCycleContainsEveryNodeOnItIncludingItself() {
         TestGraph graph = new TestGraph(ClosureLimits.DEFAULT);
         graph.add(0, MEMBER, MEMBER, 1);

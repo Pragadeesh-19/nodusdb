@@ -1,7 +1,6 @@
 package io.nodusdb.kernel.closure;
 
 import io.nodusdb.kernel.adjacency.EdgeKey;
-
 import io.nodusdb.kernel.index.StampedLongSet;
 
 import java.util.Arrays;
@@ -14,6 +13,7 @@ final class ClosureUpdater {
     private final ClosureStore store;
     private final DirtyNodes dirty;
     private final ClosureSearch search;
+    private final ClosureRederivation rederivation;
     private final WorkBudget budget = new WorkBudget();
     private final Usersets ancestors = new Usersets();
     private final Usersets descendants = new Usersets();
@@ -27,6 +27,7 @@ final class ClosureUpdater {
         this.store = store;
         this.dirty = dirty;
         this.search = new ClosureSearch(graph);
+        this.rederivation = new ClosureRederivation(graph, store, dirty);
     }
 
     void inserted(int parent, int relation, int childRelation, int child) {
@@ -36,11 +37,11 @@ final class ClosureUpdater {
             index.startFullPass();
             return;
         }
-        if (ancestors.count == 0) {
+        if (ancestors.count() == 0) {
             return;
         }
         if (dirty.isDirty(child) || !collectDescendants(child, childRelation, limit)
-                || (long) ancestors.count * descendants.count > limit) {
+                || (long) ancestors.count() * descendants.count() > limit) {
             markAncestorsDirty();
             return;
         }
@@ -55,18 +56,37 @@ final class ClosureUpdater {
         index.countIncremental();
     }
 
-    void removed(int parent, int relation) {
+    void removed(int parent, int relation, int childRelation, int child) {
         index.bumpVersion();
         int limit = index.workBudget();
         if (!collectAncestors(parent, relation, limit)) {
             index.startFullPass();
             return;
         }
+        if (ancestors.count() == 0) {
+            return;
+        }
+        if (!dirty.isDirty(child) && collectDescendants(child, childRelation, limit)) {
+            budget.reset(limit);
+            ClosureRederivation.Result result = rederivation.rederive(ancestors, descendants, budget);
+            if (result == ClosureRederivation.Result.ABORTED) {
+                markAncestorsDirty();
+                return;
+            }
+            if (result == ClosureRederivation.Result.DONE) {
+                index.countIncremental();
+                return;
+            }
+        }
+        recomputeBySearch(limit);
+    }
+
+    private void recomputeBySearch(int limit) {
         budget.reset(limit);
         removalCount = 0;
         recomputed.clear();
-        for (int i = 0; i < ancestors.count; i++) {
-            int node = ancestors.nodes[i];
+        for (int i = 0; i < ancestors.count(); i++) {
+            int node = ancestors.node(i);
             if (!recomputed.add(node) || collectRemovals(node)) {
                 continue;
             }
@@ -134,12 +154,12 @@ final class ClosureUpdater {
     }
 
     private void forEachMissingPair(boolean planOnly) {
-        for (int a = 0; a < ancestors.count; a++) {
-            int ancestor = ancestors.nodes[a];
-            int ancestorRelation = ancestors.relations[a];
-            for (int d = 0; d < descendants.count; d++) {
-                int descendant = descendants.nodes[d];
-                int descendantRelation = descendants.relations[d];
+        for (int a = 0; a < ancestors.count(); a++) {
+            int ancestor = ancestors.node(a);
+            int ancestorRelation = ancestors.relation(a);
+            for (int d = 0; d < descendants.count(); d++) {
+                int descendant = descendants.node(d);
+                int descendantRelation = descendants.relation(d);
                 if (store.holds(ancestor, ancestorRelation, descendantRelation, descendant)) {
                     continue;
                 }
@@ -153,8 +173,8 @@ final class ClosureUpdater {
     }
 
     private void markAncestorsDirty() {
-        for (int i = 0; i < ancestors.count; i++) {
-            index.markDirty(ancestors.nodes[i]);
+        for (int i = 0; i < ancestors.count(); i++) {
+            index.markDirty(ancestors.node(i));
         }
     }
 
@@ -165,25 +185,5 @@ final class ClosureUpdater {
         }
         removalNodes[removalCount] = node;
         removalKeys[removalCount++] = key;
-    }
-
-    private static final class Usersets {
-
-        private int[] nodes = new int[INITIAL_CAPACITY];
-        private int[] relations = new int[INITIAL_CAPACITY];
-        private int count;
-
-        void clear() {
-            count = 0;
-        }
-
-        void add(int node, int relation) {
-            if (count == nodes.length) {
-                nodes = Arrays.copyOf(nodes, count * 2);
-                relations = Arrays.copyOf(relations, count * 2);
-            }
-            nodes[count] = node;
-            relations[count++] = relation;
-        }
     }
 }

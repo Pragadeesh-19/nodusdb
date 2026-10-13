@@ -79,12 +79,12 @@ public final class ClosureIndex {
         publish();
     }
 
-    public void tupleRemoved(int object, int relation, int subjectRelation) {
+    public void tupleRemoved(int object, int relation, int subjectRelation, int subject) {
         if (!tracks(relation, subjectRelation)) {
             return;
         }
         try {
-            updater.removed(object, relation);
+            updater.removed(object, relation, subjectRelation, subject);
         } catch (RuntimeException e) {
             fail(e);
         }

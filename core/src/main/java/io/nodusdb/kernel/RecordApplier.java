@@ -48,7 +48,7 @@ final class RecordApplier {
         }
         EdgeTables tables = state.tables(partition);
         if (tables != null && tables.remove(object, objectKey, subject, subjectKey)) {
-            state.closure().tupleRemoved(object, relation, subjectRelation);
+            state.closure().tupleRemoved(object, relation, subjectRelation, subject);
         }
     }
 
