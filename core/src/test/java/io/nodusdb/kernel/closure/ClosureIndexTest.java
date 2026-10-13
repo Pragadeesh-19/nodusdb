@@ -78,7 +78,7 @@ class ClosureIndexTest {
     }
 
     @Test
-    void aRemovalIsRederivedFromTheBottomUpWhateverOrderTheAncestorsWereLinkedIn() {
+    void aRemovalLeavesNoStaleAncestorWhateverOrderTheAncestorsWereLinkedIn() {
         TestGraph graph = new TestGraph(ClosureLimits.DEFAULT);
         int target = 10;
         int leaf = 11;
