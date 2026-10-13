@@ -1,4 +1,4 @@
-package io.nodusdb.kernel;
+package io.nodusdb.kernel.adjacency;
 
 import java.util.Arrays;
 
