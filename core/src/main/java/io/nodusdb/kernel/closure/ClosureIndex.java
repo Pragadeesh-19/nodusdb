@@ -22,13 +22,16 @@ public final class ClosureIndex {
     private volatile boolean demanded;
     private volatile boolean broken;
     private long version;
-    private long incrementalUpdates;
-    private long dirtyMarks;
-    private long rebuiltNodes;
-    private long refusals;
-    private long fullPasses;
-    private String failure = "";
-    private volatile ClosureStats published;
+    private volatile long incrementalUpdates;
+    private volatile long dirtyMarks;
+    private volatile long rebuiltNodes;
+    private volatile long refusals;
+    private volatile long fullPasses;
+    private volatile String failure = "";
+    private volatile boolean publishedBuilding;
+    private volatile long publishedPending;
+    private volatile long publishedEntries;
+    private volatile long publishedCap;
 
     public ClosureIndex(TupleGraph graph, Arena arena, MemoryBudget budget, ClosureLimits limits) {
         this.graph = Objects.requireNonNull(graph, "graph");
@@ -122,7 +125,8 @@ public final class ClosureIndex {
     }
 
     public ClosureStats stats() {
-        return published;
+        return new ClosureStats(enabled(), publishedBuilding, publishedPending, publishedEntries, publishedCap,
+                incrementalUpdates, dirtyMarks, rebuiltNodes, refusals, fullPasses, failure);
     }
 
     long version() {
@@ -200,8 +204,10 @@ public final class ClosureIndex {
         if (dirty.sweeping()) {
             pending += Math.max(0, graph.nodeCapacity() - dirty.sweepLine());
         }
-        published = new ClosureStats(enabled(), hasWork(), pending, store.entries(), cap(), incrementalUpdates,
-                dirtyMarks, rebuiltNodes, refusals, fullPasses, failure);
+        publishedPending = pending;
+        publishedEntries = store.entries();
+        publishedCap = cap();
+        publishedBuilding = hasWork();
     }
 
     private int subjectDegree(int subject) {
