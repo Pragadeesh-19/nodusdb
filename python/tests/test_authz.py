@@ -127,11 +127,11 @@ class AuthzTest(unittest.TestCase):
         with self.assertRaises(NodusUnsupportedError):
             self.graph.wait_shipped(before)
 
-    def test_a_deep_chain_raises_the_depth_error(self):
+    def test_a_deep_folder_chain_raises_the_depth_error(self):
         for index in range(60):
-            self.graph.add_tuple(f"group:g{index}", "member", f"group:g{index + 1}", "member")
-        self.graph.add_tuple("group:g60", "member", "user:deep")
-        self.graph.add_tuple("document:d", "viewer", "group:g0", "member")
+            self.graph.add_tuple(f"folder:f{index}", "parent", f"folder:f{index + 1}")
+        self.graph.add_tuple("folder:f60", "viewer", "user:deep")
+        self.graph.add_tuple("document:d", "parent", "folder:f0")
 
         with self.assertRaises(NodusCheckDepthError):
             self.graph.check("document:d", "view", "user:deep")
