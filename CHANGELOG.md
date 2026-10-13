@@ -17,6 +17,7 @@
 - Error code -15, `NodusChainTrustError`, for chain data that fails verification.
 - C exports `nodus_open_follower`, `nodus_restore`, `nodus_takeover` and `nodus_salvage_json`. `nodus_stats_json` reports follower state on a follower handle.
 - A seeded simulation of writers, followers, retention, restarts and fencing over a faulty store (300 seeds in CI), and chaos scenarios that lose, cut and delay S3 replies through a socket proxy.
+- A reachability index for nested groups. The kernel keeps the transitive closure of userset nesting (`group#member@group:x#member`) up to date as tuples change, and a check through nested groups is answered by intersecting that closure with the subject's direct memberships instead of walking the groups. Answers are unchanged; groups whose update would cost too much are answered by the evaluator until a background thread rebuilds them. A group answered by the index no longer counts toward the depth limit of 32. `stats()["reachability"]` reports the index, and `NODUS_REACHABILITY_INDEX=off` turns it off.
 
 ### Fixed
 

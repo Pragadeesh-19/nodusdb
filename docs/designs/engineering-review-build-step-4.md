@@ -1,7 +1,7 @@
 # Engineering review: Build Step 4, the reachability index
 
 Status: decisions D139 to D152 accepted on 2026-10-13. Implementation scope is Build Step 4 (section 11), built on
-branch feat/authz-step4.
+branch feat/authz-step4. Decisions D153 to D158 record what the build refined (`docs/decisions.md`).
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 3, 5, 10 and 12. Where
 this document and those disagree about Build Step 4, this document wins (section 2 lists every amendment).
 
@@ -118,13 +118,21 @@ insert nesting edge (p, r) -> (c, r2):
   reserve headroom; add every missing (a -> d) to CLOSURE
 
 remove nesting edge (p, r) -> (c, r2):
-  A = nodes of {(p, r)} + clean ancestors
+  A = {(p, r)} + clean ancestors
   if |A| > W_max: start a full pass; return
-  recompute each node of A by breadth-first search over the tuples, within W_max in total
-  over budget: mark every node of A dirty; otherwise remove the keys that are no longer reachable
+  D = {(c, r2)} + closure(c, r2)                  only these can leave a closure
+  if c is clean and no member of A holds itself (no cycle through A):
+      repeat until a pass removes nothing:
+          for each a in A and each d in D that a holds:
+              keep d if a child x of a is d or holds d; otherwise remove it
+      a dirty child or an exhausted budget: mark every node of A dirty
+  otherwise: recompute each node of A by breadth-first search over the tuples, within W_max in total,
+             and mark every node of A dirty when that runs out
 ```
 
-Removal never adds keys, so it needs no memory. Insertion is correct with cycles: a new path from an ancestor `a`
+Removal never adds keys, so it needs no memory. Without a cycle through `A` the nesting among the ancestors is
+acyclic, so the repeated pass has one fixed point, the true closure, and reaches it in at most the depth of the
+chain. Children outside `A` cannot reach `p`, so their closures did not change and can be trusted (D158). Insertion is correct with cycles: a new path from an ancestor `a`
 goes `a ... p -> c` and then follows edges from `c`, all of which closure(c) already holds; reading closure(c) before
 writing keeps the result independent of the order.
 
@@ -200,7 +208,7 @@ with a naive recursive evaluator that has no depth limit.
 ```
 "reachability": {"enabled": true, "state": "current" | "building", "dirty_nodes": 3, "closure_entries": 1840,
                  "entry_cap": 1048576, "incremental_updates": 120, "dirty_marks": 4, "rebuilt_nodes": 12,
-                 "full_passes": 1}
+                 "refusals": 0, "full_passes": 1, "last_error": ""}
 ```
 
 ## 11. Sequencing
@@ -221,6 +229,8 @@ with a naive recursive evaluator that has no depth limit.
   probes.
 - A direct membership write costs the same as before (one flag lookup).
 - A slice of 4,096 units takes tens of microseconds, so a reader overlapping a slice retries once.
+
+Measured (`bench/baseline/reachability-windows-dev.json`, D158): a check against the root of 1,111 nested groups took 0.7 us against 110 to 116 us without the index, a chain of 30 took 0.65 us against 2.5 to 3.5 us, a direct member add and remove pair cost 2.0 us against 1.9 us, and a nesting add and remove pair at a leaf of that tree 7.7 us against 2.2 us.
 
 ## 12. NOT in scope
 

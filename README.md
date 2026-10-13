@@ -481,6 +481,14 @@ A node switches back only when its degree falls to 8. A node whose degree hovers
 
 Each graph keeps an outgoing table and an incoming table, and every edge edit updates both. Both use the same tiers, so in-degree costs the same as out-degree.
 
+### Nested groups
+
+A check through nested groups (`group:eng#member@group:backend#member`) would otherwise walk every group under the one it asks about. The kernel keeps a third table pair with the transitive closure of that nesting: for each group, every group nested under it at any depth, stored as derived tuples in the same packed-key format as real ones. A membership check then probes the user's direct memberships against that closure, sweeping whichever side is smaller. The user's direct memberships need no extra structure, because the incoming table already lists them, so adding a user to a group costs no index work.
+
+Only changes to nesting update the closure, inside the same write section as the tuple. An update that would cost more than 4,096 steps, or that the memory budget or the entry cap refuses, marks the affected groups dirty instead. A dirty group is answered by the ordinary evaluator, so every answer stays exact, and a background thread rebuilds dirty groups in small slices that give way to writes. A group answered through the closure does not count toward the depth limit. The closure is never written to disk: a graph rebuilds it after a restart, and checks use the evaluator until it is ready. `stats()["reachability"]` shows its state, and `NODUS_REACHABILITY_INDEX=off` turns it off.
+
+On the development laptop (`bench/baseline/reachability-windows-dev.json`), a check against the root of a tree of 1,111 nested groups took about 0.7 microseconds with the index and 110 to 116 microseconds without it, and a check through a chain of 30 groups 0.65 against 2.5 to 3.5 microseconds. Adding and removing a direct member costs the same either way. Nesting and unnesting a leaf group under that tree costs 7.7 microseconds for the two writes, against 2.2 without the index.
+
 ### Columns for the lake
 
 The lake buffer applies the same idea in a different shape. Each column is its own native buffer, 64-byte aligned, and row *n* is the *n*th entry in every column. Text goes into one shared native slab, with an offset and a length for each row. A flush gathers the selected rows, encodes each column chunk from native memory, and streams the pages to the file, so no Java array holds column data at any point.
@@ -580,6 +588,7 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 - **One writer.** The kernel allows one writer and many readers. Writes on one handle run one at a time.
 - **Schema retypes.** A schema version that turns a relation holding tuples into a tupleset relation, or retires it, is refused. Moving the tuples between the two table pairs in the same transaction is not built yet.
 - **Failover is manual.** A follower, a restore and a takeover read the chain back, but nothing decides by itself that the writer is dead. A follower that fell behind retention needs a restart. A directory that was written without shipping while a chain already existed, and has trimmed those records, is refused when shipping is turned back on.
+- **The reachability index is rebuilt after a restart.** It is not part of the snapshot, so after an open or a follower bootstrap, checks through nested groups use the evaluator, and its depth limit, until the background rebuild finishes. A group whose closure the memory budget or the entry cap refused stays on the evaluator until the nesting changes again.
 - **Transactions are bounded.** A transaction must fit one write of 1 MiB. Split larger loads, or use `add_edges_from`, which writes one record per edge.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
 - **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.

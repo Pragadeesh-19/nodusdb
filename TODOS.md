@@ -100,6 +100,18 @@
 **Priority:** P3
 **Depends on:** The full relationship-lakehouse plan shipping first
 
+### Persist the reachability closure in the snapshot
+
+**What:** Write the `CLOSURE` table pair as a snapshot section, so an open or a follower bootstrap starts with a clean index instead of a background full pass.
+
+**Why:** After a restart, checks through nested groups use the evaluator, with its depth limit, until the rebuild finishes. On a large org chart that is a window of slow checks after every deploy.
+
+**Context:** Build Step 4 keeps the index derived and outside every format (D139, D145). Snapshot v3 is frozen (D77), so this is a new section and a version bump with its own review. Measure the rebuild time on a real org chart first; if it is a few seconds, this may not be worth a format change. Start in `kernel/closure/ClosureIndex.contentReplaced`, which today starts the full pass.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Build Step 4
+
 ## Shipping and lake
 
 ### Snapshot-backed NameResolver for a projector outside the writer
