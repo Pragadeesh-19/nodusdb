@@ -144,7 +144,7 @@ class ShippingTest(unittest.TestCase):
 
         stats = graph.stats()
 
-        self.assertEqual({"epoch", "applied_lsn", "shipping"}, set(stats))
+        self.assertEqual({"epoch", "applied_lsn", "shipping", "reachability"}, set(stats))
         self.assertEqual("ACTIVE", stats["shipping"]["phase"])
         for key in ("shipped_lsn", "lag_lsn", "chain_seq", "backlog_bytes", "backlog_cap_bytes", "last_error",
                     "snapshot_references", "retention", "projection", "events"):

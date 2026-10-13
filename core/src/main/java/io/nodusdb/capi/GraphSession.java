@@ -213,7 +213,7 @@ public final class GraphSession implements AutoCloseable {
         if (follower != null) {
             return follower.statsJson();
         }
-        return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark());
+        return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark(), kernel.closureStats());
     }
 
     private synchronized Token writeLocally(TupleTransaction transaction) {

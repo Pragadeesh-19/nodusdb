@@ -4,6 +4,7 @@ import io.nodusdb.json.JsonArray;
 import io.nodusdb.json.JsonNull;
 import io.nodusdb.json.JsonObject;
 import io.nodusdb.json.JsonParser;
+import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.log.ShipWatermark;
 import org.junit.jupiter.api.Test;
 
@@ -14,6 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShipStatsTest {
 
+    private static final ClosureStats REACHABILITY = new ClosureStats(true, true, 3, 40, 1_048_576, 7, 2, 5, 1, 1,
+            "");
+
     private static JsonObject parse(String json) {
         return JsonParser.parseObject(json);
     }
@@ -23,8 +27,26 @@ class ShipStatsTest {
     }
 
     @Test
+    void theReachabilityIndexIsReportedNextToShipping() {
+        JsonObject reachability = parse(ShipStats.json(2, 17, ShipWatermark.NONE, REACHABILITY))
+                .requireObject("reachability");
+
+        assertTrue(reachability.boolOr("enabled", false));
+        assertEquals("building", reachability.requireString("state"));
+        assertEquals(3, reachability.requireLong("dirty_nodes"));
+        assertEquals(40, reachability.requireLong("closure_entries"));
+        assertEquals(1_048_576, reachability.requireLong("entry_cap"));
+        assertEquals(7, reachability.requireLong("incremental_updates"));
+        assertEquals(2, reachability.requireLong("dirty_marks"));
+        assertEquals(5, reachability.requireLong("rebuilt_nodes"));
+        assertEquals(1, reachability.requireLong("refusals"));
+        assertEquals(1, reachability.requireLong("full_passes"));
+        assertEquals("", reachability.requireString("last_error"));
+    }
+
+    @Test
     void aGraphWithoutShippingReportsOnlyThatItIsNotConfigured() {
-        JsonObject stats = parse(ShipStats.json(2, 17, ShipWatermark.NONE));
+        JsonObject stats = parse(ShipStats.json(2, 17, ShipWatermark.NONE, REACHABILITY));
 
         assertEquals(2, stats.requireLong("epoch"));
         assertEquals(17, stats.requireLong("applied_lsn"));
@@ -35,7 +57,7 @@ class ShipStatsTest {
 
     @Test
     void aFreshStateReportsItsStartingPositionAndNoAges() {
-        JsonObject shipping = parse(ShipStats.json(4, 52, state())).requireObject("shipping");
+        JsonObject shipping = parse(ShipStats.json(4, 52, state(), REACHABILITY)).requireObject("shipping");
 
         assertTrue(shipping.boolOr("configured", false));
         assertEquals("STARTING", shipping.requireString("phase"));
@@ -57,7 +79,7 @@ class ShipStatsTest {
         state.backlog(300);
         state.failed("the store said \"no\"\nand then some");
 
-        JsonObject shipping = parse(ShipStats.json(4, 60, state)).requireObject("shipping");
+        JsonObject shipping = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping");
 
         assertEquals("FAILED", shipping.requireString("phase"));
         assertEquals(60, shipping.requireLong("shipped_lsn"));
@@ -76,7 +98,7 @@ class ShipStatsTest {
         ShipState state = state();
         state.shipped(90, 5, 10, 1);
 
-        JsonObject shipping = parse(ShipStats.json(4, 80, state)).requireObject("shipping");
+        JsonObject shipping = parse(ShipStats.json(4, 80, state, REACHABILITY)).requireObject("shipping");
 
         assertEquals(0, shipping.requireLong("lag_lsn"));
     }
@@ -88,7 +110,7 @@ class ShipStatsTest {
         state.retentionSwept(3, 2);
         state.retentionFailed("denied");
 
-        JsonObject shipping = parse(ShipStats.json(4, 60, state)).requireObject("shipping");
+        JsonObject shipping = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping");
 
         JsonObject references = shipping.requireObject("snapshot_references");
         assertEquals(7, references.requireLong("seq"));
@@ -109,8 +131,8 @@ class ShipStatsTest {
         state.active();
         state.failed("second");
 
-        JsonArray first = parse(ShipStats.json(4, 60, state)).requireObject("shipping").requireArray("events");
-        JsonArray again = parse(ShipStats.json(4, 60, state)).requireObject("shipping").requireArray("events");
+        JsonArray first = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping").requireArray("events");
+        JsonArray again = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping").requireArray("events");
 
         assertEquals(2, first.size());
         assertEquals(1, ((JsonObject) first.get(0)).requireLong("seq"));
@@ -124,7 +146,7 @@ class ShipStatsTest {
         ShipState state = state();
         state.failed("tab\there \u0001 control and 😀 emoji and \\ backslash");
 
-        JsonObject shipping = parse(ShipStats.json(1, 1, state)).requireObject("shipping");
+        JsonObject shipping = parse(ShipStats.json(1, 1, state, REACHABILITY)).requireObject("shipping");
 
         assertEquals("tab\there \u0001 control and 😀 emoji and \\ backslash",
                 shipping.requireString("last_error"));

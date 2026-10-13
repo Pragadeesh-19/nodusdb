@@ -373,7 +373,7 @@ class Graph:
         self._await(Token(epoch, lsn), _wait_milliseconds(timeout))
 
     def stats(self):
-        """A snapshot of the graph's position and, when shipping is on, of the shipper, with new events logged.
+        """A snapshot of the graph's position, of the reachability index and, when shipping is on, of the shipper.
 
         New shipping events go to the "nodusdb" logger as warnings."""
         export = self._shipping_export("nodus_stats_json")

@@ -1,7 +1,9 @@
 package io.nodusdb.ship;
 
 import io.nodusdb.json.JsonWriter;
+import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.log.ShipWatermark;
+import io.nodusdb.stats.ReachabilityJson;
 
 public final class ShipStats {
 
@@ -11,7 +13,7 @@ public final class ShipStats {
     private ShipStats() {
     }
 
-    public static String json(long epoch, long appliedLsn, ShipWatermark watermark) {
+    public static String json(long epoch, long appliedLsn, ShipWatermark watermark, ClosureStats reachability) {
         JsonWriter json = new JsonWriter();
         json.beginObject();
         json.name("epoch").value(epoch);
@@ -22,6 +24,7 @@ public final class ShipStats {
         } else {
             json.beginObject().name("configured").value(false).endObject();
         }
+        ReachabilityJson.write(json, reachability);
         json.endObject();
         return json.toString();
     }

@@ -1,6 +1,7 @@
 package io.nodusdb.replica;
 
 import io.nodusdb.json.JsonWriter;
+import io.nodusdb.stats.ReachabilityJson;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.ship.EventLog;
 
@@ -42,6 +43,7 @@ public final class FollowerStats {
         }
         json.endArray();
         json.endObject();
+        ReachabilityJson.write(json, kernel.closureStats());
         json.endObject();
         return json.toString();
     }
