@@ -1,8 +1,8 @@
-package io.nodusdb.authz;
+package io.nodusdb.kernel.index;
 
 import java.util.Arrays;
 
-final class FrameSet {
+public final class StampedLongSet {
 
     private static final int INITIAL_CAPACITY = 64;
     private static final long MIX = 0x9E3779B97F4A7C15L;
@@ -12,7 +12,7 @@ final class FrameSet {
     private int generation = 1;
     private int size;
 
-    void clear() {
+    public void clear() {
         generation++;
         size = 0;
         if (generation == Integer.MAX_VALUE) {
@@ -21,13 +21,28 @@ final class FrameSet {
         }
     }
 
-    boolean add(int node, int definition) {
-        long key = ((long) node << Integer.SIZE) | definition;
+    public int size() {
+        return size;
+    }
+
+    public boolean contains(long key) {
+        int mask = keys.length - 1;
+        int slot = home(key, mask);
+        while (stamps[slot] == generation) {
+            if (keys[slot] == key) {
+                return true;
+            }
+            slot = (slot + 1) & mask;
+        }
+        return false;
+    }
+
+    public boolean add(long key) {
         if (2 * (size + 1) > keys.length) {
             grow();
         }
         int mask = keys.length - 1;
-        int slot = (int) (key * MIX >>> 32) & mask;
+        int slot = home(key, mask);
         while (stamps[slot] == generation) {
             if (keys[slot] == key) {
                 return false;
@@ -40,6 +55,10 @@ final class FrameSet {
         return true;
     }
 
+    private static int home(long key, int mask) {
+        return (int) (key * MIX >>> 32) & mask;
+    }
+
     private void grow() {
         long[] oldKeys = keys;
         int[] oldStamps = stamps;
@@ -50,7 +69,7 @@ final class FrameSet {
         size = 0;
         for (int i = 0; i < oldKeys.length; i++) {
             if (oldStamps[i] == oldGeneration) {
-                add((int) (oldKeys[i] >>> Integer.SIZE), (int) oldKeys[i]);
+                add(oldKeys[i]);
             }
         }
     }

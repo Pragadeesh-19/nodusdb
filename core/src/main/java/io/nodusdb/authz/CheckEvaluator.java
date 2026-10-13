@@ -5,6 +5,7 @@ import io.nodusdb.error.CheckDepthException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.Partition;
 import io.nodusdb.kernel.adjacency.EdgeKey;
+import io.nodusdb.kernel.index.StampedLongSet;
 
 import java.util.Arrays;
 
@@ -24,7 +25,7 @@ final class CheckEvaluator {
     private final GraphKernel kernel;
     private final NodeTypes types;
     private final int depthLimit;
-    private final FrameSet visited = new FrameSet();
+    private final StampedLongSet visited = new StampedLongSet();
     private int[] stack = new int[INITIAL_FRAMES * FRAME_INTS];
     private int frames;
     private boolean depthExceeded;
@@ -142,7 +143,7 @@ final class CheckEvaluator {
     }
 
     private boolean push(CompiledSchema model, int node, int definition) {
-        if (!visited.add(node, definition)) {
+        if (!visited.add(frameKey(node, definition))) {
             return false;
         }
         if (frames >= depthLimit) {
@@ -159,5 +160,9 @@ final class CheckEvaluator {
         stack[base + TERM] = 0;
         frames++;
         return true;
+    }
+
+    private static long frameKey(int node, int definition) {
+        return ((long) node << Integer.SIZE) | (definition & 0xFFFF_FFFFL);
     }
 }
