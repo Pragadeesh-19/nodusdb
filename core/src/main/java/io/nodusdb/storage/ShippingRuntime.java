@@ -1,16 +1,22 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.erasure.BucketCut;
+import io.nodusdb.erasure.ErasureCoverage;
+import io.nodusdb.erasure.ErasureLayer;
 import io.nodusdb.iceberg.DataFileWriter;
 import io.nodusdb.iceberg.IcebergTable;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogStore;
 import io.nodusdb.log.LogTailReader;
 import io.nodusdb.log.io.LogFileSystem;
+import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.projection.EdgeLogProjector;
 import io.nodusdb.projection.KernelNameResolver;
 import io.nodusdb.projection.ProjectionSettings;
 import io.nodusdb.projection.ProjectorRunner;
 import io.nodusdb.projection.StoreChainSource;
+import io.nodusdb.replica.AnchorFinder;
+import io.nodusdb.ship.ChainFetch;
 import io.nodusdb.ship.ChainRetention;
 import io.nodusdb.ship.EpochClaims;
 import io.nodusdb.ship.LogFeed;
@@ -29,6 +35,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.LongSupplier;
 
 final class ShippingRuntime implements AutoCloseable {
 
@@ -90,9 +97,22 @@ final class ShippingRuntime implements AutoCloseable {
         }
         RetentionRunner retention = RetentionRunner.start(
                 new ChainRetention(reconciled.store(), settings.retention(), System::currentTimeMillis), state,
-                config.iceberg().enabled() ? state::projectedSeq : () -> Long.MAX_VALUE,
+                projectedSeq(),
                 retentionInterval(settings), "nodus-retention");
         closers.add(retention::close);
+    }
+
+    ErasureLayer bucketErasure(GraphKernel kernel, Path directory) {
+        ObjectStore store = reconciled.store();
+        ChainFetch chain = new ChainFetch(store, reconciled.keys().keyring(), ChainFetch.Trust.WHEN_KEY_KNOWN);
+        BucketCut.Bucket bucket = new BucketCut.Bucket(new AnchorFinder(store, chain), chain,
+                new ChainRetention(store, reconciled.config().ship().retention(), System::currentTimeMillis),
+                projectedSeq());
+        return new BucketCut(kernel, state, bucket, ErasureCoverage.open(directory), System::nanoTime);
+    }
+
+    private LongSupplier projectedSeq() {
+        return reconciled.config().iceberg().enabled() ? state::projectedSeq : () -> Long.MAX_VALUE;
     }
 
     private ProjectorRunner startProjection(GraphKernel kernel, Path scratch) {

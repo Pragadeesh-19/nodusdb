@@ -402,16 +402,41 @@ class ShipStateTest {
     @Test
     void anOfferedReferenceIsTakenOnceAndTheNewestOfferWins() {
         ShipState state = state();
-        assertNull(state.takeReference());
+        assertNull(state.takeReference(Long.MAX_VALUE));
 
         state.offerReference(reference(10));
         state.offerReference(reference(20));
         state.offerReference(reference(15));
 
-        assertEquals(20, state.takeReference().lsn());
-        assertNull(state.takeReference());
+        assertEquals(20, state.takeReference(Long.MAX_VALUE).lsn());
+        assertNull(state.takeReference(Long.MAX_VALUE));
         state.offerReference(reference(5));
-        assertEquals(5, state.takeReference().lsn());
+        assertEquals(5, state.takeReference(Long.MAX_VALUE).lsn());
+    }
+
+    @Test
+    void aReferenceIsHeldBackUntilTheChainHoldsEveryRecordItCovers() {
+        ShipState state = state();
+        state.offerReference(reference(20));
+
+        assertNull(state.takeReference(19));
+        assertEquals(20, state.takeReference(20).lsn());
+    }
+
+    @Test
+    void aCutIsTakenOnceAndItsCommitAnswersOnlyThatRequest() {
+        ShipState state = state();
+        ShipState.CutRequest request = new ShipState.CutRequest(12, 2, 5, 14);
+        assertNull(state.takeCut());
+        assertFalse(state.committedCut().answers(request));
+
+        state.offerCut(request);
+
+        assertEquals(request, state.takeCut());
+        assertNull(state.takeCut());
+        state.cutCommitted(9, new ChainBody.Redaction(12, 2, 5, 14, 20));
+        assertTrue(state.committedCut().answers(request));
+        assertFalse(state.committedCut().answers(new ShipState.CutRequest(12, 3, 5, 14)));
     }
 
     @Test
@@ -423,7 +448,7 @@ class ShipStateTest {
         state.offerReference(first);
         state.offerReference(second);
 
-        assertEquals(second, state.takeReference());
+        assertEquals(second, state.takeReference(Long.MAX_VALUE));
     }
 
     @Test

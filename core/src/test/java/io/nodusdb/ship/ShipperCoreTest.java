@@ -578,7 +578,7 @@ class ShipperCoreTest {
     }
 
     @Test
-    void aReferenceAheadOfTheShippedLsnDoesNotMakeThoseRecordsLookShipped() {
+    void aReferenceAheadOfTheShippedLsnWaitsUntilTheChainHoldsEveryRecordItCovers() {
         Session session = shippedUpToTheSnapshot();
         long shipped = session.state().shippedLsn();
         long ahead = rig.append(3);
@@ -587,11 +587,13 @@ class ShipperCoreTest {
         Next next = session.core().step();
 
         assertEquals(Cadence.CONTINUE, next.cadence());
-        assertEquals(ChainKind.SNAPSHOT_REF, object(2).header().kind());
-        assertEquals(shipped, session.state().shippedLsn());
-        assertEquals(ahead, session.state().snapshot().references().lsn());
-        rig.run(session);
+        assertEquals(ChainKind.RECORDS, object(2).header().kind());
         assertEquals(ahead, session.state().shippedLsn());
+        assertEquals(shipped, session.state().snapshot().references().lsn());
+        rig.run(session);
+        assertEquals(ChainKind.SNAPSHOT_REF, object(3).header().kind());
+        assertEquals(ahead, session.state().snapshot().references().lsn());
+        ChainAudit.verify(rig.memory, rig.disk, rig.log.lastLsn());
     }
 
     @Test
@@ -603,7 +605,7 @@ class ShipperCoreTest {
 
         assertEquals(Cadence.BACKOFF, session.core().step().cadence());
         assertEquals(Cadence.BACKOFF, session.core().step().cadence());
-        assertEquals(null, session.state().takeReference());
+        assertEquals(null, session.state().takeReference(Long.MAX_VALUE));
         rig.run(session);
 
         assertEquals(reference, object(2).body());
@@ -620,7 +622,8 @@ class ShipperCoreTest {
 
         rig.run(session);
 
-        assertEquals(lsn + 3, ((ChainBody.SnapshotRef) object(2).body()).lsn());
+        assertEquals(ChainKind.RECORDS, object(2).header().kind());
+        assertEquals(lsn + 3, ((ChainBody.SnapshotRef) object(3).body()).lsn());
         assertEquals(3, ChainAudit.chainKeys(rig.memory).size());
     }
 

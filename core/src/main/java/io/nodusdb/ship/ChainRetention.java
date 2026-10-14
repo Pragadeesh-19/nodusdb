@@ -49,6 +49,10 @@ public final class ChainRetention {
         return new Result(chainObjects, snapshots, uploads);
     }
 
+    public Result cut(long keepFrom, long snapshotLsn) {
+        return new Result(deleteChainPrefix(keepFrom, Long.MAX_VALUE), deleteSnapshots(snapshotLsn, Long.MAX_VALUE), 0);
+    }
+
     private long firstObjectToKeep(Reference newest) {
         long firstNeededLsn = newest.lsn() + 1;
         long seq = newest.seq();

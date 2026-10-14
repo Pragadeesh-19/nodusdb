@@ -1,12 +1,14 @@
 package io.nodusdb.erasure;
 
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.log.ShipWatermark;
 
 final class LocalErasure implements ErasureLayer {
 
     static final String NAME = "local";
 
     private final GraphKernel kernel;
+    private long rolledFor;
 
     LocalErasure(GraphKernel kernel) {
         this.kernel = kernel;
@@ -29,10 +31,20 @@ final class LocalErasure implements ErasureLayer {
 
     @Override
     public void advance(long targetLsn, boolean due) {
-        if (kernel.checkpointLsn() >= targetLsn) {
-            kernel.trimLog();
-        } else if (due) {
+        if (kernel.checkpointLsn() < targetLsn) {
+            if (due) {
+                kernel.checkpoint();
+            }
+            return;
+        }
+        ShipWatermark shipping = kernel.shipWatermark();
+        if (shipping.configured() && shipping.shippedLsn() < targetLsn) {
+            return;
+        }
+        kernel.trimLog();
+        if (!covers(targetLsn, 0) && rolledFor < targetLsn) {
             kernel.checkpoint();
+            rolledFor = targetLsn;
         }
     }
 }

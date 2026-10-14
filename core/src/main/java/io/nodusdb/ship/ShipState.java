@@ -27,6 +27,21 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     public record ReferenceStatus(long seq, long lsn, long committedNanos, long failures, String lastError) {
     }
 
+    public record CutRequest(long eraseLsn, int erasedCount, long firstKeptSeq, long snapshotLsn) {
+    }
+
+    public record CommittedCut(long seq, ChainBody.Redaction redaction) {
+
+        public static final CommittedCut NONE = new CommittedCut(0, null);
+
+        public boolean answers(CutRequest request) {
+            return redaction != null && redaction.eraseLsn() == request.eraseLsn()
+                    && redaction.erasedCount() == request.erasedCount()
+                    && redaction.firstKeptSeq() == request.firstKeptSeq()
+                    && redaction.snapshotLsn() == request.snapshotLsn();
+        }
+    }
+
     public record RetentionStatus(long sweeps, long chainObjectsDeleted, long snapshotsDeleted, long failures,
                                   String lastError) {
     }
@@ -66,6 +81,8 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private long referenceNanos;
     private long referenceFailures;
     private String referenceError = "";
+    private CutRequest offeredCut;
+    private CommittedCut committedCut = CommittedCut.NONE;
     private long sweeps;
     private long chainObjectsDeleted;
     private long snapshotsDeleted;
@@ -217,11 +234,43 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
         }
     }
 
-    public ChainBody.SnapshotRef takeReference() {
+    public ChainBody.SnapshotRef takeReference(long chainLastLsn) {
         synchronized (monitor) {
             ChainBody.SnapshotRef taken = offeredReference;
+            if (taken == null || taken.lsn() > chainLastLsn) {
+                return null;
+            }
             offeredReference = null;
             return taken;
+        }
+    }
+
+    public void offerCut(CutRequest request) {
+        synchronized (monitor) {
+            offeredCut = request;
+            workPending = true;
+            monitor.notifyAll();
+        }
+    }
+
+    public CutRequest takeCut() {
+        synchronized (monitor) {
+            CutRequest taken = offeredCut;
+            offeredCut = null;
+            return taken;
+        }
+    }
+
+    public void cutCommitted(long seq, ChainBody.Redaction redaction) {
+        synchronized (monitor) {
+            committedCut = new CommittedCut(seq, redaction);
+            monitor.notifyAll();
+        }
+    }
+
+    public CommittedCut committedCut() {
+        synchronized (monitor) {
+            return committedCut;
         }
     }
 

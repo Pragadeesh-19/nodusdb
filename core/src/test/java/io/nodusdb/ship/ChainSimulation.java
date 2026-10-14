@@ -6,12 +6,19 @@ import io.nodusdb.chain.ChainCodec;
 import io.nodusdb.chain.ChainHash;
 import io.nodusdb.chain.ChainLayout;
 import io.nodusdb.chain.ChainObject;
+import io.nodusdb.chain.ChainTrustException;
 import io.nodusdb.chain.ChainVerifier;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.SyncMode;
+import io.nodusdb.log.record.RecordBatch;
+import io.nodusdb.log.record.RecordReader;
+import io.nodusdb.log.record.RecordType;
 import io.nodusdb.log.simulation.LogHarness;
 import io.nodusdb.objectstore.FaultyObjectStore;
 import io.nodusdb.objectstore.MemoryObjectStore;
 import io.nodusdb.objectstore.ObjectStoreException;
+import io.nodusdb.replica.Anchor;
+import io.nodusdb.replica.AnchorFinder;
 import io.nodusdb.replica.AntiRollbackMarker;
 import io.nodusdb.replica.FollowerConfig;
 import io.nodusdb.replica.FollowerCore;
@@ -21,13 +28,16 @@ import io.nodusdb.ship.ShipperRig.Session;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeMap;
@@ -95,6 +105,12 @@ final class ChainSimulation implements AutoCloseable {
     private long fenceSeq = -1;
     private long fenceEpoch = -1;
     private boolean faultsOn;
+    private final Map<Integer, Long> erasedAt = new TreeMap<>();
+    private final List<Integer> named = new ArrayList<>();
+    private int nextSymbol;
+    private ShipState.CutRequest pendingCut;
+    private ShipState cutState;
+    private long coveredEraseLsn;
 
     ChainSimulation(long seed, Path directory) throws IOException {
         this.seed = seed;
@@ -133,6 +149,7 @@ final class ChainSimulation implements AutoCloseable {
             verifyConverged(follower);
         }
         require(maxShipped <= rig.log.lastLsn(), "a shipped LSN exceeds the log");
+        verifyNoErasedNames();
         verifyFencing();
     }
 
@@ -146,16 +163,20 @@ final class ChainSimulation implements AutoCloseable {
 
     private void act() throws IOException {
         int roll = random.nextInt(100);
-        if (roll < 28) {
+        if (roll < 24) {
             appendTransaction();
+        } else if (roll < 28) {
+            nameOrErase();
         } else if (roll < 52) {
             stepWriter();
         } else if (roll < 82) {
             stepFollower(followers.get(random.nextInt(followers.size())));
         } else if (roll < 86) {
             publishSnapshot();
-        } else if (roll < 89) {
+        } else if (roll < 88) {
             sweepRetention();
+        } else if (roll < 89) {
+            cutForErasure();
         } else if (roll < 92) {
             restartWriter();
         } else if (roll < 95) {
@@ -260,6 +281,100 @@ final class ChainSimulation implements AutoCloseable {
         } catch (ObjectStoreException interruption) {
             return;
         }
+    }
+
+    private void nameOrErase() {
+        RecordBatch batch = new RecordBatch();
+        int erasing = named.isEmpty() || random.nextBoolean() ? -1 : named.remove(random.nextInt(named.size()));
+        if (erasing < 0) {
+            byte[] name = ("name-" + nextSymbol).getBytes(StandardCharsets.UTF_8);
+            batch.symbol(nextSymbol, name, 0, name.length);
+            named.add(nextSymbol++);
+        } else {
+            batch.erase(erasing, Pseudonym.padded(Pseudonym.of(new byte[Pseudonym.SALT_BYTES],
+                    ("name-" + erasing).getBytes(StandardCharsets.UTF_8))));
+        }
+        batch.commit();
+        long lsn = rig.log.append(batch);
+        rig.log.awaitDurable(lsn);
+        if (erasing >= 0) {
+            erasedAt.put(erasing, lsn);
+        }
+    }
+
+    private void cutForErasure() {
+        if (session == null || session.state() != cutState) {
+            pendingCut = null;
+        }
+        if (session == null || erasedAt.isEmpty()) {
+            return;
+        }
+        try {
+            if (pendingCut != null) {
+                finishCut();
+                return;
+            }
+            long newestErase = erasedAt.values().stream().mapToLong(Long::longValue).max().orElseThrow();
+            Iterator<Anchor> anchors = new AnchorFinder(rig.store,
+                    new ChainFetch(rig.store, ChainBuilder.keyring(), ChainFetch.Trust.REQUIRED)).candidates();
+            if (!anchors.hasNext()) {
+                return;
+            }
+            Anchor anchor = anchors.next();
+            if (anchor.snapshotLsn() < newestErase) {
+                return;
+            }
+            requireNoErasedName(anchor.firstSeq(), newestErase);
+            pendingCut = new ShipState.CutRequest(newestErase, erasedAt.size(), anchor.firstSeq(),
+                    anchor.snapshotLsn());
+            cutState = session.state();
+            cutState.offerCut(pendingCut);
+        } catch (ObjectStoreException | ChainTrustException interruption) {
+            return;
+        }
+    }
+
+    private void finishCut() {
+        if (!cutState.committedCut().answers(pendingCut)) {
+            return;
+        }
+        retention.cut(pendingCut.firstKeptSeq(), pendingCut.snapshotLsn());
+        coveredEraseLsn = Math.max(coveredEraseLsn, pendingCut.eraseLsn());
+        pendingCut = null;
+        verifyNoErasedNames();
+    }
+
+    private void requireNoErasedName(long seq, long eraseLsn) {
+        Optional<byte[]> bytes = rig.memory.get(ChainLayout.chainKey(seq));
+        if (bytes.isPresent() && ChainCodec.decode(bytes.get()).body() instanceof ChainBody.Records records) {
+            int erased = firstErasedSymbol(records, eraseLsn);
+            require(erased < 0, "I6: object " + seq + ", which a cut keeps, holds the erased name " + erased);
+        }
+    }
+
+    private void verifyNoErasedNames() {
+        for (String key : ChainAudit.chainKeys(rig.memory)) {
+            ChainObject object = ChainCodec.decode(rig.memory.get(key).orElseThrow());
+            if (object.body() instanceof ChainBody.Records records) {
+                int erased = firstErasedSymbol(records, coveredEraseLsn);
+                require(erased < 0, "I6: " + key + " still holds the name " + erased + " after a cut covered it");
+            }
+        }
+    }
+
+    private int firstErasedSymbol(ChainBody.Records records, long coveredThrough) {
+        RecordReader reader = new RecordReader().wrap(ByteBuffer.wrap(records.records()), 0,
+                records.records().length);
+        while (reader.hasRecord()) {
+            if (reader.type() == RecordType.SYMBOL) {
+                Long erased = erasedAt.get(reader.symbolId());
+                if (erased != null && erased <= coveredThrough) {
+                    return reader.symbolId();
+                }
+            }
+            reader.advance();
+        }
+        return -1;
     }
 
     private void toggleFaults() {

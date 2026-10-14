@@ -109,9 +109,17 @@ public final class ShipperCore {
             pendingRecordBytes = 0;
             return commit();
         }
-        ChainBody.SnapshotRef reference = state.takeReference();
+        ChainBody.SnapshotRef reference = state.takeReference(cursor.lastLsn());
         if (reference != null) {
             pending = sealReference(reference);
+            pendingLastLsn = cursor.lastLsn();
+            pendingRecordBytes = 0;
+            return commit();
+        }
+        ShipState.CutRequest cut = state.takeCut();
+        if (cut != null) {
+            pending = ChainCodec.seal(header(ChainKind.REDACTION), new ChainBody.Redaction(cut.eraseLsn(),
+                    cut.erasedCount(), cut.firstKeptSeq(), cut.snapshotLsn(), cursor.lastLsn()), identity.key());
             pendingLastLsn = cursor.lastLsn();
             pendingRecordBytes = 0;
             return commit();
@@ -166,6 +174,9 @@ public final class ShipperCore {
         state.shipped(pendingLastLsn, pending.seq(), pending.encoded().length, now);
         if (pending.body() instanceof ChainBody.SnapshotRef reference) {
             state.referenceCommitted(pending.seq(), reference.lsn(), now);
+        }
+        if (pending.body() instanceof ChainBody.Redaction redaction) {
+            state.cutCommitted(pending.seq(), redaction);
         }
         state.active();
         pending = null;

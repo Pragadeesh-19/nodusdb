@@ -46,9 +46,11 @@ public final class ErasureRunner implements ErasureProgress {
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
     }
 
-    public static ErasureRunner durable(GraphKernel kernel, Duration checkpointDelay) {
-        ErasureRunner runner = new ErasureRunner(kernel, List.of(new LocalErasure(kernel)), checkpointDelay,
-                System::nanoTime);
+    public static ErasureRunner durable(GraphKernel kernel, Duration checkpointDelay, List<ErasureLayer> shipped) {
+        List<ErasureLayer> all = new ArrayList<>();
+        all.add(new LocalErasure(kernel));
+        all.addAll(shipped);
+        ErasureRunner runner = new ErasureRunner(kernel, all, checkpointDelay, System::nanoTime);
         runner.wake();
         return runner;
     }

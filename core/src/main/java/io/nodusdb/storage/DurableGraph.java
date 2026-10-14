@@ -1,5 +1,6 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.erasure.ErasureLayer;
 import io.nodusdb.erasure.ErasureRunner;
 import io.nodusdb.error.UpgradeRequiredException;
 import io.nodusdb.kernel.GraphKernel;
@@ -27,6 +28,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Objects;
 
 public final class DurableGraph {
@@ -137,7 +139,9 @@ public final class DurableGraph {
                 runtime.startShipping(kernel, log, files, directory.resolve(GraphFiles.SHIP_SCRATCH));
                 kernel.attachShipping(runtime.state());
             }
-            kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping)));
+            List<ErasureLayer> shipped = runtime == null ? List.of()
+                    : List.of(runtime.bucketErasure(kernel, directory));
+            kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping), shipped));
         } catch (IOException | RuntimeException e) {
             closeQuietly(runtime, e);
             log.abort();

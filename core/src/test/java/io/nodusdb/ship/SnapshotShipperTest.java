@@ -67,7 +67,7 @@ class SnapshotShipperTest {
     private ChainBody.SnapshotRef awaitReference() {
         long deadline = System.nanoTime() + 20 * SECOND;
         while (System.nanoTime() < deadline) {
-            ChainBody.SnapshotRef taken = state.takeReference();
+            ChainBody.SnapshotRef taken = state.takeReference(Long.MAX_VALUE);
             if (taken != null) {
                 return taken;
             }
@@ -183,7 +183,7 @@ class SnapshotShipperTest {
         assertTrue(memory.exists(ChainLayout.snapshotKey(10)));
         assertFalse(memory.exists(ChainLayout.snapshotKey(20)));
         assertTrue(memory.exists(ChainLayout.snapshotKey(30)));
-        assertEquals(30, state.takeReference().lsn());
+        assertEquals(30, state.takeReference(Long.MAX_VALUE).lsn());
     }
 
     @Test
@@ -193,7 +193,7 @@ class SnapshotShipperTest {
 
         waitUntil(() -> state.phase() == Phase.FENCED);
 
-        assertNull(state.takeReference());
+        assertNull(state.takeReference(Long.MAX_VALUE));
         assertTrue(state.snapshot().lastError().contains("different content"));
         waitUntil(() -> released.get() == 1);
     }
