@@ -20,6 +20,8 @@ public final class SymbolTable {
     private static final int INITIAL_SYMBOLS = 1 << 10;
     private static final int INITIAL_BUCKETS = 1 << 11;
     private static final long HASH_MASK = 0xFFFF_FFFFL;
+    private static final long ERASED = 1L << 63;
+    private static final long LENGTH_MASK = 0x7FFF_FFFFL;
     private static final long FNV_OFFSET = 0xcbf29ce484222325L;
     private static final long FNV_PRIME = 0x100000001b3L;
     private static final long MIX_FIRST = 0xff51afd7ed558ccdL;
@@ -35,6 +37,7 @@ public final class SymbolTable {
     private MemorySegment[] slab = new MemorySegment[0];
     private int slabUsed;
     private volatile int count;
+    private volatile int erased;
 
     public SymbolTable(Arena arena, MemoryBudget budget) {
         this.arena = Objects.requireNonNull(arena, "arena");
@@ -61,12 +64,54 @@ public final class SymbolTable {
         if (id < 0 || id >= count) {
             throw new IllegalArgumentException("unknown symbol id: " + id);
         }
-        int length = lengthOf(id);
-        byte[] bytes = new byte[length];
-        long location = entries.get(2 * id);
-        MemorySegment.copy(slab[(int) (location >>> Integer.SIZE)], BYTE, (int) location,
-                bytes, 0, length);
-        return bytes;
+        while (true) {
+            long started = sequence.beginRead();
+            byte[] bytes = copyOut(id);
+            if (bytes != null && sequence.validate(started)) {
+                return bytes;
+            }
+        }
+    }
+
+    public boolean isErased(int id) {
+        return id >= 0 && id < count && (entries.get(2 * id + 1) & ERASED) != 0;
+    }
+
+    public int erasedCount() {
+        return erased;
+    }
+
+    public boolean erase(int id, byte[] pseudonym) {
+        if (id < 0 || id >= count) {
+            throw new IllegalArgumentException("unknown symbol id: " + id);
+        }
+        if (isErased(id)) {
+            return false;
+        }
+        reserve(0, pseudonym.length);
+        long oldLocation = entries.get(2 * id);
+        int oldLength = lengthOf(id);
+        sequence.beginWrite();
+        try {
+            slab[(int) (oldLocation >>> Integer.SIZE)].asSlice((int) oldLocation, oldLength).fill((byte) 0);
+            entries.set(2 * id, copyIntoSlab(pseudonym, 0, pseudonym.length));
+            entries.set(2 * id + 1, erasedMeta(pseudonym));
+            erased++;
+        } finally {
+            sequence.endWrite();
+        }
+        return true;
+    }
+
+    public void appendErased(int id, byte[] pseudonym) {
+        if (id != count) {
+            throw new IllegalStateException("symbol id " + id + " is not the next id " + count);
+        }
+        reserve(1, pseudonym.length);
+        entries.set(2 * id, copyIntoSlab(pseudonym, 0, pseudonym.length));
+        entries.set(2 * id + 1, erasedMeta(pseudonym));
+        erased++;
+        count = id + 1;
     }
 
     public void append(int id, byte[] utf8, int offset, int length) {
@@ -159,7 +204,8 @@ public final class SymbolTable {
 
     private boolean matches(int id, long hash, byte[] utf8, int offset, int length) {
         long meta = entries.get(2 * id + 1);
-        if ((meta & HASH_MASK) != (hash & HASH_MASK) || (int) (meta >>> Integer.SIZE) != length) {
+        if ((meta & ERASED) != 0 || (meta & HASH_MASK) != (hash & HASH_MASK)
+                || (int) (meta >>> Integer.SIZE & LENGTH_MASK) != length) {
             return false;
         }
         long location = entries.get(2 * id);
@@ -179,7 +225,26 @@ public final class SymbolTable {
     }
 
     private int lengthOf(int id) {
-        return (int) (entries.get(2 * id + 1) >>> Integer.SIZE);
+        return (int) (entries.get(2 * id + 1) >>> Integer.SIZE & LENGTH_MASK);
+    }
+
+    private byte[] copyOut(int id) {
+        int length = lengthOf(id);
+        long location = entries.get(2 * id);
+        MemorySegment[] chunks = slab;
+        int chunk = (int) (location >>> Integer.SIZE);
+        int start = (int) location;
+        if (chunk < 0 || chunk >= chunks.length || start < 0 || start + (long) length > chunks[chunk].byteSize()) {
+            return null;
+        }
+        byte[] bytes = new byte[length];
+        MemorySegment.copy(chunks[chunk], BYTE, start, bytes, 0, length);
+        return bytes;
+    }
+
+    private static long erasedMeta(byte[] pseudonym) {
+        long hash = hash(pseudonym, 0, pseudonym.length) & HASH_MASK;
+        return ERASED | ((long) pseudonym.length << Integer.SIZE) | hash;
     }
 
     private long nextSlabChunkBytes() {
@@ -221,7 +286,11 @@ public final class SymbolTable {
         NativeLongArray grown = new NativeLongArray(arena, budget, newCount, 0L);
         int mask = newCount - 1;
         for (int id = 0; id < count; id++) {
-            int slot = (int) entries.get(2 * id + 1) & mask;
+            long meta = entries.get(2 * id + 1);
+            if ((meta & ERASED) != 0) {
+                continue;
+            }
+            int slot = (int) meta & mask;
             while (grown.get(slot) != 0) {
                 slot = (slot + 1) & mask;
             }
