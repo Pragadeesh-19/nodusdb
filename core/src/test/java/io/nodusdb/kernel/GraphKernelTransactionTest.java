@@ -1,7 +1,6 @@
 package io.nodusdb.kernel;
 
 import io.nodusdb.error.SchemaViolationException;
-import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.catalog.RelationCatalog;
 import io.nodusdb.kernel.memory.MemoryLimitExceededException;
@@ -144,16 +143,12 @@ class GraphKernelTransactionTest {
     }
 
     @Test
-    void epochAndErasureRecordsCannotBeSubmittedByCallers() {
+    void epochRecordsCannotBeSubmittedByCallers() {
         RecordBatch epoch = new RecordBatch();
         epoch.epoch(2, 0, 0);
         epoch.commit();
-        RecordBatch erase = new RecordBatch();
-        erase.erase(0, new byte[24]);
-        erase.commit();
 
         assertThrows(IllegalArgumentException.class, () -> kernel.commit(epoch));
-        assertThrows(UnsupportedFeatureException.class, () -> kernel.commit(erase));
     }
 
     @Test

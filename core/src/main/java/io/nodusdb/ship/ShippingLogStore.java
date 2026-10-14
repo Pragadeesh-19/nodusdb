@@ -46,6 +46,11 @@ public final class ShippingLogStore implements LogStore {
     }
 
     @Override
+    public long oldestLsn() {
+        return delegate.oldestLsn();
+    }
+
+    @Override
     public long durableLsn() {
         return delegate.durableLsn();
     }

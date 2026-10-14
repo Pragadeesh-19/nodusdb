@@ -1,9 +1,10 @@
 package io.nodusdb.kernel;
 
-import io.nodusdb.error.UnsupportedFeatureException;
+import io.nodusdb.error.SchemaViolationException;
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.adjacency.GrowthPlan;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.record.RecordBatch;
 import io.nodusdb.log.record.RecordReader;
 
@@ -18,7 +19,7 @@ final class WriteReservation {
     private final GrowthPlan single = new GrowthPlan();
     private long largestNode;
     private int newSymbols;
-    private long newSymbolBytes;
+    private long symbolBytes;
     private boolean needsIndirect;
 
     WriteReservation(GraphState state) {
@@ -48,7 +49,7 @@ final class WriteReservation {
         indirect.clear();
         largestNode = -1;
         newSymbols = 0;
-        newSymbolBytes = 0;
+        symbolBytes = 0;
         needsIndirect = false;
         RelationCatalog effectiveCatalog = state.catalog();
         KeyKind effectiveKind = state.keyKind();
@@ -62,7 +63,7 @@ final class WriteReservation {
                 case GRAPH_CONFIG -> effectiveKind = scanKeyKind(effectiveKind);
                 case SCHEMA -> effectiveCatalog = scanSchema(effectiveCatalog);
                 case EPOCH -> effectiveEpoch = scanEpoch(replicated, effectiveEpoch);
-                case ERASE -> throw new UnsupportedFeatureException("erasure is not available in this version");
+                case ERASE -> scanErase(effectiveCatalog);
                 case TXN_COMMIT -> { }
             }
             reader.advance();
@@ -103,7 +104,23 @@ final class WriteReservation {
         }
         NodeIds.checkValid(reader.symbolId());
         newSymbols++;
-        newSymbolBytes += reader.symbolLength();
+        symbolBytes += reader.symbolLength();
+    }
+
+    private void scanErase(RelationCatalog effective) {
+        int id = reader.eraseSymbolId();
+        int known = state.symbols().size() + newSymbols;
+        if (id >= known) {
+            throw new IllegalArgumentException("symbol " + id + " is not defined");
+        }
+        byte[] pseudonym = Pseudonym.unpadded(reader.erasePseudonym());
+        if (!Pseudonym.isPseudonym(pseudonym)) {
+            throw new IllegalArgumentException("the erasure of symbol " + id + " carries a malformed pseudonym");
+        }
+        if (effective.usesSymbol(id)) {
+            throw new SchemaViolationException("symbol " + id + " names a type or relation in the schema");
+        }
+        symbolBytes += pseudonym.length;
     }
 
     private KeyKind scanKeyKind(KeyKind effective) {
@@ -137,8 +154,8 @@ final class WriteReservation {
         if (indirectTables != null) {
             bytes += indirect.measure(indirectTables);
         }
-        if (newSymbols > 0) {
-            bytes += state.symbols().bytesToReserve(newSymbols, newSymbolBytes);
+        if (newSymbols > 0 || symbolBytes > 0) {
+            bytes += state.symbols().bytesToReserve(newSymbols, symbolBytes);
         }
         return bytes;
     }
@@ -149,8 +166,8 @@ final class WriteReservation {
         if (indirectTables != null) {
             indirect.reserve(indirectTables);
         }
-        if (newSymbols > 0) {
-            state.symbols().reserve(newSymbols, newSymbolBytes);
+        if (newSymbols > 0 || symbolBytes > 0) {
+            state.symbols().reserve(newSymbols, symbolBytes);
         }
     }
 }

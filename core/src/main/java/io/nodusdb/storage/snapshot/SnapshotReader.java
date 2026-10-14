@@ -5,6 +5,7 @@ import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Partition;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.symbols.Pseudonym;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -33,7 +34,7 @@ public final class SnapshotReader {
             SnapshotReader reader = new SnapshotReader(channel, table, kernel, source);
             reader.readConfig();
             RelationCatalog catalog = reader.readSchema();
-            reader.readSymbols();
+            reader.readSymbols(header.lsn());
             byte[] salt = reader.readSalt();
             reader.readEpochHistory();
             reader.readAdjacency(header.nodeCapacity(), catalog);
@@ -120,20 +121,31 @@ public final class SnapshotReader {
         }
     }
 
-    private void readSymbols() throws IOException {
+    private void readSymbols(long lsn) throws IOException {
         SectionCursor in = cursor(SnapshotFormat.KIND_SYMBOLS);
         int count = in.getInt();
         if (count < 0) {
             throw new IOException("snapshot symbol count is negative: " + source);
         }
         for (int id = 0; id < count; id++) {
-            if (in.getByte() != 0) {
-                throw new UnsupportedFeatureException("snapshot holds erased symbols, which need a newer nodusdb");
-            }
+            int flags = in.getByte();
             byte[] name = in.getBytes(in.getInt());
-            kernel.restoreSymbol(id, name);
+            if (flags == 0) {
+                kernel.restoreSymbol(id, name);
+            } else if (flags == SnapshotFormat.SYMBOL_ERASED) {
+                restoreErased(id, name, lsn);
+            } else {
+                throw new UnsupportedFeatureException("snapshot symbol flags " + flags + " need a newer nodusdb");
+            }
         }
         in.requireFullyConsumed();
+    }
+
+    private void restoreErased(int id, byte[] pseudonym, long lsn) throws IOException {
+        if (!Pseudonym.isPseudonym(pseudonym)) {
+            throw new IOException("snapshot symbol " + id + " is erased but holds no pseudonym: " + source);
+        }
+        kernel.restoreErasedSymbol(id, pseudonym, lsn);
     }
 
     private byte[] readSalt() throws IOException {

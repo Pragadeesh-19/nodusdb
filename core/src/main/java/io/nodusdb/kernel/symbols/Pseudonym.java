@@ -5,6 +5,7 @@ import io.nodusdb.log.record.RecordFormat;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Objects;
@@ -13,6 +14,7 @@ public final class Pseudonym {
 
     public static final int RECORD_BYTES = RecordFormat.ERASE_PSEUDONYM_BYTES;
     public static final String PREFIX = "erased:";
+    public static final int SALT_BYTES = 32;
 
     private static final int HEX_DIGITS = 16;
     private static final int TEXT_BYTES = PREFIX.length() + HEX_DIGITS;
@@ -20,9 +22,18 @@ public final class Pseudonym {
     private Pseudonym() {
     }
 
+    public static byte[] newSalt() {
+        byte[] salt = new byte[SALT_BYTES];
+        new SecureRandom().nextBytes(salt);
+        return salt;
+    }
+
     public static byte[] of(byte[] salt, byte[] utf8) {
         Objects.requireNonNull(salt, "salt");
         Objects.requireNonNull(utf8, "utf8");
+        if (salt.length != SALT_BYTES) {
+            throw new IllegalArgumentException("a salt is " + SALT_BYTES + " bytes, got " + salt.length);
+        }
         MessageDigest sha256 = sha256();
         sha256.update(salt);
         sha256.update(utf8);

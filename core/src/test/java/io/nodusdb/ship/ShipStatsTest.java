@@ -4,9 +4,13 @@ import io.nodusdb.json.JsonArray;
 import io.nodusdb.json.JsonNull;
 import io.nodusdb.json.JsonObject;
 import io.nodusdb.json.JsonParser;
+import io.nodusdb.kernel.ErasureProgress;
 import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.log.ShipWatermark;
+import io.nodusdb.stats.ErasureReport;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -22,13 +26,17 @@ class ShipStatsTest {
         return JsonParser.parseObject(json);
     }
 
+    private static String statsJson(long epoch, long appliedLsn, ShipWatermark watermark) {
+        return ShipStats.json(epoch, appliedLsn, watermark, REACHABILITY, ErasureReport.NONE);
+    }
+
     private static ShipState state() {
         return new ShipState(4, 40, 3, 1_000);
     }
 
     @Test
     void theReachabilityIndexIsReportedNextToShipping() {
-        JsonObject reachability = parse(ShipStats.json(2, 17, ShipWatermark.NONE, REACHABILITY))
+        JsonObject reachability = parse(statsJson(2, 17, ShipWatermark.NONE))
                 .requireObject("reachability");
 
         assertTrue(reachability.boolOr("enabled", false));
@@ -45,8 +53,27 @@ class ShipStatsTest {
     }
 
     @Test
+    void erasureReportsEachLayerAndWhetherItIsConfigured() {
+        ErasureReport erasure = new ErasureReport(3, 812, List.of(new ErasureProgress.Layer("local", 812, false)),
+                "");
+
+        JsonObject report = parse(ShipStats.json(2, 900, ShipWatermark.NONE, REACHABILITY, erasure))
+                .requireObject("erasure");
+
+        assertEquals(3, report.requireLong("erased_symbols"));
+        assertEquals(812, report.requireLong("newest_erase_lsn"));
+        JsonObject local = report.requireObject("local");
+        assertTrue(local.boolOr("configured", false));
+        assertEquals(812, local.requireLong("covered_lsn"));
+        assertFalse(local.boolOr("pending", true));
+        assertFalse(report.requireObject("bucket").boolOr("configured", true));
+        assertFalse(report.requireObject("lake").boolOr("configured", true));
+        assertEquals("", report.requireString("last_error"));
+    }
+
+    @Test
     void aGraphWithoutShippingReportsOnlyThatItIsNotConfigured() {
-        JsonObject stats = parse(ShipStats.json(2, 17, ShipWatermark.NONE, REACHABILITY));
+        JsonObject stats = parse(statsJson(2, 17, ShipWatermark.NONE));
 
         assertEquals(2, stats.requireLong("epoch"));
         assertEquals(17, stats.requireLong("applied_lsn"));
@@ -57,7 +84,7 @@ class ShipStatsTest {
 
     @Test
     void aFreshStateReportsItsStartingPositionAndNoAges() {
-        JsonObject shipping = parse(ShipStats.json(4, 52, state(), REACHABILITY)).requireObject("shipping");
+        JsonObject shipping = parse(statsJson(4, 52, state())).requireObject("shipping");
 
         assertTrue(shipping.boolOr("configured", false));
         assertEquals("STARTING", shipping.requireString("phase"));
@@ -79,7 +106,7 @@ class ShipStatsTest {
         state.backlog(300);
         state.failed("the store said \"no\"\nand then some");
 
-        JsonObject shipping = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping");
+        JsonObject shipping = parse(statsJson(4, 60, state)).requireObject("shipping");
 
         assertEquals("FAILED", shipping.requireString("phase"));
         assertEquals(60, shipping.requireLong("shipped_lsn"));
@@ -98,7 +125,7 @@ class ShipStatsTest {
         ShipState state = state();
         state.shipped(90, 5, 10, 1);
 
-        JsonObject shipping = parse(ShipStats.json(4, 80, state, REACHABILITY)).requireObject("shipping");
+        JsonObject shipping = parse(statsJson(4, 80, state)).requireObject("shipping");
 
         assertEquals(0, shipping.requireLong("lag_lsn"));
     }
@@ -110,7 +137,7 @@ class ShipStatsTest {
         state.retentionSwept(3, 2);
         state.retentionFailed("denied");
 
-        JsonObject shipping = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping");
+        JsonObject shipping = parse(statsJson(4, 60, state)).requireObject("shipping");
 
         JsonObject references = shipping.requireObject("snapshot_references");
         assertEquals(7, references.requireLong("seq"));
@@ -131,8 +158,8 @@ class ShipStatsTest {
         state.active();
         state.failed("second");
 
-        JsonArray first = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping").requireArray("events");
-        JsonArray again = parse(ShipStats.json(4, 60, state, REACHABILITY)).requireObject("shipping").requireArray("events");
+        JsonArray first = parse(statsJson(4, 60, state)).requireObject("shipping").requireArray("events");
+        JsonArray again = parse(statsJson(4, 60, state)).requireObject("shipping").requireArray("events");
 
         assertEquals(2, first.size());
         assertEquals(1, ((JsonObject) first.get(0)).requireLong("seq"));
@@ -146,7 +173,7 @@ class ShipStatsTest {
         ShipState state = state();
         state.failed("tab\there \u0001 control and 😀 emoji and \\ backslash");
 
-        JsonObject shipping = parse(ShipStats.json(1, 1, state, REACHABILITY)).requireObject("shipping");
+        JsonObject shipping = parse(statsJson(1, 1, state)).requireObject("shipping");
 
         assertEquals("tab\there \u0001 control and 😀 emoji and \\ backslash",
                 shipping.requireString("last_error"));

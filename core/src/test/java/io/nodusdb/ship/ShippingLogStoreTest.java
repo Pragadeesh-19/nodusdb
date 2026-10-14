@@ -32,6 +32,12 @@ class ShippingLogStoreTest {
         }
 
         @Override
+        public long oldestLsn() {
+            calls.add("oldestLsn");
+            return 1;
+        }
+
+        @Override
         public long durableLsn() {
             calls.add("durableLsn");
             return 80;

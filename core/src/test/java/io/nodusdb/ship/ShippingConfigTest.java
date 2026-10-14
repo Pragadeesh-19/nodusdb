@@ -48,6 +48,7 @@ class ShippingConfigTest {
         assertFalse(parsed.iceberg().enabled());
         assertEquals(Duration.ofSeconds(60), parsed.iceberg().commitInterval());
         assertEquals(Duration.ofDays(7), parsed.iceberg().tableRetention());
+        assertEquals(Duration.ofSeconds(60), parsed.erasureCheckpointDelay());
     }
 
     @Test
@@ -65,6 +66,17 @@ class ShippingConfigTest {
         assertTrue(parsed.iceberg().enabled());
         assertEquals(Duration.ofSeconds(15), parsed.iceberg().commitInterval());
         assertEquals(Duration.ofDays(30), parsed.iceberg().tableRetention());
+    }
+
+    @Test
+    void theErasureCheckpointDelayCanBeZeroButNotNegativeOrUnknown() {
+        ShippingConfig immediate = ShippingConfig.parse(config(DIRECTORY, SIGNING,
+                "\"erasure\":{\"checkpoint_delay_s\":0}"));
+
+        assertEquals(Duration.ZERO, immediate.erasureCheckpointDelay());
+        assertTrue(rejection(config(DIRECTORY, SIGNING, "\"erasure\":{\"checkpoint_delay_s\":-1}"))
+                .contains("checkpoint_delay_s"));
+        assertTrue(rejection(config(DIRECTORY, SIGNING, "\"erasure\":{\"delay\":5}")).contains("delay"));
     }
 
     @Test

@@ -8,6 +8,8 @@ public interface LogStore extends AutoCloseable {
 
     long lastLsn();
 
+    long oldestLsn();
+
     long durableLsn();
 
     long lastCommitMicros();

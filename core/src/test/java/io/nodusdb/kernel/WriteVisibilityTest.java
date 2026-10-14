@@ -42,6 +42,11 @@ class WriteVisibilityTest {
         }
 
         @Override
+        public synchronized long oldestLsn() {
+            return 1;
+        }
+
+        @Override
         public long durableLsn() {
             return 0;
         }
@@ -91,15 +96,7 @@ class WriteVisibilityTest {
 
     private static GraphKernel attached(GatedLog log) {
         GraphKernel kernel = new GraphKernel();
-        kernel.attachLog(log, new DurableStorage() {
-            @Override
-            public void checkpoint(GraphKernel graph, LogStore store) {
-            }
-
-            @Override
-            public void close() {
-            }
-        });
+        kernel.attachLog(log, CapturingLog.noStorage());
         return kernel;
     }
 

@@ -1,5 +1,7 @@
 package io.nodusdb.storage.snapshot;
 
+import io.nodusdb.kernel.symbols.Pseudonym;
+
 final class SnapshotFormat {
 
     static final int MAGIC = 0x4E4F4453;
@@ -8,7 +10,8 @@ final class SnapshotFormat {
     static final int HEADER_CHECKSUMMED_BYTES = 40;
     static final int SECTION_HEADER_BYTES = 20;
     static final int CHUNK_BYTES = 1 << 20;
-    static final int SALT_BYTES = 32;
+    static final int SALT_BYTES = Pseudonym.SALT_BYTES;
+    static final byte SYMBOL_ERASED = 1;
     static final int DIGEST_BYTES = 32;
     static final int RELATION_ENTRY_BYTES = 12;
 

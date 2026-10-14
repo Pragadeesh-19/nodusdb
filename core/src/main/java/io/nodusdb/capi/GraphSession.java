@@ -3,12 +3,14 @@ package io.nodusdb.capi;
 import io.nodusdb.authz.Durability;
 import io.nodusdb.authz.TupleStore;
 import io.nodusdb.authz.TupleTransaction;
+import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.replica.FollowerRuntime;
 import io.nodusdb.ship.ShipStats;
+import io.nodusdb.stats.ErasureReport;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -203,6 +205,19 @@ public final class GraphSession implements AutoCloseable {
         return token;
     }
 
+    public synchronized Token erase(String name) {
+        requireOpen();
+        return tuples.erase(name);
+    }
+
+    public void awaitErased(Token token, Duration timeout) {
+        requireOpen();
+        if (follower != null) {
+            throw new UnsupportedFeatureException("a follower does not scrub erasures; wait on the writer");
+        }
+        kernel.erasureProgress().awaitErased(token, timeout);
+    }
+
     public void awaitShipped(Token token, Duration timeout) {
         requireOpen();
         tuples.awaitShipped(token, timeout);
@@ -213,7 +228,8 @@ public final class GraphSession implements AutoCloseable {
         if (follower != null) {
             return follower.statsJson();
         }
-        return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark(), kernel.closureStats());
+        return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark(), kernel.closureStats(),
+                ErasureReport.of(kernel));
     }
 
     private synchronized Token writeLocally(TupleTransaction transaction) {

@@ -66,7 +66,7 @@ public final class SnapshotWriter {
         out.putInt(count);
         for (int id = 0; id < count; id++) {
             byte[] name = symbols.resolve(id);
-            out.putByte((byte) 0);
+            out.putByte(symbols.isErased(id) ? SnapshotFormat.SYMBOL_ERASED : 0);
             out.putInt(name.length);
             out.putBytes(name);
         }

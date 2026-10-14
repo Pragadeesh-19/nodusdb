@@ -3,6 +3,8 @@ package io.nodusdb.ship;
 import io.nodusdb.json.JsonWriter;
 import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.log.ShipWatermark;
+import io.nodusdb.stats.ErasureJson;
+import io.nodusdb.stats.ErasureReport;
 import io.nodusdb.stats.ReachabilityJson;
 
 public final class ShipStats {
@@ -13,7 +15,8 @@ public final class ShipStats {
     private ShipStats() {
     }
 
-    public static String json(long epoch, long appliedLsn, ShipWatermark watermark, ClosureStats reachability) {
+    public static String json(long epoch, long appliedLsn, ShipWatermark watermark, ClosureStats reachability,
+                              ErasureReport erasure) {
         JsonWriter json = new JsonWriter();
         json.beginObject();
         json.name("epoch").value(epoch);
@@ -25,6 +28,7 @@ public final class ShipStats {
             json.beginObject().name("configured").value(false).endObject();
         }
         ReachabilityJson.write(json, reachability);
+        ErasureJson.write(json, erasure);
         json.endObject();
         return json.toString();
     }

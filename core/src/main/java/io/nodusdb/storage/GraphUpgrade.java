@@ -3,6 +3,7 @@ package io.nodusdb.storage;
 import io.nodusdb.error.UpgradeFailedException;
 import io.nodusdb.io.FileSync;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.storage.DirectoryFormat.Layout;
 import io.nodusdb.storage.legacy.LegacyGraph;
@@ -11,7 +12,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.security.SecureRandom;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -25,7 +25,6 @@ public final class GraphUpgrade {
         }
     }
 
-    private static final int SALT_BYTES = 32;
     private static final int SPACE_FACTOR = 2;
 
     private GraphUpgrade() {
@@ -92,7 +91,7 @@ public final class GraphUpgrade {
         observer.accept(UpgradeStep.TRIPWIRE_WRITTEN);
         Path staging = directory.resolve(GraphFiles.STAGING_DIRECTORY);
         FileTrees.deleteRecursively(staging);
-        StagedGraph.build(staging, legacy, newSalt());
+        StagedGraph.build(staging, legacy, Pseudonym.newSalt());
         observer.accept(UpgradeStep.STAGING_BUILT);
         install(directory, staging, observer);
         DirectoryFormat.writeFormat(directory);
@@ -143,11 +142,5 @@ public final class GraphUpgrade {
         } finally {
             upgraded.close();
         }
-    }
-
-    private static byte[] newSalt() {
-        byte[] salt = new byte[SALT_BYTES];
-        new SecureRandom().nextBytes(salt);
-        return salt;
     }
 }

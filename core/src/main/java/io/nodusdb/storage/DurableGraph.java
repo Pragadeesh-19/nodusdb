@@ -1,7 +1,9 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.erasure.ErasureRunner;
 import io.nodusdb.error.UpgradeRequiredException;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.LogRecovery;
 import io.nodusdb.log.LogStore;
@@ -23,14 +25,13 @@ import io.nodusdb.storage.snapshot.SnapshotReader;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
 
 public final class DurableGraph {
 
     private static final int LOCAL_WRITER_KEY = 0;
-    private static final int SALT_BYTES = 32;
     private static final long MICROS_PER_SECOND = 1_000_000L;
     private static final long NANOS_PER_MICRO = 1_000L;
 
@@ -51,6 +52,7 @@ public final class DurableGraph {
 
         @Override
         public void committed(long commitLsn, long commitMicros) {
+            kernel.replayCommitted(commitLsn);
         }
 
         long records() {
@@ -100,7 +102,7 @@ public final class DurableGraph {
         if (snapshot != null) {
             recovered = recovered.withCommitMicrosFloor(snapshot.lastCommitMicros());
         }
-        byte[] salt = snapshot == null ? newSalt() : snapshot.salt();
+        byte[] salt = snapshot == null ? Pseudonym.newSalt() : snapshot.salt();
         long latestEpoch = kernel.epochHistory().latestEpoch();
         SnapshotStaging staging = new SnapshotStaging(directory.resolve(GraphFiles.SHIP_STAGING));
         ShippingRuntime runtime = null;
@@ -126,7 +128,7 @@ public final class DurableGraph {
             LogStore attached = runtime == null ? log : new ShippingLogStore(log, runtime.state(), runtime::close);
             CheckpointListener listener = runtime == null ? CheckpointListener.NONE : runtime.checkpointListener();
             kernel.recordEpoch(epoch, recovered.lastLsn() + 1, recovered.lastLsn());
-            kernel.attachLog(attached, new DurableStore(directory, lock, salt, listener));
+            kernel.attachLog(attached, new DurableStore(directory, lock, salt, afterLsn, listener));
             if (layout == Layout.NEW) {
                 kernel.checkpoint();
                 DirectoryFormat.writeFormat(directory);
@@ -135,12 +137,17 @@ public final class DurableGraph {
                 runtime.startShipping(kernel, log, files, directory.resolve(GraphFiles.SHIP_SCRATCH));
                 kernel.attachShipping(runtime.state());
             }
+            kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping)));
         } catch (IOException | RuntimeException e) {
             closeQuietly(runtime, e);
             log.abort();
             throw e;
         }
         return new Recovery(kernel, sink.records(), recovered.discardedRecords(), recovered.truncatedBytes());
+    }
+
+    private static Duration erasureCheckpointDelay(ShippingConfig shipping) {
+        return shipping == null ? ShippingConfig.DEFAULT_ERASURE_CHECKPOINT_DELAY : shipping.erasureCheckpointDelay();
     }
 
     private static long oldestRetainedLsn(RecoveryResult recovered) {
@@ -172,12 +179,6 @@ public final class DurableGraph {
     private static SnapshotMeta loadSnapshot(Path directory, GraphKernel kernel) throws IOException {
         Path snapshot = directory.resolve(GraphFiles.SNAPSHOT);
         return Files.isRegularFile(snapshot) ? SnapshotReader.load(snapshot, kernel) : null;
-    }
-
-    private static byte[] newSalt() {
-        byte[] salt = new byte[SALT_BYTES];
-        new SecureRandom().nextBytes(salt);
-        return salt;
     }
 
     static long wallClockMicros() {

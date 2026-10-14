@@ -16,6 +16,7 @@ import org.graalvm.nativeimage.c.type.VoidPointer;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Duration;
 
 public final class AuthzCApi {
 
@@ -23,6 +24,7 @@ public final class AuthzCApi {
     private static final int NO_TOKEN = -1;
     private static final int LOCAL_DURABILITY = 0;
     private static final int LAKE_DURABILITY = 1;
+    private static final long MAX_WAIT_MILLIS = Duration.ofDays(3_650).toMillis();
 
     private AuthzCApi() {
     }
@@ -52,6 +54,30 @@ public final class AuthzCApi {
         try {
             String document = new String(NodusCApi.readBytes(utf8, length), StandardCharsets.UTF_8);
             writeToken(tokenOut, NodusCApi.session(handle).applySchema(document));
+            return NodusCApi.OK;
+        } catch (RuntimeException e) {
+            return Failures.codeOf(e);
+        }
+    }
+
+    @CEntryPoint(name = "nodus_erase")
+    public static int erase(IsolateThread thread, VoidPointer handle, CCharPointer utf8, int length,
+                            CLongPointer tokenOut) {
+        try {
+            String name = new String(NodusCApi.readBytes(utf8, length), StandardCharsets.UTF_8);
+            writeToken(tokenOut, NodusCApi.session(handle).erase(name));
+            return NodusCApi.OK;
+        } catch (RuntimeException e) {
+            return Failures.codeOf(e);
+        }
+    }
+
+    @CEntryPoint(name = "nodus_await_erased")
+    public static int awaitErased(IsolateThread thread, VoidPointer handle, long epoch, long lsn,
+                                  long timeoutMillis) {
+        try {
+            Duration timeout = Duration.ofMillis(Math.min(timeoutMillis, MAX_WAIT_MILLIS));
+            NodusCApi.session(handle).awaitErased(new Token(epoch, lsn), timeout);
             return NodusCApi.OK;
         } catch (RuntimeException e) {
             return Failures.codeOf(e);

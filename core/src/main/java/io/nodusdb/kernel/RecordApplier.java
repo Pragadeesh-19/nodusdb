@@ -1,9 +1,9 @@
 package io.nodusdb.kernel;
 
-import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.record.RecordReader;
 import io.nodusdb.log.record.RecordType;
 
@@ -25,9 +25,13 @@ final class RecordApplier {
             case SCHEMA -> applySchema(record);
             case EPOCH -> state.epochs().record(record.epochNumber(), record.lsn(), record.epochHandoffLsn());
             case TXN_COMMIT -> { }
-            case ERASE -> throw new UnsupportedFeatureException(
-                    "this log holds an erasure record, which needs a newer version of nodusdb");
+            case ERASE -> applyErase(record);
         }
+    }
+
+    private void applyErase(RecordReader record) {
+        state.symbols().erase(record.eraseSymbolId(), Pseudonym.unpadded(record.erasePseudonym()));
+        state.eraseApplied();
     }
 
     private void applyTuple(RecordReader record, boolean add) {

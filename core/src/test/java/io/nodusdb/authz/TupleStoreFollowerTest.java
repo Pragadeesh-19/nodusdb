@@ -10,6 +10,7 @@ import io.nodusdb.storage.GraphDigest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -18,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -70,6 +72,26 @@ class TupleStoreFollowerTest {
         assertFalse(follower.check("group:g0", "member", "user:alice"));
         assertTrue(follower.check("group:g21", "member", "user:alice"));
         assertEquals(primaryKernel.closureStats().entries(), followerKernel.closureStats().entries());
+    }
+
+    @Test
+    void aFollowerAppliesAnErasureAndHoldsTheSamePseudonymAsThePrimary() {
+        primary.applySchema(SchemaFixtures.DOCUMENTS);
+        primary.add("document:readme", "viewer", "user:alice");
+        primary.add("group:eng", "member", "user:alice");
+        replicate();
+        byte[] name = "user:alice".getBytes(StandardCharsets.UTF_8);
+        int alice = followerKernel.symbols().lookup(name, 0, name.length);
+
+        primary.erase("user:alice");
+        replicate();
+
+        assertEquals(-1, followerKernel.symbols().lookup(name, 0, name.length));
+        assertArrayEquals(primaryKernel.symbols().resolve(alice), followerKernel.symbols().resolve(alice));
+        assertEquals(1, followerKernel.erasedSymbols());
+        assertFalse(follower.check("document:readme", "view", "user:alice"));
+        assertEquals(GraphDigest.of(primaryKernel), GraphDigest.of(followerKernel));
+        assertThrows(UnsupportedFeatureException.class, () -> follower.erase("user:bob"));
     }
 
     @Test

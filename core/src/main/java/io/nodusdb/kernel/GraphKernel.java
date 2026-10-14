@@ -11,6 +11,7 @@ import io.nodusdb.kernel.closure.ClosureMaintainer;
 import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.kernel.memory.MemoryBudget;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.kernel.symbols.SymbolTable;
 import io.nodusdb.kernel.traversal.KHopTraversal;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
@@ -44,9 +45,11 @@ public final class GraphKernel implements AutoCloseable {
     private final RecordReader applyReader = new RecordReader();
     private final ThreadLocal<KHopTraversal> traversals = ThreadLocal.withInitial(KHopTraversal::new);
     private LogStore log = new VolatileLog();
-    private DurableStorage storage;
+    private volatile DurableStorage storage;
+    private byte[] memorySalt;
     private volatile ShipWatermark shipWatermark = ShipWatermark.NONE;
-    private boolean closed;
+    private volatile ErasureProgress erasure = ErasureProgress.NONE;
+    private volatile boolean closed;
 
     public GraphKernel() {
         this(NO_MEMORY_LIMIT);
@@ -131,8 +134,30 @@ public final class GraphKernel implements AutoCloseable {
         }
     }
 
+    public void attachErasure(ErasureProgress progress) {
+        requireWritable();
+        Objects.requireNonNull(progress, "progress");
+        writer.lock();
+        try {
+            if (erasure != ErasureProgress.NONE) {
+                throw new IllegalStateException("erasure progress is already attached");
+            }
+            this.erasure = progress;
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public ErasureProgress erasureProgress() {
+        return erasure;
+    }
+
     public ShipWatermark shipWatermark() {
         return shipWatermark;
+    }
+
+    public boolean isClosed() {
+        return closed;
     }
 
     public boolean isDurable() {
@@ -171,6 +196,38 @@ public final class GraphKernel implements AutoCloseable {
         return state.epochs();
     }
 
+    public int erasedSymbols() {
+        return state.symbols().erasedCount();
+    }
+
+    public long newestEraseLsn() {
+        return state.newestEraseLsn();
+    }
+
+    public long checkpointLsn() {
+        DurableStorage attached = storage;
+        return attached == null ? 0 : attached.checkpointLsn();
+    }
+
+    public long oldestLogLsn() {
+        return log.oldestLsn();
+    }
+
+    public byte[] erasureSalt() {
+        writer.lock();
+        try {
+            if (storage != null) {
+                return storage.salt();
+            }
+            if (memorySalt == null) {
+                memorySalt = Pseudonym.newSalt();
+            }
+            return memorySalt.clone();
+        } finally {
+            writer.unlock();
+        }
+    }
+
     public void checkpoint() {
         requireWritable();
         writer.lock();
@@ -178,6 +235,18 @@ public final class GraphKernel implements AutoCloseable {
             requireOpen();
             requireDurable("checkpoint");
             checkpointLocked();
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public void trimLog() {
+        requireWritable();
+        writer.lock();
+        try {
+            requireOpen();
+            requireDurable("trim");
+            log.trim(storage.checkpointLsn());
         } finally {
             writer.unlock();
         }
@@ -197,6 +266,7 @@ public final class GraphKernel implements AutoCloseable {
     @Override
     public void close() {
         maintainer.stop();
+        erasure.close();
         writer.lock();
         try {
             if (closed) {
@@ -441,6 +511,10 @@ public final class GraphKernel implements AutoCloseable {
         applier.apply(record);
     }
 
+    public void replayCommitted(long commitLsn) {
+        state.appliedLsn(commitLsn);
+    }
+
     public void restorePosition(long lsn, long lastCommitMicros) {
         requireReplica("restore a position");
         if (lsn < 0 || lastCommitMicros < 0) {
@@ -473,6 +547,11 @@ public final class GraphKernel implements AutoCloseable {
 
     public void restoreSymbol(int id, byte[] utf8) {
         state.symbols().append(id, utf8, 0, utf8.length);
+    }
+
+    public void restoreErasedSymbol(int id, byte[] pseudonym, long erasedByLsn) {
+        state.symbols().appendErased(id, pseudonym);
+        state.eraseRestored(erasedByLsn);
     }
 
     public void restoreCatalog(RelationCatalog catalog) {
@@ -634,6 +713,7 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
+        long erasedBefore = state.newestEraseLsn();
         long lsn = journal(batch, awaitDurable);
         sequence.beginWrite();
         try {
@@ -644,6 +724,9 @@ public final class GraphKernel implements AutoCloseable {
             throw e;
         } finally {
             sequence.endWrite();
+        }
+        if (state.newestEraseLsn() != erasedBefore) {
+            erasure.wake();
         }
         return lsn;
     }

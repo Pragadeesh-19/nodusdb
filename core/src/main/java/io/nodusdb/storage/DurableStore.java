@@ -19,15 +19,13 @@ final class DurableStore implements DurableStorage {
     private final DirectoryLock lock;
     private final byte[] salt;
     private final CheckpointListener listener;
+    private volatile long checkpointLsn;
 
-    DurableStore(Path directory, DirectoryLock lock, byte[] salt) {
-        this(directory, lock, salt, CheckpointListener.NONE);
-    }
-
-    DurableStore(Path directory, DirectoryLock lock, byte[] salt, CheckpointListener listener) {
+    DurableStore(Path directory, DirectoryLock lock, byte[] salt, long checkpointLsn, CheckpointListener listener) {
         this.directory = directory;
         this.lock = lock;
         this.salt = salt.clone();
+        this.checkpointLsn = checkpointLsn;
         this.listener = listener;
     }
 
@@ -41,12 +39,23 @@ final class DurableStore implements DurableStorage {
             Path snapshot = directory.resolve(GraphFiles.SNAPSHOT);
             Files.move(temp, snapshot, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             FileSync.directory(directory);
+            checkpointLsn = lsn;
             listener.checkpointed(snapshot, lsn);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
         log.rollSegment();
         log.trim(lsn);
+    }
+
+    @Override
+    public long checkpointLsn() {
+        return checkpointLsn;
+    }
+
+    @Override
+    public byte[] salt() {
+        return salt.clone();
     }
 
     @Override

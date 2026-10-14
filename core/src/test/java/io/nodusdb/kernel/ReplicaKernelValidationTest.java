@@ -1,7 +1,6 @@
 package io.nodusdb.kernel;
 
 import io.nodusdb.error.SchemaViolationException;
-import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.catalog.RelationCatalog;
 import io.nodusdb.log.record.RecordFixtures;
 import io.nodusdb.log.record.RecordFormat;
@@ -186,7 +185,7 @@ class ReplicaKernelValidationTest {
     }
 
     @Test
-    void anEraseRecordStopsTheChunkAtTheLastWholeTransactionAndLeavesTheReplicaUsable() {
+    void anEraseOfAnUndefinedSymbolStopsTheChunkAtTheLastWholeTransactionAndLeavesTheReplicaUsable() {
         stream.add(1, 2);
         stream.transaction(batch -> {
             batch.tuple(RecordType.TUPLE_ADD, 3, 0, 0, 4);
@@ -194,7 +193,7 @@ class ReplicaKernelValidationTest {
         });
         ReplicatedStream.Chunk chunk = stream.drain();
 
-        assertThrows(UnsupportedFeatureException.class, () -> chunk.applyTo(replica));
+        assertThrows(IllegalArgumentException.class, () -> chunk.applyTo(replica));
 
         assertEquals(1, replica.appliedLsn());
         assertTrue(replica.hasEdge(1, 2));

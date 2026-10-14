@@ -27,6 +27,11 @@ public final class VolatileLog implements LogStore {
     }
 
     @Override
+    public synchronized long oldestLsn() {
+        return lastLsn + 1;
+    }
+
+    @Override
     public synchronized long durableLsn() {
         return lastLsn;
     }

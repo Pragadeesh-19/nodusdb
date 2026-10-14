@@ -240,6 +240,13 @@ public final class SegmentedLog implements LogStore {
         }
     }
 
+    @Override
+    public long oldestLsn() {
+        synchronized (monitor) {
+            return segmentBases.isEmpty() ? lastLsn + 1 : segmentBases.get(0);
+        }
+    }
+
     public List<Long> segmentBases() {
         synchronized (monitor) {
             return List.copyOf(segmentBases);

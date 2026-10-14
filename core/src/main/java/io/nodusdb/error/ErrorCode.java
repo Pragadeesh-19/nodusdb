@@ -16,7 +16,8 @@ public enum ErrorCode {
     INDETERMINATE(-12),
     TOKEN_LOST(-13),
     SHIP_TIMEOUT(-14),
-    CHAIN_TRUST(-15);
+    CHAIN_TRUST(-15),
+    ERASURE_PENDING(-16);
 
     private final int value;
 

@@ -38,6 +38,16 @@ public final class CapturingLog implements LogStore {
             }
 
             @Override
+            public long checkpointLsn() {
+                return 0;
+            }
+
+            @Override
+            public byte[] salt() {
+                return new byte[32];
+            }
+
+            @Override
             public void close() {
             }
         };
@@ -58,6 +68,11 @@ public final class CapturingLog implements LogStore {
     @Override
     public synchronized long lastLsn() {
         return lastLsn;
+    }
+
+    @Override
+    public synchronized long oldestLsn() {
+        return 1;
     }
 
     @Override

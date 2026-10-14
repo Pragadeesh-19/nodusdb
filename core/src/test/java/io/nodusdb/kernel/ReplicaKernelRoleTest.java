@@ -2,7 +2,6 @@ package io.nodusdb.kernel;
 
 import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.memory.MemoryLimitExceededException;
-import io.nodusdb.log.LogStore;
 import io.nodusdb.log.ShipWatermark;
 import io.nodusdb.log.VolatileLog;
 import io.nodusdb.log.record.RecordBatch;
@@ -29,16 +28,6 @@ class ReplicaKernelRoleTest {
         }
     }
 
-    private static final DurableStorage NO_STORAGE = new DurableStorage() {
-        @Override
-        public void checkpoint(GraphKernel kernel, LogStore log) {
-        }
-
-        @Override
-        public void close() {
-        }
-    };
-
     static List<Write> everyWriteEntryPoint() {
         return List.of(
                 new Write("commit", kernel -> kernel.commit(committedTuple())),
@@ -50,8 +39,10 @@ class ReplicaKernelRoleTest {
                 new Write("addEdges", kernel -> kernel.addEdges(new long[] {1, 2}, 1)),
                 new Write("removeEdges", kernel -> kernel.removeEdges(new long[] {1, 2}, 1)),
                 new Write("checkpoint", GraphKernel::checkpoint),
-                new Write("attachLog", kernel -> kernel.attachLog(new VolatileLog(), NO_STORAGE)),
-                new Write("attachShipping", kernel -> kernel.attachShipping(ShipWatermark.NONE)));
+                new Write("trimLog", GraphKernel::trimLog),
+                new Write("attachLog", kernel -> kernel.attachLog(new VolatileLog(), CapturingLog.noStorage())),
+                new Write("attachShipping", kernel -> kernel.attachShipping(ShipWatermark.NONE)),
+                new Write("attachErasure", kernel -> kernel.attachErasure(ErasureProgress.NONE)));
     }
 
     private static RecordBatch committedTuple() {

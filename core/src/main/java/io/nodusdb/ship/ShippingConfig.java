@@ -15,11 +15,15 @@ import static io.nodusdb.config.ConfigFields.MAX_BYTES;
 import static io.nodusdb.config.ConfigFields.MAX_DAYS;
 import static io.nodusdb.config.ConfigFields.MAX_MILLIS;
 import static io.nodusdb.config.ConfigFields.MAX_SECONDS;
+import static io.nodusdb.config.ConfigFields.between;
 import static io.nodusdb.config.ConfigFields.bounded;
 import static io.nodusdb.config.ConfigFields.path;
 import static io.nodusdb.config.ConfigFields.requestTimeout;
 
-public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings ship, Iceberg iceberg) {
+public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings ship, Iceberg iceberg,
+                             Duration erasureCheckpointDelay) {
+
+    public static final Duration DEFAULT_ERASURE_CHECKPOINT_DELAY = Duration.ofSeconds(60);
 
     public record Signing(Path keyFile, int keyId, Path publicKeyFile) {
     }
@@ -27,11 +31,13 @@ public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings 
     public record Iceberg(boolean enabled, Duration commitInterval, Duration tableRetention) {
     }
 
-    private static final Set<String> TOP_LEVEL = Set.of("store", "credentials", "signing", "ship", "iceberg");
+    private static final Set<String> TOP_LEVEL = Set.of("store", "credentials", "signing", "ship", "iceberg",
+            "erasure");
     private static final Set<String> SIGNING = Set.of("key_file", "key_id", "public_key_file");
     private static final Set<String> SHIP = Set.of("interval_ms", "max_object_bytes", "backlog_cap_bytes",
             "retention_days", "request_timeout_ms");
     private static final Set<String> ICEBERG = Set.of("enabled", "commit_interval_s", "table_retention_days");
+    private static final Set<String> ERASURE = Set.of("checkpoint_delay_s");
     private static final Duration DEFAULT_COMMIT_INTERVAL = Duration.ofSeconds(60);
     private static final Duration DEFAULT_TABLE_RETENTION = Duration.ofDays(7);
 
@@ -45,7 +51,8 @@ public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings 
             shipBlock.requireKnownKeys(SHIP);
             ShipSettings ship = ship(shipBlock);
             return new ShippingConfig(storage.withRequestTimeout(requestTimeout(shipBlock)), signing, ship,
-                    iceberg(root.objectOr("iceberg", JsonObject.EMPTY)));
+                    iceberg(root.objectOr("iceberg", JsonObject.EMPTY)),
+                    erasureCheckpointDelay(root.objectOr("erasure", JsonObject.EMPTY)));
         } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException("invalid shipping configuration: " + invalid.getMessage());
         }
@@ -89,6 +96,13 @@ public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings 
         } catch (IllegalArgumentException refused) {
             throw new IllegalArgumentException("field '" + key + "': " + refused.getMessage());
         }
+    }
+
+    private static Duration erasureCheckpointDelay(JsonObject block) {
+        block.requireKnownKeys(ERASURE);
+        return block.has("checkpoint_delay_s")
+                ? Duration.ofSeconds(between(block, "checkpoint_delay_s", 0, MAX_SECONDS))
+                : DEFAULT_ERASURE_CHECKPOINT_DELAY;
     }
 
     private static Iceberg iceberg(JsonObject block) {

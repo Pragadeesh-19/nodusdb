@@ -112,6 +112,15 @@ public final class RelationCatalog {
         return (flagsOf(relation) & RETIRED) != 0;
     }
 
+    public boolean usesSymbol(int symbol) {
+        for (int i = 0; i < ids.length; i++) {
+            if (typeSymbols[i] == symbol || nameSymbols[i] == symbol) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public String evolutionProblem(RelationCatalog next) {
         if (next.version != version + 1) {
             return "schema version " + next.version + " does not follow version " + version;

@@ -34,6 +34,7 @@ public final class TupleStore {
 
     private final GraphKernel kernel;
     private final NodeTypes types;
+    private final TupleEraser eraser;
     private final int depthLimit;
     private final ReentrantLock writer = new ReentrantLock();
     private final ReentrantLock refresh = new ReentrantLock();
@@ -44,6 +45,7 @@ public final class TupleStore {
         this.kernel = kernel;
         this.depthLimit = depthLimit;
         this.types = new NodeTypes(kernel.symbols());
+        this.eraser = new TupleEraser(kernel);
         this.evaluators = ThreadLocal.withInitial(() -> new CheckEvaluator(kernel, types, depthLimit));
         this.model = kernel.catalog().version() == 0
                 ? CompiledSchema.EMPTY : SchemaCompiler.rebuild(kernel.catalog(), kernel.symbols());
@@ -115,6 +117,17 @@ public final class TupleStore {
 
     public Token remove(String object, String relation, String subject, String subjectRelation) {
         return write(new TupleTransaction().remove(object, relation, subject, subjectRelation));
+    }
+
+    public Token erase(String name) {
+        kernel.requireWritable();
+        Objects.requireNonNull(name, "name");
+        writer.lock();
+        try {
+            return eraser.erase(name);
+        } finally {
+            writer.unlock();
+        }
     }
 
     public Token write(TupleTransaction transaction) {
