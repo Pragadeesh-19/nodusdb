@@ -144,13 +144,15 @@ class ShippingTest(unittest.TestCase):
 
         stats = graph.stats()
 
-        self.assertEqual({"epoch", "applied_lsn", "shipping", "reachability"}, set(stats))
+        self.assertEqual({"epoch", "applied_lsn", "shipping", "reachability", "erasure"}, set(stats))
         self.assertEqual("ACTIVE", stats["shipping"]["phase"])
         for key in ("shipped_lsn", "lag_lsn", "chain_seq", "backlog_bytes", "backlog_cap_bytes", "last_error",
                     "snapshot_references", "retention", "projection", "events"):
             self.assertIn(key, stats["shipping"])
         self.assertEqual("DISABLED", stats["shipping"]["projection"]["phase"])
         self.assertEqual(stats["epoch"], stats["shipping"]["epoch"])
+        self.assertTrue(stats["erasure"]["local"]["configured"])
+        self.assertEqual(0, stats["erasure"]["erased_symbols"])
 
     def test_stats_without_shipping_say_so(self):
         with Graph() as graph:
@@ -402,7 +404,7 @@ class ShippingTest(unittest.TestCase):
             key_file=Path("k.pem"), key_id=1, public_key_file=Path("k.pub"),
             credentials=static_credentials("id", "secret", "token"), interval_ms=50, max_object_bytes=1 << 20,
             backlog_cap_bytes=1 << 30, retention_days=3, request_timeout_ms=2_000, iceberg=True,
-            iceberg_commit_interval_s=30, iceberg_table_retention_days=2)
+            iceberg_commit_interval_s=30, iceberg_table_retention_days=2, erasure_checkpoint_delay_s=0)
 
         document = json.loads(shipping.to_json())
 
@@ -415,6 +417,7 @@ class ShippingTest(unittest.TestCase):
         self.assertEqual({"enabled": True, "commit_interval_s": 30, "table_retention_days": 2},
                          document["iceberg"])
         self.assertEqual({"key_file": "k.pem", "key_id": 1, "public_key_file": "k.pub"}, document["signing"])
+        self.assertEqual({"checkpoint_delay_s": 0}, document["erasure"])
 
 
 @unittest.skipUnless(_native_has_shipping_exports(), "libnodusdb lacks the shipping exports; rebuild the native library")

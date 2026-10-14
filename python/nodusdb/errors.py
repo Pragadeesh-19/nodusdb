@@ -81,12 +81,20 @@ class NodusChainTrustError(NodusError):
     code = -15
 
 
+class NodusErasurePendingError(NodusError):
+    """The erasure is applied, but a copy of the name outside memory was not yet scrubbed when the wait ended."""
+
+    code = -16
+    token = None
+
+
 _BY_CODE = {
     error.code: error
     for error in (
         NodusMemoryError, NodusStaleReadError, NodusCheckDepthError, NodusSchemaError, NodusLogBacklogError,
         NodusWriterFencedError, NodusCorruptLogError, NodusUnsupportedError, NodusUpgradeRequiredError,
         NodusIndeterminateError, NodusTokenLostError, NodusShipTimeoutError, NodusChainTrustError,
+        NodusErasurePendingError,
     )
 }
 

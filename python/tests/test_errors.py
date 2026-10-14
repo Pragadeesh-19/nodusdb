@@ -21,6 +21,7 @@ CONTRACT = {
     -13: errors.NodusTokenLostError,
     -14: errors.NodusShipTimeoutError,
     -15: errors.NodusChainTrustError,
+    -16: errors.NodusErasurePendingError,
 }
 
 
@@ -47,8 +48,15 @@ class ErrorContractTest(unittest.TestCase):
         error.token = (3, 40)
         self.assertEqual((3, 40), error.token)
 
-    def test_the_contract_is_contiguous_from_minus_one_to_minus_fifteen(self):
-        self.assertEqual(set(range(-15, 0)) - {-2}, set(CONTRACT))
+    def test_a_pending_erasure_has_no_token_until_the_caller_attaches_one(self):
+        error = errors.error_for(-16, "not scrubbed")
+
+        self.assertIsNone(error.token)
+        error.token = (2, 81)
+        self.assertEqual((2, 81), error.token)
+
+    def test_the_contract_is_contiguous_from_minus_one_to_minus_sixteen(self):
+        self.assertEqual(set(range(-16, 0)) - {-2}, set(CONTRACT))
 
     def test_an_unknown_code_is_a_generic_error(self):
         self.assertIs(errors.NodusError, type(errors.error_for(-99, "unknown")))

@@ -56,6 +56,7 @@ class Shipping:
     iceberg: bool = False
     iceberg_commit_interval_s: typing.Optional[int] = None
     iceberg_table_retention_days: typing.Optional[int] = None
+    erasure_checkpoint_delay_s: typing.Optional[int] = None
 
     @classmethod
     def directory(cls, path, **settings):
@@ -97,6 +98,8 @@ class Shipping:
         })
         if self.iceberg or len(iceberg) > 1:
             document["iceberg"] = iceberg
+        if self.erasure_checkpoint_delay_s is not None:
+            document["erasure"] = {"checkpoint_delay_s": self.erasure_checkpoint_delay_s}
         return json.dumps(document)
 
 

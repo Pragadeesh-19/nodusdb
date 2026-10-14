@@ -12,7 +12,7 @@ import weakref
 
 from . import _native
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
-from .errors import NodusShipTimeoutError, NodusStaleReadError, NodusUnsupportedError
+from .errors import NodusErasurePendingError, NodusShipTimeoutError, NodusStaleReadError, NodusUnsupportedError
 from .follower import Follower, TakeoverReport
 from .shipping import Shipping
 
@@ -300,17 +300,24 @@ class Graph:
                 thread, ctypes.c_char_p, ctypes.c_int, ctypes.c_int64, ctypes.c_char_p, ctypes.c_int,
                 ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int),
             ]
+        if hasattr(lib, "nodus_erase"):
+            lib.nodus_erase.restype = ctypes.c_int
+            lib.nodus_erase.argtypes = [thread, handle, ctypes.c_char_p, ctypes.c_int, ctypes.POINTER(ctypes.c_int64)]
+        if hasattr(lib, "nodus_await_erased"):
+            lib.nodus_await_erased.restype = ctypes.c_int
+            lib.nodus_await_erased.argtypes = [thread, handle, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
 
     def _shipping_export(self, name):
-        function = getattr(self._lib, name, None)
-        if function is None:
-            raise error_for(NodusUnsupportedError.code, "this libnodusdb has no shipping support; rebuild or upgrade it")
-        return function
+        return self._optional_export(name, "shipping")
 
     def _follower_export(self, name):
+        return self._optional_export(name, "follower")
+
+    def _optional_export(self, name, feature):
         function = getattr(self._lib, name, None)
         if function is None:
-            raise error_for(NodusUnsupportedError.code, "this libnodusdb has no follower support; rebuild or upgrade it")
+            message = f"this libnodusdb has no {feature} support; rebuild or upgrade it"
+            raise error_for(NodusUnsupportedError.code, message)
         return function
 
     @serialized
@@ -371,6 +378,32 @@ class Graph:
         epoch, lsn = _token_parts(token)
         self._require_shipping()
         self._await(Token(epoch, lsn), _wait_milliseconds(timeout))
+
+    @serialized
+    def erase(self, name):
+        """Erase a name: remove every tuple that names it and replace the name with a salted pseudonym.
+
+        Returns the token of the erasure. Memory is scrubbed when the call returns. The copies on disk, in the
+        bucket and in the Iceberg table are scrubbed in the background; wait_erased(token) waits for them.
+        A name that does not exist returns the current token."""
+        encoded = _text(name)
+        out = (ctypes.c_int64 * 2)()
+        code = self._optional_export("nodus_erase", "erasure")(
+            self._thread, self._require_open(), encoded, len(encoded), out)
+        self._require_success(code, "erase failed")
+        return Token(out[0], out[1])
+
+    def wait_erased(self, token, timeout=None):
+        """Wait until no copy that nodusdb keeps still holds a name erased at or before the token.
+
+        Waits forever when timeout is None. Raises NodusErasurePendingError, naming the layers still pending, when
+        timeout seconds pass first."""
+        epoch, lsn = _token_parts(token)
+        milliseconds = MAX_WAIT_MILLISECONDS if timeout is None else _wait_milliseconds(timeout)
+        export = self._optional_export("nodus_await_erased", "erasure")
+        code = export(self._thread, self._require_open(), epoch, lsn, milliseconds)
+        if code != 0:
+            raise self._failure(code, "the erasure is not scrubbed everywhere yet", token=Token(epoch, lsn))
 
     def stats(self):
         """A snapshot of the graph's position, of the reachability index and, when shipping is on, of the shipper.
@@ -677,7 +710,7 @@ class Graph:
             return NodusMemoryError(self._limit_message(operation))
         detail = _native.last_error_message(self._lib, self._thread)
         error = error_for(code, f"{message}: {detail}" if detail else message)
-        if isinstance(error, NodusShipTimeoutError):
+        if isinstance(error, (NodusShipTimeoutError, NodusErasurePendingError)):
             error.token = token
         return error
 
