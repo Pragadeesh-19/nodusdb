@@ -12,7 +12,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
-import java.util.HexFormat;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -197,18 +196,16 @@ class EdgeLogProjectorTest {
 
     @Test
     void anEraseRecordIsAnEventWithThePseudonymAndLaterRowsShowItInsteadOfTheName() {
-        byte[] pseudonym = RecordFixtures.pseudonym();
-        Chunk erase = rig.script.transaction(T0, b -> b.erase(1, pseudonym));
+        Chunk erase = rig.script.transaction(T0, b -> b.erase(1, RecordFixtures.pseudonym()));
         Chunk later = rig.script.transaction(T0 + 1, b -> b.tuple(RecordType.TUPLE_ADD, 0, 1, 0, 1));
 
         List<Row> rows = project(erase, later);
 
-        String hex = HexFormat.of().formatHex(pseudonym);
         assertEquals("erase", rows.get(0).event());
-        assertEquals(hex, rows.get(0).detail());
+        assertEquals("erased:0123456789abcdef", rows.get(0).detail());
         assertEquals("", rows.get(0).objectId());
-        assertEquals("", rows.get(1).subjectType());
-        assertEquals(hex, rows.get(1).subjectId());
+        assertEquals("erased", rows.get(1).subjectType());
+        assertEquals("0123456789abcdef", rows.get(1).subjectId());
     }
 
     @Test

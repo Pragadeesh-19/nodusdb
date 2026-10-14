@@ -1,12 +1,12 @@
 package io.nodusdb.projection;
 
 import io.nodusdb.chain.ChainBody;
+import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.record.RecordReader;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
 
 final class EdgeLogDecoder {
@@ -105,7 +105,7 @@ final class EdgeLogDecoder {
     }
 
     private void erase(RecordReader reader) {
-        String pseudonym = HexFormat.of().formatHex(reader.erasePseudonym());
+        String pseudonym = new String(Pseudonym.unpadded(reader.erasePseudonym()), StandardCharsets.US_ASCII);
         names.erase(reader.eraseSymbolId(), pseudonym);
         transaction.add(new Pending(reader.lsn(), EVENT_ERASE, NONE, NONE, NONE, NONE, tenureEpoch, schemaVersion,
                 pseudonym));
