@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 DOMAIN = b"nodus.chain.v1\x00"
 MAGIC = b"NCHN"
 VERSION = 1
-KINDS = {"RECORDS": 1, "SNAPSHOT_REF": 2}
+KINDS = {"RECORDS": 1, "SNAPSHOT_REF": 2, "REDACTION": 3}
 RECORDS_FILE = Path(__file__).resolve().parents[1] / "golden" / "v2" / "records.bin"
 COMMIT_TYPE = 0x40
 AUTOCOMMIT_FLAG = 0x01
@@ -77,6 +77,15 @@ def snapshot_entry(name, path, payload, lsn, seq, epoch, nonce, prev, key_id, la
             "fields": {"path": path, "sha256_hex": sha.hex(), "lsn": lsn}}
 
 
+def redaction_entry(name, erase_lsn, erased_count, first_kept_seq, snapshot_lsn, last_lsn, seq, epoch, nonce, prev,
+                    key_id, label):
+    body = struct.pack(">QIQQQ", erase_lsn, erased_count, first_kept_seq, snapshot_lsn, last_lsn)
+    return {"name": name, "kind": "REDACTION", "seq": seq, "epoch": epoch, "nonce": nonce, "prev_hex": prev.hex(),
+            "key_id": key_id, "seed_hex": seed(label).hex(), "body_hex": body.hex(),
+            "fields": {"erase_lsn": erase_lsn, "erased_count": erased_count, "first_kept_seq": first_kept_seq,
+                       "snapshot_lsn": snapshot_lsn, "last_lsn": last_lsn}}
+
+
 def main(target):
     spans = transactions(RECORDS_FILE.read_bytes())
     zero = bytes(32)
@@ -92,6 +101,9 @@ def main(target):
                        6, previous, 3, "key-b"),
         snapshot_entry("snapshot reference with the longest plausible path", "p/" + "d/" * 100 + "x.nsnap",
                        b"x" * 1000, (1 << 62), 123456789, 77, 99, previous, 12, "key-c"),
+        redaction_entry("an erasure cut", 812, 3, 40, 815, 820, 44, 2, 7, previous, 0, "key-a"),
+        redaction_entry("an erasure cut at the largest values", (1 << 62), 2147483647, (1 << 62) - 1, (1 << 62) + 1,
+                        (1 << 63) - 1, 1 << 40, (1 << 40) + 5, 0xFFFFFFFFFFFFFFFF, previous, 2147483647, "key-c"),
     ]
     document = {"cryptography": __import__("cryptography").__version__, "entries": [build(entry) for entry in entries]}
     Path(target).write_text(json.dumps(document, indent=1, sort_keys=True) + "\n", encoding="utf-8", newline="\n")

@@ -7,6 +7,7 @@ import io.nodusdb.log.io.LogFileSystem;
 import io.nodusdb.log.record.MalformedTransactionException;
 import io.nodusdb.log.record.RecordFormat;
 import io.nodusdb.log.record.RecordReader;
+import io.nodusdb.log.record.RecordType;
 import io.nodusdb.log.record.SegmentHeader;
 import io.nodusdb.log.record.TransactionTracker;
 import io.nodusdb.log.record.Verdict;
@@ -220,6 +221,8 @@ public final class LogTailReader implements AutoCloseable {
         private long boundaryLsn = nextLsn - 1;
         private int boundaryBytes;
         private int boundaryRecords;
+        private boolean erasing;
+        private boolean erasureAhead;
 
         Walk(long durableLsn, int maxBytes) {
             this.durableLsn = durableLsn;
@@ -229,7 +232,7 @@ public final class LogTailReader implements AutoCloseable {
         Batch run() throws IOException {
             window = windowAt(channelFor(base), offset);
             transaction.reset();
-            while (lsn <= durableLsn) {
+            while (lsn <= durableLsn && !erasureAhead) {
                 int length = nextRecordLength(window, base, offset);
                 if (length < 0) {
                     enterNextSegment();
@@ -256,6 +259,7 @@ public final class LogTailReader implements AutoCloseable {
             reader.copyRecordTo(staging, stagedBytes);
             stagedBytes += length;
             stagedRecords++;
+            erasing |= reader.type() == RecordType.ERASE;
             boolean commit;
             try {
                 commit = transaction.accept(reader);
@@ -265,7 +269,10 @@ public final class LogTailReader implements AutoCloseable {
             window.advance(length);
             offset += length;
             lsn++;
-            if (commit) {
+            if (commit && erasing && boundaryRecords > 0) {
+                erasureAhead = true;
+            } else if (commit) {
+                erasing = false;
                 boundaryBase = base;
                 boundaryOffset = offset;
                 boundaryLsn = lsn - 1;

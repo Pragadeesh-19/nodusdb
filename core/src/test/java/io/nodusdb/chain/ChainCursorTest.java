@@ -3,6 +3,7 @@ package io.nodusdb.chain;
 import org.junit.jupiter.api.Test;
 
 import static io.nodusdb.chain.ChainFixtures.opaqueRecordsObject;
+import static io.nodusdb.chain.ChainFixtures.redaction;
 import static io.nodusdb.chain.ChainFixtures.snapshotRef;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -51,6 +52,32 @@ class ChainCursorTest {
         assertEquals(100, cursor.lastLsn());
         cursor.accept(opaqueRecordsObject(8, anchor.digest(), 1, 101, 110));
         assertEquals(110, cursor.lastLsn());
+    }
+
+    @Test
+    void aRedactionKeepsTheLsnItRecordsAndAnAnchorAtOneStartsFromIt() {
+        ChainCursor cursor = ChainCursor.startingAfter(opaqueRecordsObject(40, ChainHash.sha256(new byte[]{9}), 2, 500,
+                520));
+        ChainObject cut = redaction(41, cursor.digest(), 2, 520);
+
+        cursor.accept(cut);
+
+        assertEquals(520, cursor.lastLsn());
+        assertEquals(41, cursor.seq());
+        ChainCursor started = ChainCursor.startingAfter(cut);
+        assertEquals(520, started.lastLsn());
+        started.accept(opaqueRecordsObject(42, cut.digest(), 2, 521, 530));
+        assertEquals(530, started.lastLsn());
+    }
+
+    @Test
+    void aRedactionThatMisstatesTheLastLsnBreaksTheChain() {
+        ChainCursor cursor = ChainCursor.startingAfter(opaqueRecordsObject(40, ChainHash.sha256(new byte[]{9}), 2, 500,
+                520));
+
+        assertThrows(ChainTrustException.class, () -> cursor.accept(redaction(41, cursor.digest(), 2, 519)));
+        assertThrows(ChainTrustException.class, () -> ChainCursor.beforeFirst()
+                .accept(redaction(1, ChainHash.ZERO, 2, 5)));
     }
 
     @Test

@@ -20,6 +20,7 @@ public final class ChainCodec {
 
     private static final int RECORDS_FIXED_BYTES = 16;
     private static final int SNAPSHOT_FIXED_BYTES = 2 + ChainHash.BYTES + 8;
+    private static final int REDACTION_BYTES = 8 + 4 + 8 + 8 + 8;
 
     private ChainCodec() {
     }
@@ -122,6 +123,12 @@ public final class ChainCodec {
                 out.putLong(ref.lsn());
                 yield out.array();
             }
+            case ChainBody.Redaction redaction -> {
+                ByteBuffer out = ByteBuffer.allocate(REDACTION_BYTES);
+                out.putLong(redaction.eraseLsn()).putInt(redaction.erasedCount()).putLong(redaction.firstKeptSeq())
+                        .putLong(redaction.snapshotLsn()).putLong(redaction.lastLsn());
+                yield out.array();
+            }
         };
     }
 
@@ -130,7 +137,7 @@ public final class ChainCodec {
         return switch (kind) {
             case RECORDS -> decodeRecords(in, bytes, to);
             case SNAPSHOT_REF -> decodeSnapshotRef(in);
-            case REDACTION -> throw new ChainFormatException("redaction objects are not supported by this version");
+            case REDACTION -> decodeRedaction(in);
         };
     }
 
@@ -163,6 +170,22 @@ public final class ChainCodec {
             throw new ChainFormatException("the snapshot LSN is negative");
         }
         return new ChainBody.SnapshotRef(strictPath(path), ChainHash.of(hash), lsn);
+    }
+
+    private static ChainBody decodeRedaction(ByteBuffer in) {
+        if (in.remaining() != REDACTION_BYTES) {
+            throw new ChainFormatException("a redaction holds " + REDACTION_BYTES + " bytes, got " + in.remaining());
+        }
+        long eraseLsn = in.getLong();
+        int erasedCount = in.getInt();
+        long firstKeptSeq = in.getLong();
+        long snapshotLsn = in.getLong();
+        long lastLsn = in.getLong();
+        try {
+            return new ChainBody.Redaction(eraseLsn, erasedCount, firstKeptSeq, snapshotLsn, lastLsn);
+        } catch (IllegalArgumentException invalid) {
+            throw new ChainFormatException("the redaction is not valid: " + invalid.getMessage());
+        }
     }
 
     private static String strictPath(byte[] path) {

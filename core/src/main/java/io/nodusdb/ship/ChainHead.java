@@ -119,6 +119,9 @@ public final class ChainHead {
                     }
                     current = chainFetch.require(current.seq() - 1);
                 }
+                case ChainBody.Redaction redaction -> {
+                    return redaction.lastLsn();
+                }
             }
         }
     }

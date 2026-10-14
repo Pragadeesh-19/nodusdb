@@ -33,6 +33,7 @@ public final class ChainCursor {
         long lastLsn = switch (anchor.body()) {
             case ChainBody.Records records -> records.lsnLast();
             case ChainBody.SnapshotRef reference -> reference.lsn();
+            case ChainBody.Redaction redaction -> redaction.lastLsn();
         };
         return after(anchor.seq(), anchor.digest(), anchor.epoch(), lastLsn);
     }
@@ -79,6 +80,13 @@ public final class ChainCursor {
     private long advance(ChainObject object) {
         return switch (object.body()) {
             case ChainBody.SnapshotRef ref -> lastLsn == UNKNOWN_LSN ? ref.lsn() : lastLsn;
+            case ChainBody.Redaction redaction -> {
+                if (lastLsn != redaction.lastLsn()) {
+                    throw new ChainTrustException("the redaction at object " + object.seq()
+                            + " says the chain ends at LSN " + redaction.lastLsn() + " but it ends at LSN " + lastLsn);
+                }
+                yield lastLsn;
+            }
             case ChainBody.Records records -> {
                 if (seq == 0) {
                     throw new ChainTrustException("a chain starts with a snapshot reference");

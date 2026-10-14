@@ -91,6 +91,7 @@ class ChainCodecTest {
                     assertArrayEquals(expected.records(), actual.records(), entry.name());
                 }
                 case ChainBody.SnapshotRef expected -> assertEquals(expected, decoded.body(), entry.name());
+                case ChainBody.Redaction expected -> assertEquals(expected, decoded.body(), entry.name());
             }
         }
     }
@@ -297,8 +298,9 @@ class ChainCodecTest {
     }
 
     @Test
-    void aRedactionObjectIsRecognizedButNotSupportedYet() {
-        assertRefused(forge(3, new byte[]{1, 2, 3}), "redaction objects are not supported");
+    void aRedactionOfTheWrongSizeOrWithAnInvalidFieldIsRefused() {
+        assertRefused(forge(3, new byte[]{1, 2, 3}), "a redaction holds 36 bytes");
+        assertRefused(forge(3, new byte[36]), "the redaction is not valid");
     }
 
     @Test

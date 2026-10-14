@@ -266,6 +266,7 @@ public final class EdgeLogProjector {
         long lastLsn = switch (object.body()) {
             case ChainBody.Records records -> records.lsnFirst() - 1;
             case ChainBody.SnapshotRef reference -> reference.lsn();
+            case ChainBody.Redaction redaction -> redaction.lastLsn();
         };
         return ChainCursor.after(object.seq() - 1, object.header().prev(), object.epoch(), lastLsn);
     }
@@ -274,6 +275,7 @@ public final class EdgeLogProjector {
         long lsn = switch (object.body()) {
             case ChainBody.Records records -> records.lsnFirst();
             case ChainBody.SnapshotRef reference -> reference.lsn();
+            case ChainBody.Redaction redaction -> redaction.lastLsn();
         };
         decoder.context(resolver.tenureEpoch(lsn), resolver.schemaVersion());
         contextKnown = true;

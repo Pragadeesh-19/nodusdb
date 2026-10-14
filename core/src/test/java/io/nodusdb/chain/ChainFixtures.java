@@ -44,6 +44,11 @@ final class ChainFixtures {
                         ChainHash.sha256(new byte[]{9}), lsn), signingKey()));
     }
 
+    static ChainObject redaction(long seq, ChainHash prev, long epoch, long lastLsn) {
+        return ChainCodec.decode(ChainCodec.encode(header(ChainKind.REDACTION, seq, prev, epoch),
+                new ChainBody.Redaction(lastLsn, 1, 1, lastLsn, lastLsn), signingKey()));
+    }
+
     static ChainObject opaqueRecordsObject(long seq, ChainHash prev, long epoch, long first, long last) {
         return ChainCodec.decode(ChainCodec.encode(header(ChainKind.RECORDS, seq, prev, epoch),
                 new ChainBody.Records(first, last, opaqueRecords()), signingKey()));

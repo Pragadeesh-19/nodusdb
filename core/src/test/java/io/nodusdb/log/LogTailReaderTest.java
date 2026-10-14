@@ -140,6 +140,33 @@ class LogTailReaderTest {
         log.close();
     }
 
+    private static byte[] erasureBytes(long firstLsn) {
+        RecordBatch batch = new RecordBatch();
+        batch.tuple(RecordType.TUPLE_REMOVE, 1, 1, 0, 2);
+        batch.erase(2, RecordFixtures.pseudonym());
+        batch.commit();
+        batch.seal(firstLsn, RecordFixtures.COMMIT_MICROS);
+        return RecordFixtures.copyOf(batch);
+    }
+
+    @Test
+    void aTransactionThatErasesAlwaysStartsANewBatch() throws IOException {
+        SimulatedDisk disk = new SimulatedDisk();
+        segment(disk, 1, transactionBytes(1, 3), autocommitBytes(5), erasureBytes(6), autocommitBytes(9),
+                erasureBytes(10));
+
+        try (LogTailReader reader = new LogTailReader(disk, 0)) {
+            Batch before = reader.read(12, NO_LIMIT);
+            Batch erasure = reader.read(12, NO_LIMIT);
+            Batch next = reader.read(12, NO_LIMIT);
+
+            assertEquals(List.of(1L, 2L, 3L, 4L, 5L), lsns(before));
+            assertEquals(List.of(6L, 7L, 8L, 9L), lsns(erasure));
+            assertEquals(List.of(10L, 11L, 12L), lsns(next));
+            assertNull(reader.read(12, NO_LIMIT));
+        }
+    }
+
     @Test
     void aBatchStopsAtTheFirstCommitPastTheSizeLimitButAlwaysHoldsAWholeTransaction() throws IOException {
         SimulatedDisk disk = new SimulatedDisk();

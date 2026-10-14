@@ -41,11 +41,15 @@ final class ChainCorpus {
         ChainHeader header = new ChainHeader(kind, json.requireLong("seq"), json.requireLong("epoch"),
                 unsignedLong(json, "nonce"), ChainHash.parse(json.requireString("prev_hex")), keyId);
         JsonObject fields = json.requireObject("fields");
-        ChainBody body = kind == ChainKind.RECORDS
-                ? new ChainBody.Records(fields.requireLong("lsn_first"), fields.requireLong("lsn_last"),
-                        hex.parseHex(fields.requireString("records_hex")))
-                : new ChainBody.SnapshotRef(fields.requireString("path"),
-                        ChainHash.parse(fields.requireString("sha256_hex")), fields.requireLong("lsn"));
+        ChainBody body = switch (kind) {
+            case RECORDS -> new ChainBody.Records(fields.requireLong("lsn_first"), fields.requireLong("lsn_last"),
+                    hex.parseHex(fields.requireString("records_hex")));
+            case SNAPSHOT_REF -> new ChainBody.SnapshotRef(fields.requireString("path"),
+                    ChainHash.parse(fields.requireString("sha256_hex")), fields.requireLong("lsn"));
+            case REDACTION -> new ChainBody.Redaction(fields.requireLong("erase_lsn"),
+                    (int) fields.requireLong("erased_count"), fields.requireLong("first_kept_seq"),
+                    fields.requireLong("snapshot_lsn"), fields.requireLong("last_lsn"));
+        };
         PrivateKey privateKey = KeyFiles.privateKey(hex.parseHex(json.requireString("seed_hex")));
         return new Entry(json.requireString("name"), header, body, new SigningKey(keyId, privateKey),
                 KeyFiles.publicKey(hex.parseHex(json.requireString("public_hex"))),

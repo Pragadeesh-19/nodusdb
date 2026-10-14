@@ -2,7 +2,7 @@ package io.nodusdb.chain;
 
 import java.util.Objects;
 
-public sealed interface ChainBody permits ChainBody.Records, ChainBody.SnapshotRef {
+public sealed interface ChainBody permits ChainBody.Records, ChainBody.SnapshotRef, ChainBody.Redaction {
 
     ChainKind kind();
 
@@ -35,6 +35,22 @@ public sealed interface ChainBody permits ChainBody.Records, ChainBody.SnapshotR
         @Override
         public ChainKind kind() {
             return ChainKind.SNAPSHOT_REF;
+        }
+    }
+
+    record Redaction(long eraseLsn, int erasedCount, long firstKeptSeq, long snapshotLsn, long lastLsn)
+            implements ChainBody {
+
+        public Redaction {
+            if (eraseLsn < 1 || erasedCount < 1 || firstKeptSeq < 1 || snapshotLsn < eraseLsn || lastLsn < 0) {
+                throw new IllegalArgumentException("a redaction needs a positive erase LSN, count and kept object, "
+                        + "and a snapshot at or after the erasure");
+            }
+        }
+
+        @Override
+        public ChainKind kind() {
+            return ChainKind.REDACTION;
         }
     }
 }
