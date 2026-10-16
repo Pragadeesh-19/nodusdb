@@ -442,6 +442,30 @@ restore(follower, "recovered-graph")                 # a durable graph directory
 
 **Cost.** A follower makes one GET per `poll_interval_ms` (100 ms by default) when idle and one LIST per second. On the development laptop it applies about 2.5 million tuples a second on one core (`FollowerApplyBench`), and the check path pays nothing measurable for seeing a schema migration (`CheckModelBench`).
 
+## Erasure
+
+`erase` removes a subject or an object for good: every tuple that names it, and the name itself everywhere NodusDB keeps it.
+
+```python
+token = g.erase("user:alice")          # memory is clean when this returns
+g.wait_erased(token, timeout=300)      # the directory, the bucket and the Iceberg table are clean
+print(g.stats()["erasure"])            # per layer: configured, covered_lsn, pending
+```
+
+The name is replaced by a pseudonym, `erased:` and the first 16 hex digits of a salted SHA-256 of the name. The salt is stored in the graph's snapshot. The erasure is a transaction in the log, so every follower applies it too. A name that does not exist returns the current token. A type or relation name used by the schema is refused with `NodusSchemaError`, and an integer-keyed graph or a follower raises `NodusUnsupportedError`. The same name written later is a new subject that starts with no grants.
+
+A subject with many tuples is removed in transactions of at most 30,000 tuples, followed by the erasure itself. If the process dies in between, the name is still there with some tuples gone, and calling `erase` again finishes the job. Erasing a subject with 1,000 grants took 2.8 ms on the development laptop, and one with 100,000 grants took 51 ms (`EraseBench`).
+
+**The copies on disk** are scrubbed in the background:
+
+- **The graph directory.** A checkpoint writes the erased symbol as its pseudonym, and the log segments before it are deleted. Erasures are collected for `erasure_checkpoint_delay_s` (60 seconds by default, set on `Shipping`) so a burst shares one checkpoint. `wait_erased` checkpoints at once.
+- **The bucket.** Chain objects are signed and linked, so they are never edited. Once a snapshot taken after the erasure is in the bucket, the writer commits a signed `REDACTION` entry and deletes every chain object and snapshot from before that point. A transaction that erases a name always starts a new chain object, so nothing the bucket keeps still holds the name. Followers bootstrap from the newest snapshot as before. One that was behind the deleted range stops with "fell behind retention" and rebuilds on restart.
+- **The Iceberg table.** The projector rewrites every data file that holds a row naming the erased subject or object, commits one overwrite snapshot with a signed `nodus.redaction.v1` record, expires every older snapshot, and deletes the replaced files and manifests. Time travel therefore reaches back only to the erasure. The rows stay, with the pseudonym in place of the name.
+
+`wait_erased` raises `NodusErasurePendingError` (code -16) when the time runs out. It names the layers still pending and carries the token. The erasure itself is already done and the background work continues. After a restart or a takeover the writer compares what each layer covers with the number of erased symbols and finishes the rest. The tests check the result byte for byte: after `wait_erased`, no file in the graph directory, the bucket or the Iceberg table contains the erased name.
+
+**What erasure cannot reach.** Copies made outside NodusDB are out of its hands: a backup or copy of the directory, a salvaged old directory, `pre-v2/` until `upgrade_cleanup()` runs, object versions or replicas kept by the bucket's own settings, and disk blocks the file system freed but did not overwrite. Anyone who can read a snapshot has the salt and can test a guessed name against a pseudonym, so a short or predictable name is only as private as the snapshot. Prefer opaque ids, such as UUIDs, for subjects. In the Iceberg table a name written again after its erasure keeps its new rows. After a restart the writer knows when such a name was erased only up to the snapshot it loaded, so new rows written before that snapshot can also show the pseudonym.
+
 ## Concurrency
 
 The kernel supports one writer and any number of readers. Every mutation runs inside a seqlock: a version counter is odd while an edge change is in progress and even otherwise. A reader checks the counter before and after each query. If a write overlapped the query, the reader discards the result and runs it again. Readers never take a lock and never block the writer, and a query never returns a half-applied change.
