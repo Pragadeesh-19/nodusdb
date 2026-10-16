@@ -150,6 +150,7 @@ class IcebergOverwriteTest {
         ManifestEntry removed = entries.stream().filter(entry -> entry.path().equals(b.path())).findFirst()
                 .orElseThrow();
         assertEquals(ManifestEntry.Status.DELETED, removed.status());
+        assertEquals(List.of(), removed.columns());
         assertEquals(after.state().currentSnapshotId(), removed.snapshotId());
         ManifestEntry added = entries.stream().filter(entry -> entry.path().equals(replacement.path())).findFirst()
                 .orElseThrow();

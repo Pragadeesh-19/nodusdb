@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.LongSupplier;
@@ -85,6 +86,20 @@ public final class IcebergTable {
 
     public String newDataKey(long lsnFirst, long lsnLast) {
         return keyPrefix + DATA_FOLDER + String.format("%020d-%020d-%s.parquet", lsnFirst, lsnLast, uuids.get());
+    }
+
+    public OptionalLong firstLsnOf(String uri) {
+        String key = keyOf(uri);
+        String prefix = keyPrefix + DATA_FOLDER;
+        if (!key.startsWith(prefix)) {
+            return OptionalLong.empty();
+        }
+        Matcher matcher = DATA_FILE.matcher(key.substring(prefix.length()));
+        return matcher.matches() ? OptionalLong.of(Long.parseLong(matcher.group(1))) : OptionalLong.empty();
+    }
+
+    public String metadataKeyOf(String name) {
+        return keyPrefix + METADATA_FOLDER + name;
     }
 
     public Optional<Head> load() {

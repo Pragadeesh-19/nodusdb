@@ -30,8 +30,10 @@ final class RecordApplier {
     }
 
     private void applyErase(RecordReader record) {
-        state.symbols().erase(record.eraseSymbolId(), Pseudonym.unpadded(record.erasePseudonym()));
-        state.eraseApplied();
+        int symbolId = record.eraseSymbolId();
+        if (state.symbols().erase(symbolId, Pseudonym.unpadded(record.erasePseudonym()))) {
+            state.erasures().applied(symbolId);
+        }
     }
 
     private void applyTuple(RecordReader record, boolean add) {

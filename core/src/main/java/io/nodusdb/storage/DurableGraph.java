@@ -140,7 +140,7 @@ public final class DurableGraph {
                 kernel.attachShipping(runtime.state());
             }
             List<ErasureLayer> shipped = runtime == null ? List.of()
-                    : List.of(runtime.bucketErasure(kernel, directory));
+                    : runtime.erasureLayers(kernel, directory);
             kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping), shipped));
         } catch (IOException | RuntimeException e) {
             closeQuietly(runtime, e);

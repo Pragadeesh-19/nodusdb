@@ -21,7 +21,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Stream;
 
@@ -45,6 +47,7 @@ final class ProjectionRig {
     final IcebergTable table;
     final DataFileWriter writer;
     final FakeNames names = new FakeNames();
+    final Map<String, ErasedNames.Erased> erased = new HashMap<>();
     final AtomicLong nanos = new AtomicLong();
     final AtomicLong millis = new AtomicLong(1_700_000_000_000L);
     final StreamScript script = new StreamScript(SNAPSHOT_LSN + 1);
@@ -81,7 +84,8 @@ final class ProjectionRig {
 
     EdgeLogProjector projector(ChainSource source) {
         return new EdgeLogProjector(source, state, table, writer, names, ChainBuilder.signingKey(), settings,
-                new Clocks(nanos::get, millis::get));
+                new Clocks(nanos::get, millis::get),
+                new LakeRedaction(faulty, table, writer, () -> erased::get, ChainBuilder.signingKey()));
     }
 
     EdgeLogProjector restart() {

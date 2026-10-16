@@ -201,7 +201,11 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     public long newestEraseLsn() {
-        return state.newestEraseLsn();
+        return state.erasures().newest();
+    }
+
+    public ErasedSymbols erasedSymbolLog() {
+        return state.erasures().snapshot();
     }
 
     public long checkpointLsn() {
@@ -551,7 +555,7 @@ public final class GraphKernel implements AutoCloseable {
 
     public void restoreErasedSymbol(int id, byte[] pseudonym, long erasedByLsn) {
         state.symbols().appendErased(id, pseudonym);
-        state.eraseRestored(erasedByLsn);
+        state.erasures().restored(id, erasedByLsn);
     }
 
     public void restoreCatalog(RelationCatalog catalog) {
@@ -713,7 +717,7 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
-        long erasedBefore = state.newestEraseLsn();
+        long erasedBefore = state.erasures().newest();
         long lsn = journal(batch, awaitDurable);
         sequence.beginWrite();
         try {
@@ -725,7 +729,7 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
-        if (state.newestEraseLsn() != erasedBefore) {
+        if (state.erasures().newest() != erasedBefore) {
             erasure.wake();
         }
         return lsn;

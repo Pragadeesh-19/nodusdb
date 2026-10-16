@@ -24,8 +24,7 @@ final class GraphState implements TupleGraph {
     private volatile KeyKind keyKind = KeyKind.UNSET;
     private volatile long appliedLsn;
     private volatile long lastCommitMicros;
-    private volatile long newestEraseLsn;
-    private boolean eraseUnplaced;
+    private final ErasedSymbols.Log erasures = new ErasedSymbols.Log();
     private final ClosureIndex closure;
     private boolean faulted;
 
@@ -42,22 +41,13 @@ final class GraphState implements TupleGraph {
 
     void appliedLsn(long lsn) {
         appliedLsn = lsn;
-        if (eraseUnplaced) {
-            eraseUnplaced = false;
-            newestEraseLsn = Math.max(newestEraseLsn, lsn);
+        if (erasures.hasUnplaced()) {
+            erasures.placed(lsn);
         }
     }
 
-    long newestEraseLsn() {
-        return newestEraseLsn;
-    }
-
-    void eraseApplied() {
-        eraseUnplaced = true;
-    }
-
-    void eraseRestored(long lsn) {
-        newestEraseLsn = Math.max(newestEraseLsn, lsn);
+    ErasedSymbols.Log erasures() {
+        return erasures;
     }
 
     long lastCommitMicros() {

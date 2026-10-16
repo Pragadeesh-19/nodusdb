@@ -30,6 +30,18 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     public record CutRequest(long eraseLsn, int erasedCount, long firstKeptSeq, long snapshotLsn) {
     }
 
+    public record LakeRequest(long eraseLsn, int erasedCount) {
+    }
+
+    public record LakeCoverage(int erasedCount, long eraseLsn) {
+
+        public static final LakeCoverage NONE = new LakeCoverage(0, 0);
+
+        public boolean covers(LakeRequest request) {
+            return erasedCount >= request.erasedCount() || eraseLsn >= request.eraseLsn();
+        }
+    }
+
     public record CommittedCut(long seq, ChainBody.Redaction redaction) {
 
         public static final CommittedCut NONE = new CommittedCut(0, null);
@@ -83,6 +95,8 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
     private String referenceError = "";
     private CutRequest offeredCut;
     private CommittedCut committedCut = CommittedCut.NONE;
+    private LakeRequest wantedLake;
+    private volatile LakeCoverage lakeCoverage = LakeCoverage.NONE;
     private long sweeps;
     private long chainObjectsDeleted;
     private long snapshotsDeleted;
@@ -243,6 +257,36 @@ public final class ShipState implements ShipWatermark, ShippingLogStore.Gate {
             offeredReference = null;
             return taken;
         }
+    }
+
+    public void requestLakeErasure(LakeRequest request) {
+        synchronized (monitor) {
+            if (!lakeCoverage.covers(request)) {
+                wantedLake = request;
+                workPending = true;
+                monitor.notifyAll();
+            }
+        }
+    }
+
+    public LakeRequest wantedLakeErasure() {
+        synchronized (monitor) {
+            return wantedLake;
+        }
+    }
+
+    public void lakeCovered(LakeCoverage covered) {
+        synchronized (monitor) {
+            lakeCoverage = covered;
+            if (wantedLake != null && covered.covers(wantedLake)) {
+                wantedLake = null;
+            }
+            monitor.notifyAll();
+        }
+    }
+
+    public LakeCoverage lakeCoverage() {
+        return lakeCoverage;
     }
 
     public void offerCut(CutRequest request) {

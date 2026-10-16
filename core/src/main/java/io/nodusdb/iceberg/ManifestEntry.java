@@ -59,6 +59,6 @@ public record ManifestEntry(Status status, long snapshotId, long dataSequenceNum
 
     public ManifestEntry deletedBy(long deletingSnapshotId) {
         return new ManifestEntry(Status.DELETED, deletingSnapshotId, dataSequenceNumber, fileSequenceNumber, path,
-                partitionDay, recordCount, fileSizeBytes, columns);
+                partitionDay, recordCount, fileSizeBytes, List.of());
     }
 }

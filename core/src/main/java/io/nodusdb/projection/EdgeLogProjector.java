@@ -74,6 +74,7 @@ public final class EdgeLogProjector {
     private final SigningKey key;
     private final ProjectionSettings settings;
     private final Clocks clocks;
+    private final LakeRedaction lakeRedaction;
     private final DayBuffers buffers = new DayBuffers();
     private final EdgeLogDecoder decoder;
     private final List<DataFile> pendingFiles = new ArrayList<>();
@@ -96,9 +97,11 @@ public final class EdgeLogProjector {
     private CommitRecord.Sealed inFlightRecord;
     private IcebergTable.Expiry expiry;
     private boolean expiryPublished;
+    private ShipState.LakeCoverage coverage = ShipState.LakeCoverage.NONE;
 
     public EdgeLogProjector(ChainSource source, ShipState state, IcebergTable table, DataFileWriter writer,
-                            NameResolver resolver, SigningKey key, ProjectionSettings settings, Clocks clocks) {
+                            NameResolver resolver, SigningKey key, ProjectionSettings settings, Clocks clocks,
+                            LakeRedaction lakeRedaction) {
         this.source = source;
         this.state = state;
         this.table = table;
@@ -107,6 +110,7 @@ public final class EdgeLogProjector {
         this.key = key;
         this.settings = settings;
         this.clocks = clocks;
+        this.lakeRedaction = lakeRedaction;
         this.decoder = new EdgeLogDecoder(new StreamNames(resolver), buffers);
     }
 
@@ -156,6 +160,11 @@ public final class EdgeLogProjector {
         if (sweepDue()) {
             sweepOrphans();
         }
+        ShipState.LakeRequest wanted = state.wantedLakeErasure();
+        if (redactionReady(wanted)) {
+            redact(wanted);
+            return Next.immediately();
+        }
         long shipped = state.snapshot().chainSeq();
         int applied = 0;
         while (nextSeq <= shipped && applied < settings.objectsPerStep()) {
@@ -168,7 +177,7 @@ public final class EdgeLogProjector {
             applied++;
             writeFullBuffers();
         }
-        if (hasWork() && (drainRequested || commitDue())) {
+        if (hasWork() && (drainRequested || commitDue() || erasureWaiting(wanted))) {
             commit();
             return Next.immediately();
         }
@@ -182,7 +191,9 @@ public final class EdgeLogProjector {
 
     private void start() {
         state.projectionStarting();
-        head = table.load();
+        head = lakeRedaction.recover(table.load());
+        coverage = LakeRedaction.coverageOf(head);
+        state.lakeCovered(coverage);
         if (head.isPresent()) {
             resume(head.get());
         } else {
@@ -319,6 +330,9 @@ public final class EdgeLogProjector {
         properties.put(PROJECTED_SCHEMA_VERSION, Integer.toString(decoder.version()));
         properties.put(PROJECTED_CHAIN_SEQ, Long.toString(lastAppliedSeq));
         properties.put(CommitRecord.PROPERTY, inFlightRecord.text());
+        if (!coverage.equals(ShipState.LakeCoverage.NONE)) {
+            properties.put(LakeRedaction.COVERAGE_PROPERTY, LakeRedaction.coverageText(coverage));
+        }
         inFlight = table.prepareAppend(head, List.copyOf(pendingFiles), properties);
         publishInFlight();
     }
@@ -355,6 +369,39 @@ public final class EdgeLogProjector {
         table.deleteAll(expiry.deletable());
         expiry = null;
         expiryPublished = false;
+    }
+
+    private boolean redactionReady(ShipState.LakeRequest wanted) {
+        return wanted != null && !coverage.covers(wanted) && committedLsn >= wanted.eraseLsn() && !hasWork()
+                && head.isPresent();
+    }
+
+    private boolean erasureWaiting(ShipState.LakeRequest wanted) {
+        return wanted != null && !coverage.covers(wanted) && projectedLsn >= wanted.eraseLsn();
+    }
+
+    private void redact(ShipState.LakeRequest wanted) throws IOException {
+        head = lakeRedaction.recover(head);
+        coverage = LakeRedaction.coverageOf(head);
+        if (!coverage.covers(wanted)) {
+            IcebergTable.Head current = head.orElseThrow();
+            head = Optional.of(lakeRedaction.run(current, wanted, carried(current)));
+            coverage = LakeRedaction.coverageOf(head);
+        }
+        state.lakeCovered(coverage);
+    }
+
+    private static Map<String, String> carried(IcebergTable.Head current) {
+        Map<String, String> summary = current.state().current().orElseThrow().summary();
+        Map<String, String> carried = new LinkedHashMap<>();
+        for (String property : List.of(PROJECTED_LSN, PROJECTED_EPOCH, PROJECTED_SCHEMA_VERSION, PROJECTED_CHAIN_SEQ,
+                CommitRecord.PROPERTY)) {
+            String value = summary.get(property);
+            if (value != null) {
+                carried.put(property, value);
+            }
+        }
+        return carried;
     }
 
     private boolean sweepDue() {

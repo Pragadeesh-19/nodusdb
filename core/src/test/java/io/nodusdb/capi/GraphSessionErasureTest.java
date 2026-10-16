@@ -47,7 +47,7 @@ class GraphSessionErasureTest {
     private static final LogConfig SYNC = LogConfig.withSyncMode(SyncMode.SYNC);
     private static final Duration WAIT = Duration.ofSeconds(30);
     private static final String NAME = "user:alice-bucket-erasure";
-    private static final byte[] NAME_BYTES = NAME.getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NAME_BYTES = NAME.substring(NAME.indexOf(':') + 1).getBytes(StandardCharsets.UTF_8);
 
     @TempDir
     Path root;
@@ -167,6 +167,22 @@ class GraphSessionErasureTest {
         assertEquals(1, cuts.get(0).erasedCount());
         assertTrue(cuts.get(0).snapshotLsn() >= token.lsn());
         assertTrue(Files.isRegularFile(root.resolve("graph").resolve(ErasureCoverage.FILE)));
+    }
+
+    @Test
+    void withIcebergTheTableIsRewrittenAndNoLayerHoldsTheNameAfterTheWait() throws IOException {
+        ShippingFixture fixture = ShippingFixture.in(root).withIceberg("\"enabled\":true,\"commit_interval_s\":1");
+        GraphSession writer = sessions.get(writerHandle(fixture));
+        Token token = grantAndErase(writer);
+
+        writer.awaitErased(token, WAIT);
+
+        assertEquals(List.of(), filesHolding(fixture.bucket()));
+        assertEquals(List.of(), filesHolding(root.resolve("graph")));
+        JsonObject lake = erasure(writer).requireObject("lake");
+        assertTrue(lake.boolOr("configured", false));
+        assertFalse(lake.boolOr("pending", true));
+        assertTrue(Files.isDirectory(fixture.bucket().resolve("iceberg").resolve("data")));
     }
 
     @Test

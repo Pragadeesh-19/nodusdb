@@ -3,6 +3,7 @@ package io.nodusdb.storage;
 import io.nodusdb.erasure.BucketCut;
 import io.nodusdb.erasure.ErasureCoverage;
 import io.nodusdb.erasure.ErasureLayer;
+import io.nodusdb.erasure.LakeErasure;
 import io.nodusdb.iceberg.DataFileWriter;
 import io.nodusdb.iceberg.IcebergTable;
 import io.nodusdb.kernel.GraphKernel;
@@ -11,7 +12,9 @@ import io.nodusdb.log.LogTailReader;
 import io.nodusdb.log.io.LogFileSystem;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.projection.EdgeLogProjector;
+import io.nodusdb.projection.KernelErasedNames;
 import io.nodusdb.projection.KernelNameResolver;
+import io.nodusdb.projection.LakeRedaction;
 import io.nodusdb.projection.ProjectionSettings;
 import io.nodusdb.projection.ProjectorRunner;
 import io.nodusdb.projection.StoreChainSource;
@@ -102,7 +105,16 @@ final class ShippingRuntime implements AutoCloseable {
         closers.add(retention::close);
     }
 
-    ErasureLayer bucketErasure(GraphKernel kernel, Path directory) {
+    List<ErasureLayer> erasureLayers(GraphKernel kernel, Path directory) {
+        List<ErasureLayer> layers = new ArrayList<>();
+        layers.add(bucketErasure(kernel, directory));
+        if (reconciled.config().iceberg().enabled()) {
+            layers.add(new LakeErasure(kernel, state));
+        }
+        return layers;
+    }
+
+    private ErasureLayer bucketErasure(GraphKernel kernel, Path directory) {
         ObjectStore store = reconciled.store();
         ChainFetch chain = new ChainFetch(store, reconciled.keys().keyring(), ChainFetch.Trust.WHEN_KEY_KNOWN);
         BucketCut.Bucket bucket = new BucketCut.Bucket(new AnchorFinder(store, chain), chain,
@@ -126,7 +138,9 @@ final class ShippingRuntime implements AutoCloseable {
         EdgeLogProjector projector = new EdgeLogProjector(
                 new StoreChainSource(state.ring(), reconciled.store(), reconciled.keys().keyring()), state, table,
                 writer, new KernelNameResolver(kernel), reconciled.keys().signing(), projection,
-                new EdgeLogProjector.Clocks(System::nanoTime, System::currentTimeMillis));
+                new EdgeLogProjector.Clocks(System::nanoTime, System::currentTimeMillis),
+                new LakeRedaction(reconciled.store(), table, writer, new KernelErasedNames(kernel),
+                        reconciled.keys().signing()));
         return ProjectorRunner.start(projector, state, projection, "nodus-projector");
     }
 
