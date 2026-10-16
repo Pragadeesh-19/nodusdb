@@ -112,6 +112,18 @@
 **Priority:** P3
 **Depends on:** Build Step 4
 
+### Keep each symbol's erase LSN across restarts
+
+**What:** Store the LSN at which each symbol was erased, so a restarted writer knows it exactly instead of only the LSN of the snapshot it loaded.
+
+**Why:** The lake rewrite leaves the rows of a name written again after its erasure alone by comparing row LSNs with the erase LSN (D183). After a restart, a name that was erased and written again before the loaded snapshot can have its later rows rewritten with the old pseudonym.
+
+**Context:** The kernel keeps the LSNs in memory (`ErasedSymbols`). Snapshot v3 is frozen (D77): the `SYMBOLS` section has a flag byte but no LSN, so this needs a new section or a version bump with its own review. The case needs an erased name to be reused, which opaque ids avoid.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Build Step 5
+
 ## Shipping and lake
 
 ### Snapshot-backed NameResolver for a projector outside the writer
@@ -120,7 +132,7 @@
 
 **Why:** Build Step 2 builds the Iceberg table inside the writer process (D99). This lets the projector run on another machine and keeps the table buildable from the bucket alone.
 
-**Context:** The `NameResolver` interface lands in Build Step 2, so this is a drop-in implementation. Snapshot v3 stores symbols with erased flags (D77). The cost is a ranged read of a large snapshot.
+**Context:** The `NameResolver` interface lands in Build Step 2, so this is a drop-in implementation. Snapshot v3 stores symbols with erased flags (D77). The cost is a ranged read of a large snapshot. Such a projector also runs the lake erasure job, which needs the salt and each erased symbol's erase LSN (D183); both would come from the snapshot and the `ERASE` records after it.
 
 **Effort:** M
 **Priority:** P3
@@ -168,7 +180,7 @@
 
 **Why:** Each commit adds a manifest and every manifest list names all of them, so a table committed every minute grows its list by about 1,400 entries a day. Reads and commits slow down as the list grows.
 
-**Context:** Build Step 2 writes one manifest per commit and carries all earlier ones forward. Snapshot expiry bounds the metadata file but not the manifest list. A merge needs a manifest entry reader, which the Avro decoder now makes straightforward.
+**Context:** Build Step 2 writes one manifest per commit and carries all earlier ones forward. Snapshot expiry bounds the metadata file but not the manifest list. Build Step 5 added `ManifestReader` and existing and deleted entries to `ManifestWriter`, so a merge rewrites manifests the way the erasure overwrite already does.
 
 **Effort:** M
 **Priority:** P2
@@ -180,11 +192,11 @@
 
 **Why:** The LSN rule removes files from a crashed commit but not a stray copy left when an upload failed and its cleanup delete also failed.
 
-**Context:** The data-file writer deletes a failed upload itself, so a leak needs two failures in a row. A reference-based sweep needs the same manifest entry reader as the merge above.
+**Context:** The data-file writer deletes a failed upload itself, so a leak needs two failures in a row. A reference-based sweep can use `IcebergTable.manifests` and `IcebergTable.entries` from Build Step 5.
 
 **Effort:** S
 **Priority:** P3
-**Depends on:** Merge Iceberg manifests
+**Depends on:** Build Step 5
 
 ### Start a new chain after an unshipped gap
 
@@ -271,6 +283,10 @@
 **Depends on:** none
 
 ## Completed
+
+### Erasure
+
+Done in Build Step 5. `erase(name)` scrubs memory and followers at once; the graph directory, the bucket (a signed `REDACTION` cut) and the Iceberg table (an overwrite and a full expiry) are scrubbed in the background, and `wait_erased(token)` waits for all of them. Decisions D159 to D186.
 
 ### Deterministic simulation harness for the distributed steps
 
