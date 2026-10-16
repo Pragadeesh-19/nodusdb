@@ -18,6 +18,13 @@
 - C exports `nodus_open_follower`, `nodus_restore`, `nodus_takeover` and `nodus_salvage_json`. `nodus_stats_json` reports follower state on a follower handle.
 - A seeded simulation of writers, followers, retention, restarts and fencing over a faulty store (300 seeds in CI), and chaos scenarios that lose, cut and delay S3 replies through a socket proxy.
 - A reachability index for nested groups. The kernel keeps the transitive closure of userset nesting (`group#member@group:x#member`) up to date as tuples change, and a check through nested groups is answered by intersecting that closure with the subject's direct memberships instead of walking the groups. Answers are unchanged; groups whose update would cost too much are answered by the evaluator until a background thread rebuilds them. A group answered by the index no longer counts toward the depth limit of 32. `stats()["reachability"]` reports the index, and `NODUS_REACHABILITY_INDEX=off` turns it off.
+- Erasure. `Graph.erase(name)` removes every tuple that names the subject or object and replaces the name with a salted pseudonym, `erased:` and 16 hex digits, in memory and on every follower. It returns a token. The copies on disk are scrubbed in the background: the graph directory by a checkpoint and a log trim, the bucket by a signed `REDACTION` entry followed by deleting the chain objects and snapshots from before the erasure, and the Iceberg table by an overwrite that rewrites the affected data files and expires every older snapshot. `Graph.wait_erased(token, timeout=None)` waits for all of them, `stats()["erasure"]` reports each layer, and `Shipping(erasure_checkpoint_delay_s=60)` sets how long erasures are collected before a checkpoint. A name written again after its erasure is a new subject with no grants.
+- Error code -16, `NodusErasurePendingError`, when `wait_erased` runs out of time. It names the pending layers and carries the token.
+- C exports `nodus_erase` and `nodus_await_erased`.
+
+### Changed
+
+- A snapshot reference is committed to the chain only once the chain holds every record up to its LSN, and a transaction that erases a name always starts a new chain object.
 
 ### Fixed
 

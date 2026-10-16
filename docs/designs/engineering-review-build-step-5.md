@@ -1,7 +1,9 @@
 # Engineering review: Build Step 5, erasure
 
 Status: decisions D159 to D175 accepted on 2026-10-14. Implementation scope is Build Step 5 (section 11), built on
-branch feat/authz-step5 in four milestones.
+branch feat/authz-step5 in four milestones. Choices made while building are D176 to D185 in
+[`docs/decisions.md`](../decisions.md); where they differ from this document they win, and sections 5 and 6 below
+already follow them.
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 4, 7, 8 and 11. Where
 this document and those disagree about Build Step 5, this document wins (section 2 lists every amendment).
 
@@ -25,7 +27,8 @@ transaction and returns a token. The copies that live outside the process are sc
    bucket is scrubbed by publishing a scrubbed snapshot after the erase and deleting everything before it.
 4. **Status is derived, never trusted from memory.** The kernel counts erased symbols. The bucket and the lake record
    how many erased symbols they cover. A restart or a takeover compares the counts and finishes what is missing.
-5. **The name being erased is never written to disk again.** The background jobs keep it in memory only, as a hint.
+5. **The name being erased is never written to disk again.** The background jobs do not keep it either: the lake
+   matches rows by the salted hash of their names and the pseudonyms of erased symbols.
 
 ```
 erase("user:alice")                                       writer
@@ -44,7 +47,8 @@ erase("user:alice")                                       writer
 | Where | Text before | Text now | Decision |
 |---|---|---|---|
 | Wedge 11, chain | objects that hold the string are rewritten; a signed `REDACTION` lists them | an erasure cut: a scrubbed snapshot after the erase, a signed `REDACTION` cut entry, then every older chain object and snapshot object is deleted | D166 |
-| Wedge 8.2, kind 3 | list of (seq, old sha256, replacement path, new sha256) | `erase_lsn u64, erased_count u32, first_kept_seq u64, snapshot_lsn u64` | D166, D167 |
+| Wedge 8.2, kind 3 | list of (seq, old sha256, replacement path, new sha256) | `erase_lsn u64, erased_count u32, first_kept_seq u64, snapshot_lsn u64, last_lsn u64` | D166, D167, D176 |
+| Wedge 8.2, references | a `SNAPSHOT_REF` may be committed before the records it covers | a reference is committed only once the chain holds every record up to its LSN | D178 |
 | Wedge 8.4, step 3 | an object superseded by a `REDACTION` is accepted by its replacement hash | no object is ever replaced; a follower behind a cut stops as "fell behind retention" (D116) | D166 |
 | Wedge 11, flow | one transaction removes every tuple and erases | removals in committed chunks, then `[ERASE, TXN_COMMIT]`; a repeated erase finishes an interrupted one | D164 |
 | Wedge 13 | codes -1 to -15 | adds -16 `NodusErasurePendingError` | D170 |
@@ -62,8 +66,8 @@ erase("user:alice")                                       writer
 | D165 | Local scrub | The runner checkpoints once the oldest unscrubbed erase is `erasure_checkpoint_delay_s` old (default 60, 0 means at once); erases in the window share one checkpoint. Local is clean when the local snapshot is at or above the newest erase LSN and the log is trimmed through it |
 | D166 | Bucket scrub | An erasure cut. After a checkpoint at `L` has been shipped and referenced, the runner reads the object holding `L+1` (D106). If it holds a `SYMBOL` record of an erased id, the cut waits for the next checkpoint. Otherwise the shipper commits a signed `REDACTION` cut entry and the runner deletes every chain object before the kept one and every snapshot object below `L`. Deletion repeats until done; retention honours the newest cut |
 | D167 | Coverage | The kernel counts erased symbols (restart-safe: snapshot flags plus replay). Bucket coverage is the newest cut's `erased_count`, kept in a local file `erasure.coverage` (counts and LSNs, no names). Lake coverage is the `nodus.redaction.v1` property of the table's current snapshot. A layer is pending while its count is below the kernel's |
-| D168 | Lake match | With the name in memory (the erasing process), files are pruned by manifest bounds and rows match the name. Without it (restart, takeover), every name in every file is hashed with the salt and compared with the pseudonyms of erased ids |
-| D169 | Lake commit | One overwrite snapshot replaces the matching data files, with a signed `nodus.redaction.v1` property (`erase_lsn`, `erased_count`, removed and added files with sha256). The projector's buffered rows are scrubbed before its next commit. The job runs on the projector thread, so it never races an append |
+| D168 | Lake match | Superseded by D183. With the name in memory (the erasing process), files are pruned by manifest bounds and rows match the name. Without it (restart, takeover), every name in every file is hashed with the salt and compared with the pseudonyms of erased ids |
+| D169 | Lake commit | One overwrite snapshot replaces the matching data files, with a signed `nodus.redaction.v1` property (`erase_lsn`, `erased_count`, removed and added files with sha256). The projector commits up to the erasure first instead of scrubbing buffered rows (D184). The job runs on the projector thread, so it never races an append |
 | D170 | Timeout error | -16 `NodusErasurePendingError`, naming the pending layers and carrying the token |
 | D171 | Code shape | Package `io.nodusdb.erasure`: `ErasureRunner`, `ErasureCoverage`, `ErasureStatus`, `BucketCut`. `SymbolTable.erase` in `kernel.symbols`, `Pseudonym` beside it, `TupleEraser` in `authz`, `LakeRedaction` in `projection`. Existing classes delegate |
 | D172 | API | Python `Graph.erase(name) -> Token`, `Graph.wait_erased(token, timeout=None)`, `stats()["erasure"]`. C `nodus_erase` and `nodus_await_erased` |
@@ -88,32 +92,39 @@ The pseudonym is `"erased:" + hex(sha256(salt || utf8))[0:16]` (23 bytes, stored
 Snapshot v3 already carries the flag (`SYMBOLS` section, bit 0): the writer sets it and stores the pseudonym, the
 reader restores the entry as erased.
 
-## 5. Bucket cut (D166, D167)
+## 5. Bucket cut (D166, D167, D176 to D178, D182)
 
 ```
-REDACTION body (kind 3): erase_lsn u64 | erased_count u32 | first_kept_seq u64 | snapshot_lsn u64
+REDACTION body (kind 3): erase_lsn u64 | erased_count u32 | first_kept_seq u64 | snapshot_lsn u64 | last_lsn u64
 
-runner tick, bucket layer pending (kernel erased count > covered count):
-  1 wait for a local checkpoint at L >= newest erase LSN that is shipped and referenced (SNAPSHOT_REF committed)
-  2 K = object holding L+1; if K has a SYMBOL record of an erased id -> wait for the next checkpoint
-  3 shipper commits REDACTION(erase_lsn, erased_count, K, L)            signed, via a ShipState mailbox
-  4 delete chain objects with seq < K and snapshot objects with lsn < L  repeatable; under the retention lock
-  5 erasure.coverage <- (erased_count, erase_lsn, K)                    atomic replace
+runner tick, bucket layer pending (its count is below the kernel's and its LSN below the request):
+  1 A = the newest anchor AnchorFinder returns (snapshot L, reference R, first object K a follower replays)
+    wait while L < newest erase LSN
+  2 if K holds a SYMBOL record of an erased id -> report and wait (D177 and D178 make this unreachable)
+  3 wait until the projector has passed K
+  4 shipper commits REDACTION(erase_lsn, erased_count, K, L, chain last LSN)   signed, via a ShipState mailbox
+  5 delete chain objects with seq < K and snapshot objects with lsn < L        repeatable
+  6 erasure.coverage <- (erased_count, erase_lsn, K, L)                        atomic replace
 ```
 
-Every record after `L` comes after the `ERASE` record, so it cannot hold a scrubbed name. Followers, restore and
-takeover already bootstrap from the newest snapshot. Retention and the cut share one lock, and retention never keeps
-an object below the newest cut.
+A transaction that holds `ERASE` always starts a chain object (D177), and a reference is committed only once the
+chain holds every record it covers (D178). The object a follower replays first after a snapshot at `L >= E` therefore
+contains `L` and starts at or after the erasure, so it holds no erased name. Retention and the cut both delete
+prefixes below a kept anchor and their deletes repeat safely, so they share no lock (D182).
 
-## 6. Lake rewrite (D161, D168, D169)
+## 6. Lake rewrite (D161, D169, D183, D184)
 
 ```
-projector tick, lake layer pending and projected LSN >= newest erase LSN:
-  candidates = files whose bounds can hold a hinted name, or every file without hints
-  for each candidate: read rows; a row matches when a name part is a hinted name or salted(name) is an erased pseudonym
-  rewrite matching files with ("erased", 16 hex) in place of (type, id); keep the sort and the partition
-  commit an overwrite snapshot with nodus.redaction.v1 (signed); expire every older snapshot
-  delete the replaced data files and the manifests and manifest lists no snapshot references
+lake layer: posts LakeRequest(erase LSN, erased count) into ShipState
+projector, once it has projected past the erase LSN: commits its buffered rows, then
+  lookup = salted pseudonym -> newest erase LSN of every erased symbol (kernel memory only)
+  for each live data file whose first LSN <= erase LSN: read rows; a row's name matches when its salted hash is
+    an erased pseudonym and the row's LSN is at or below that erasure (a name written again keeps its later rows)
+  write metadata/redaction-<uuid>.json (file keys only), upload the rewritten files, record the snapshot id
+  commit one overwrite: untouched manifests carried, replaced files deleted without metrics, rewrites added,
+    nodus.erasure.v1 = count/lsn and a signed nodus.redaction.v1
+  expire every older snapshot; delete the replaced data files and manifests; delete the recovery record
+at start: a published job is finished, an unpublished one has its uploads deleted
 ```
 
 ## 7. Failure modes
@@ -126,7 +137,7 @@ projector tick, lake layer pending and projected LSN >= newest erase LSN:
 | erase | follower or integer graph | unit | refused | `NodusUnsupportedError` |
 | reader | lookup during the scrub | concurrency test | seqlock retry | old id or absent, never torn bytes |
 | local | checkpoint fails | injected fault | retried next tick, stats error | pending |
-| bucket | object holding L+1 holds the name | unit | wait for the next checkpoint | pending |
+| bucket | the kept object holds the name | unit | reported, no cut; unreachable by D177 and D178 | pending |
 | bucket | crash after REDACTION, before deletes | crash test | deletes repeat on the next tick | pending until done |
 | bucket | follower behind the cut | follower test | STALLED, restart rebuilds | stats reason |
 | lake | crash before the overwrite commit | crash test | files written but unreferenced, orphan sweep | pending |
