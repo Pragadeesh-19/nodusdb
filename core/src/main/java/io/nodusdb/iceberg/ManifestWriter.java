@@ -4,6 +4,7 @@ import io.nodusdb.avro.AvroContainerWriter;
 import io.nodusdb.avro.AvroEncoder;
 import io.nodusdb.lake.parquet.ColumnMetrics;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,7 +14,6 @@ public final class ManifestWriter {
     public record Encoded(byte[] bytes, int files, long rows, int lowerDay, int upperDay) {
     }
 
-    private static final int STATUS_ADDED = 1;
     private static final int CONTENT_DATA = 0;
     private static final String FORMAT_PARQUET = "PARQUET";
 
@@ -21,20 +21,28 @@ public final class ManifestWriter {
     }
 
     public static Encoded encode(List<DataFile> files, long snapshotId) {
-        if (files.isEmpty()) {
+        List<ManifestEntry> entries = new ArrayList<>(files.size());
+        for (DataFile file : files) {
+            entries.add(ManifestEntry.added(file, snapshotId));
+        }
+        return encodeEntries(entries);
+    }
+
+    public static Encoded encodeEntries(List<ManifestEntry> entries) {
+        if (entries.isEmpty()) {
             throw new IllegalArgumentException("a manifest needs at least one data file");
         }
         AvroContainerWriter container = new AvroContainerWriter(IcebergAvroSchemas.MANIFEST_ENTRY, metadata());
         long rows = 0;
         int lowerDay = Integer.MAX_VALUE;
         int upperDay = Integer.MIN_VALUE;
-        for (DataFile file : files) {
-            container.append(entry(file, snapshotId));
-            rows += file.recordCount();
-            lowerDay = Math.min(lowerDay, file.partitionDay());
-            upperDay = Math.max(upperDay, file.partitionDay());
+        for (ManifestEntry entry : entries) {
+            container.append(entry(entry));
+            rows += entry.recordCount();
+            lowerDay = Math.min(lowerDay, entry.partitionDay());
+            upperDay = Math.max(upperDay, entry.partitionDay());
         }
-        return new Encoded(container.finish(), files.size(), rows, lowerDay, upperDay);
+        return new Encoded(container.finish(), entries.size(), rows, lowerDay, upperDay);
     }
 
     private static Map<String, String> metadata() {
@@ -48,12 +56,12 @@ public final class ManifestWriter {
         return metadata;
     }
 
-    private static byte[] entry(DataFile file, long snapshotId) {
+    private static byte[] entry(ManifestEntry file) {
         AvroEncoder entry = new AvroEncoder();
-        entry.writeInt(STATUS_ADDED);
-        entry.writeUnionIndex(1).writeLong(snapshotId);
-        entry.writeUnionIndex(0);
-        entry.writeUnionIndex(0);
+        entry.writeInt(file.status().code);
+        entry.writeUnionIndex(1).writeLong(file.snapshotId());
+        writeSequence(entry, file.dataSequenceNumber());
+        writeSequence(entry, file.fileSequenceNumber());
         entry.writeInt(CONTENT_DATA);
         entry.writeString(file.path());
         entry.writeString(FORMAT_PARQUET);
@@ -71,6 +79,14 @@ public final class ManifestWriter {
         entry.writeUnionIndex(0);
         entry.writeUnionIndex(1).writeInt(NodusLogTable.SORT_ORDER_ID);
         return entry.toByteArray();
+    }
+
+    private static void writeSequence(AvroEncoder entry, long sequenceNumber) {
+        if (sequenceNumber == ManifestEntry.INHERITED) {
+            entry.writeUnionIndex(0);
+        } else {
+            entry.writeUnionIndex(1).writeLong(sequenceNumber);
+        }
     }
 
     private enum Metric {

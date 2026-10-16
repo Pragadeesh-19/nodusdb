@@ -187,6 +187,40 @@ class IcebergPyIcebergTest {
     }
 
     @Test
+    void afterAnOverwriteAndAFullExpiryTheReaderSeesTheRewrittenRowsAndOnlyThem() throws IOException {
+        fixture = new IcebergFixture(root);
+        DataFile kept = fixture.dataFile(1, 10, IcebergFixture.START_MICROS, 1);
+        DataFile doomed = fixture.dataFile(11, 10, IcebergFixture.START_MICROS + 60_000_000L, 1);
+        Head first = fixture.commit(Optional.empty(), Map.of(), kept);
+        Head second = fixture.commit(Optional.of(first), Map.of(), doomed);
+        List<EdgeLogRow> rows = new ArrayList<>();
+        for (EdgeLogRow row : new DataFileReader(fixture.store, fixture.table).read(doomed.path())) {
+            rows.add(row.withSubject("erased", "0123456789abcdef"));
+        }
+        DataFile replacement = fixture.writer.write(DataFileReader.rowsOf(rows), doomed.partitionDay());
+        IcebergTable.Overwrite overwrite = fixture.table.prepareOverwrite(second, Map.of(doomed.path(), replacement),
+                Map.of());
+        Head replaced = fixture.table.publish(overwrite.prepared());
+        IcebergTable.Expiry expiry = fixture.table.prepareExpiry(replaced, Long.MAX_VALUE);
+        Head after = fixture.table.publish(expiry.prepared().orElseThrow());
+        fixture.table.deleteAll(expiry.deletable());
+        fixture.table.deleteAll(overwrite.replacedManifests());
+        fixture.table.deleteAll(List.of(fixture.table.keyOf(doomed.path())));
+
+        JsonObject report = scan(after.version());
+
+        assertEquals(20, report.requireLong("rows"));
+        assertEquals(1, report.requireArray("snapshots").size());
+        assertEquals(2, report.requireArray("files").size());
+        JsonObject columns = report.requireObject("columns");
+        List<Long> lsn = longs(columns.requireArray("lsn"));
+        List<String> subjects = strings(columns.requireArray("subject_type"));
+        for (int i = 0; i < lsn.size(); i++) {
+            assertEquals(lsn.get(i) > 10 ? "erased" : "user", subjects.get(i), "lsn " + lsn.get(i));
+        }
+    }
+
+    @Test
     void theManifestAndTheManifestListAreValidAvroWithTheRequiredMetadataAndFieldIds() throws IOException {
         fixture = new IcebergFixture(root);
         Head head = fixture.commit(Optional.empty(), Map.of(), fixture.dataFile(1, 10, IcebergFixture.START_MICROS, 1));

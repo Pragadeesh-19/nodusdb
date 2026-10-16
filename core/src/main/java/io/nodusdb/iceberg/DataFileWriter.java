@@ -27,19 +27,27 @@ public final class DataFileWriter {
     }
 
     public DataFile write(EdgeLogRows rows, int partitionDay) throws IOException {
-        if (rows.size() == 0) {
-            throw new IllegalArgumentException("a data file needs at least one row");
-        }
+        requireRows(rows);
+        return write(rows, partitionDay, table.newDataKey(rows.firstLsn(), rows.lastLsn()));
+    }
+
+    public DataFile write(EdgeLogRows rows, int partitionDay, String key) throws IOException {
+        requireRows(rows);
         Files.createDirectories(scratch);
         Path local = Files.createTempFile(scratch, "datafile-", ".parquet");
         try {
             WrittenFile written = ParquetWriter.write(local, rows, codec);
-            String key = table.newDataKey(rows.firstLsn(), rows.lastLsn());
             upload(key, local);
             return new DataFile(table.uriOf(key), written.rowCount(), written.fileBytes(), partitionDay,
                     written.columns(), ChainHash.sha256(local));
         } finally {
             Files.deleteIfExists(local);
+        }
+    }
+
+    private static void requireRows(EdgeLogRows rows) {
+        if (rows.size() == 0) {
+            throw new IllegalArgumentException("a data file needs at least one row");
         }
     }
 

@@ -32,7 +32,8 @@ public final class ParquetReader {
     }
 
     public static Contents read(Path path, LakeSchema schema) throws IOException {
-        Parsed parsed = parse(path);
+        String source = path.toString();
+        Parsed parsed = parse(Files.readAllBytes(path), source);
         byte[] file = parsed.file();
         int totalRows = parsed.totalRows();
         int columnCount = schema.fields().size() + 1;
@@ -48,7 +49,7 @@ public final class ParquetReader {
             Map<?, ?> group = (Map<?, ?>) groupObject;
             List<?> chunks = list(group.get(ROW_GROUP_COLUMNS));
             int groupRows = Math.toIntExact(longValue(group, ROW_GROUP_NUM_ROWS));
-            requireShape(path, chunks.size(), columnCount, groupRows, totalRows - filled);
+            requireShape(source, chunks.size(), columnCount, groupRows, totalRows - filled);
             ColumnChunkReader.readLongs(file, chunks.get(0), groupRows, keyHashes, filled);
             for (int i = 0; i < schema.fields().size(); i++) {
                 Object chunk = chunks.get(i + 1);
@@ -62,12 +63,16 @@ public final class ParquetReader {
             }
             filled += groupRows;
         }
-        requireComplete(path, filled, totalRows);
+        requireComplete(source, filled, totalRows);
         return new Contents(keyHashes, longValues, intValues, varCharValues);
     }
 
     public static Columns read(Path path, List<ColumnSpec> columns) throws IOException {
-        Parsed parsed = parse(path);
+        return read(Files.readAllBytes(path), path.toString(), columns);
+    }
+
+    public static Columns read(byte[] bytes, String source, List<ColumnSpec> columns) throws IOException {
+        Parsed parsed = parse(bytes, source);
         byte[] file = parsed.file();
         int totalRows = parsed.totalRows();
         long[][] fixed = new long[columns.size()][];
@@ -84,7 +89,7 @@ public final class ParquetReader {
             Map<?, ?> group = (Map<?, ?>) groupObject;
             List<?> chunks = list(group.get(ROW_GROUP_COLUMNS));
             int groupRows = Math.toIntExact(longValue(group, ROW_GROUP_NUM_ROWS));
-            requireShape(path, chunks.size(), columns.size(), groupRows, totalRows - filled);
+            requireShape(source, chunks.size(), columns.size(), groupRows, totalRows - filled);
             for (int i = 0; i < columns.size(); i++) {
                 Object chunk = chunks.get(i);
                 switch (columns.get(i).type()) {
@@ -96,7 +101,7 @@ public final class ParquetReader {
             }
             filled += groupRows;
         }
-        requireComplete(path, filled, totalRows);
+        requireComplete(source, filled, totalRows);
         return new Columns(fixed, strings);
     }
 
@@ -109,33 +114,32 @@ public final class ParquetReader {
         }
     }
 
-    private static Parsed parse(Path path) throws IOException {
-        byte[] file = Files.readAllBytes(path);
+    private static Parsed parse(byte[] file, String source) throws IOException {
         requireMagic(file);
         int footerLength = ByteBuffer.wrap(file, file.length - 8, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
         int footerStart = file.length - 8 - footerLength;
         if (footerLength <= 0 || footerStart < 4) {
-            throw new IOException("invalid parquet footer length in " + path);
+            throw new IOException("invalid parquet footer length in " + source);
         }
         Map<Integer, Object> metadata = new ThriftCompactReader(file, footerStart).readStruct();
         int totalRows = Math.toIntExact(longValue(metadata, FOOTER_NUM_ROWS));
         return new Parsed(file, list(metadata.get(FOOTER_ROW_GROUPS)), totalRows);
     }
 
-    private static void requireShape(Path path, int found, int expected, int groupRows, int rowsLeft)
+    private static void requireShape(String source, int found, int expected, int groupRows, int rowsLeft)
             throws IOException {
         if (found != expected) {
-            throw new IOException("expected " + expected + " columns in " + path + " but found " + found);
+            throw new IOException("expected " + expected + " columns in " + source + " but found " + found);
         }
         if (groupRows < 0 || groupRows > rowsLeft) {
-            throw new IOException("row group rows exceed the footer's row count in " + path);
+            throw new IOException("row group rows exceed the footer's row count in " + source);
         }
     }
 
-    private static void requireComplete(Path path, int filled, int totalRows) throws IOException {
+    private static void requireComplete(String source, int filled, int totalRows) throws IOException {
         if (filled != totalRows) {
             throw new IOException("row groups hold " + filled + " rows but the footer says " + totalRows
-                    + " in " + path);
+                    + " in " + source);
         }
     }
 

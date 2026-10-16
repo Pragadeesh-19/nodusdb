@@ -35,6 +35,9 @@ public final class IcebergTable {
     public record Expiry(Optional<Prepared> prepared, List<String> deletable) {
     }
 
+    public record Overwrite(Prepared prepared, List<String> replacedManifests) {
+    }
+
     public static final String DATA_FOLDER = "data/";
     public static final String METADATA_FOLDER = "metadata/";
     public static final String VERSION_HINT = "version-hint.text";
@@ -126,6 +129,136 @@ public final class IcebergTable {
         long version = base.map(Head::version).orElse(0L) + 1;
         TableState next = state.withSnapshot(snapshot, previousMetadata(base));
         return new Prepared(version, metadataKey(version), next.toJson(), next);
+    }
+
+    public List<ManifestSummary> manifests(Head head) {
+        return carriedManifests(head.state());
+    }
+
+    public List<ManifestEntry> entries(ManifestSummary manifest) {
+        String key = keyOf(manifest.path());
+        byte[] bytes = store.get(key).orElseThrow(() -> new IllegalStateException(
+                "the manifest " + key + " of the current snapshot cannot be read"));
+        return ManifestReader.read(bytes, manifest);
+    }
+
+    public Overwrite prepareOverwrite(Head base, Map<String, DataFile> replacements,
+                                      Map<String, String> extraSummary) {
+        TableState state = base.state();
+        long now = clockMillis.getAsLong();
+        long snapshotId = newSnapshotId();
+        long sequence = state.lastSequenceNumber() + 1;
+        List<ManifestSummary> kept = new ArrayList<>();
+        List<ManifestEntry> rewritten = new ArrayList<>();
+        List<String> replaced = new ArrayList<>();
+        Set<String> found = new HashSet<>();
+        for (ManifestSummary manifest : carriedManifests(state)) {
+            List<ManifestEntry> entries = entries(manifest);
+            if (entries.stream().noneMatch(entry -> entry.live() && replacements.containsKey(entry.path()))) {
+                kept.add(manifest);
+                continue;
+            }
+            replaced.add(keyOf(manifest.path()));
+            for (ManifestEntry entry : entries) {
+                if (!entry.live()) {
+                    continue;
+                }
+                DataFile replacement = replacements.get(entry.path());
+                if (replacement == null) {
+                    rewritten.add(entry.existing());
+                } else {
+                    found.add(entry.path());
+                    rewritten.add(entry.deletedBy(snapshotId));
+                    rewritten.add(ManifestEntry.added(replacement, snapshotId));
+                }
+            }
+        }
+        if (!found.equals(replacements.keySet())) {
+            throw new IllegalStateException("the current snapshot does not hold every data file being replaced");
+        }
+        List<ManifestSummary> manifests = new ArrayList<>(kept);
+        if (!rewritten.isEmpty()) {
+            manifests.add(writeManifest(rewritten, snapshotId, sequence));
+        }
+        String listKey = keyPrefix + METADATA_FOLDER + "snap-" + snapshotId + "-0-" + uuids.get() + ".avro";
+        Long parent = state.current().map(SnapshotEntry::snapshotId).orElse(null);
+        store.put(listKey, ManifestListCodec.encode(manifests, snapshotId, parent, sequence));
+        SnapshotEntry snapshot = new SnapshotEntry(snapshotId, parent, sequence, now, uriOf(listKey),
+                overwriteSummary(state, rewritten, extraSummary));
+        long version = base.version() + 1;
+        TableState next = state.withSnapshot(snapshot, previousMetadata(Optional.of(base)));
+        return new Overwrite(new Prepared(version, metadataKey(version), next.toJson(), next), List.copyOf(replaced));
+    }
+
+    private ManifestSummary writeManifest(List<ManifestEntry> entries, long snapshotId, long sequence) {
+        ManifestWriter.Encoded manifest = ManifestWriter.encodeEntries(entries);
+        String manifestKey = keyPrefix + METADATA_FOLDER + uuids.get() + "-m0.avro";
+        store.put(manifestKey, manifest.bytes());
+        int added = 0;
+        int existing = 0;
+        int deleted = 0;
+        long addedRows = 0;
+        long existingRows = 0;
+        long deletedRows = 0;
+        long minSequence = sequence;
+        for (ManifestEntry entry : entries) {
+            switch (entry.status()) {
+                case ADDED -> {
+                    added++;
+                    addedRows += entry.recordCount();
+                }
+                case EXISTING -> {
+                    existing++;
+                    existingRows += entry.recordCount();
+                    minSequence = Math.min(minSequence, entry.dataSequenceNumber());
+                }
+                case DELETED -> {
+                    deleted++;
+                    deletedRows += entry.recordCount();
+                }
+            }
+        }
+        return new ManifestSummary(uriOf(manifestKey), manifest.bytes().length, sequence, minSequence, snapshotId,
+                added, existing, deleted, addedRows, existingRows, deletedRows, manifest.lowerDay(),
+                manifest.upperDay());
+    }
+
+    private static Map<String, String> overwriteSummary(TableState state, List<ManifestEntry> entries,
+                                                        Map<String, String> extra) {
+        long addedFiles = 0;
+        long deletedFiles = 0;
+        long addedRecords = 0;
+        long deletedRecords = 0;
+        long addedSize = 0;
+        long removedSize = 0;
+        for (ManifestEntry entry : entries) {
+            if (entry.status() == ManifestEntry.Status.ADDED) {
+                addedFiles++;
+                addedRecords += entry.recordCount();
+                addedSize += entry.fileSizeBytes();
+            } else if (entry.status() == ManifestEntry.Status.DELETED) {
+                deletedFiles++;
+                deletedRecords += entry.recordCount();
+                removedSize += entry.fileSizeBytes();
+            }
+        }
+        Map<String, String> previous = state.current().map(SnapshotEntry::summary).orElse(Map.of());
+        Map<String, String> summary = new LinkedHashMap<>();
+        summary.put("operation", "overwrite");
+        summary.put("added-data-files", Long.toString(addedFiles));
+        summary.put("deleted-data-files", Long.toString(deletedFiles));
+        summary.put("added-records", Long.toString(addedRecords));
+        summary.put("deleted-records", Long.toString(deletedRecords));
+        summary.put("added-files-size", Long.toString(addedSize));
+        summary.put("removed-files-size", Long.toString(removedSize));
+        summary.put("total-data-files", Long.toString(total(previous, "total-data-files") + addedFiles
+                - deletedFiles));
+        summary.put("total-records", Long.toString(total(previous, "total-records") + addedRecords
+                - deletedRecords));
+        summary.put("total-files-size", Long.toString(total(previous, "total-files-size") + addedSize
+                - removedSize));
+        summary.putAll(extra);
+        return summary;
     }
 
     public Head publish(Prepared prepared) {
