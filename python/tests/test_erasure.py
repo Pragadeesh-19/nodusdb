@@ -1,3 +1,4 @@
+import ctypes
 import os
 import shutil
 import subprocess
@@ -11,9 +12,14 @@ sys.path.insert(0, str(PYTHON_DIRECTORY))
 
 from nodusdb import (  # noqa: E402
     Graph,
+    NodusError,
     NodusSchemaError,
     NodusUnsupportedError,
+    Shipping,
     Token,
+    Transaction,
+    find_library,
+    generate_signing_key,
 )
 
 SCHEMA = """
@@ -29,6 +35,7 @@ type document {
 """
 
 NAME = "user:alice-erasure-target"
+ERASED_ID = NAME.split(":", 1)[1].encode("utf-8")
 WAIT_SECONDS = 30
 
 CHILD = f"""
@@ -51,9 +58,13 @@ def files_holding(root, needle):
             if name == "nodus.lock":
                 continue
             path = os.path.join(directory, name)
-            with open(path, "rb") as stream:
-                if needle in stream.read():
-                    holding.append(path)
+            try:
+                with open(path, "rb") as stream:
+                    content = stream.read()
+            except FileNotFoundError:
+                continue
+            if needle in content:
+                holding.append(path)
     return holding
 
 
@@ -125,12 +136,12 @@ class DurableErasureTest(unittest.TestCase):
             graph.add_tuple("document:readme", "viewer", NAME)
             graph.add_tuple("group:eng", "member", NAME)
             graph.checkpoint()
-            self.assertTrue(files_holding(self.path, NAME.encode("utf-8")))
+            self.assertTrue(files_holding(self.path, ERASED_ID))
 
             token = graph.erase(NAME)
             graph.wait_erased(token, timeout=WAIT_SECONDS)
 
-            self.assertEqual([], files_holding(self.path, NAME.encode("utf-8")))
+            self.assertEqual([], files_holding(self.path, ERASED_ID))
             local = graph.stats()["erasure"]["local"]
             self.assertTrue(local["configured"])
             self.assertFalse(local["pending"])
@@ -152,15 +163,55 @@ class DurableErasureTest(unittest.TestCase):
             child.wait()
             child.stdout.close()
             child.stdin.close()
-        self.assertTrue(files_holding(self.path, NAME.encode("utf-8")))
+        self.assertTrue(files_holding(self.path, ERASED_ID))
 
         with Graph(path=self.path, sync_mode="sync") as graph:
             self.assertTrue(graph.stats()["erasure"]["local"]["pending"])
             graph.wait_erased(Token(epoch, lsn), timeout=WAIT_SECONDS)
 
             self.assertFalse(graph.check("document:readme", "view", NAME))
-            self.assertEqual([], files_holding(self.path, NAME.encode("utf-8")))
+            self.assertEqual([], files_holding(self.path, ERASED_ID))
 
+
+
+def _native_has_shipping_exports():
+    try:
+        library = find_library()
+    except NodusError:
+        return False
+    return hasattr(ctypes.CDLL(str(library)), "nodus_open_durable_shipping")
+
+
+@unittest.skipUnless(_native_has_shipping_exports(), "libnodusdb lacks the shipping exports; rebuild the native library")
+class ShippedErasureTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="nodus-erasure-ship-"))
+        self.bucket = self.root / "bucket"
+        self.private_key = self.root / "signing.pem"
+        generate_signing_key(self.private_key, self.root / "signing.pub")
+
+    def tearDown(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def test_after_wait_erased_neither_the_bucket_nor_the_iceberg_table_holds_the_name(self):
+        shipping = Shipping.directory(self.bucket, key_file=self.private_key, key_id=7, interval_ms=10,
+                                      iceberg=True, iceberg_commit_interval_s=1)
+        with Graph(path=self.root / "graph", sync_mode="sync", shipping=shipping) as graph:
+            graph.apply_schema(SCHEMA)
+            graph.write(Transaction().add("document:readme", "viewer", NAME).add("group:eng", "member", NAME)
+                        .add("document:plan", "viewer", "user:bob"), durability="lake")
+            self.assertTrue(files_holding(self.bucket, ERASED_ID))
+
+            token = graph.erase(NAME)
+            graph.wait_erased(token, timeout=WAIT_SECONDS)
+
+            self.assertEqual([], files_holding(self.bucket, ERASED_ID))
+            self.assertEqual([], files_holding(self.root / "graph", ERASED_ID))
+            erasure = graph.stats()["erasure"]
+            for layer in ("local", "bucket", "lake"):
+                self.assertTrue(erasure[layer]["configured"], layer)
+                self.assertFalse(erasure[layer]["pending"], layer)
+            self.assertTrue(graph.check("document:plan", "view", "user:bob"))
 
 if __name__ == "__main__":
     unittest.main()
