@@ -1,7 +1,7 @@
 # Engineering review: Build Step 5, erasure
 
 Status: decisions D159 to D175 accepted on 2026-10-14. Implementation scope is Build Step 5 (section 11), built on
-branch feat/authz-step5 in four milestones. Choices made while building are D176 to D185 in
+branch feat/authz-step5 in four milestones. Choices made while building are D176 to D186 in
 [`docs/decisions.md`](../decisions.md); where they differ from this document they win, and sections 5 and 6 below
 already follow them.
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 4, 7, 8 and 11. Where

@@ -22,9 +22,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -76,6 +80,55 @@ class WriterTakeoverTest {
                 taken.kernel().close();
             }
         }
+    }
+
+    @Test
+    void aWriterThatTakesOverBeforeTheCutFinishesTheErasureInTheBucket() throws IOException {
+        ShippingFixture shipping = ShippingFixture.in(root);
+        byte[] id = "alice-taken-over".getBytes(StandardCharsets.UTF_8);
+        try (BucketWriter old = BucketWriter.open(shipping, root.resolve("graph"))) {
+            old.tuples().applySchema(SchemaFixtures.DOCUMENTS);
+            old.tuples().write(new TupleTransaction().add("document:a", "viewer", "user:alice-taken-over")
+                    .add("document:b", "viewer", "user:bob"), Durability.LAKE);
+            Token erased = old.tuples().erase("user:alice-taken-over");
+            old.tuples().awaitShipped(erased, Duration.ofSeconds(20));
+            assertTrue(holds(shipping.bucket(), id));
+
+            WriterTakeover.Taken taken = WriterTakeover.takeOver(shipping.config(), root.resolve("taken"), SYNC,
+                    GraphKernel.NO_MEMORY_LIMIT);
+            try {
+                taken.kernel().erasureProgress().awaitErased(erased, Duration.ofSeconds(30));
+
+                assertFalse(holds(shipping.bucket(), id));
+                assertFalse(holds(root.resolve("taken"), id));
+                assertEquals(1, taken.kernel().erasedSymbols());
+                assertTrue(TupleStore.open(taken.kernel()).check("document:b", "view", "user:bob"));
+            } finally {
+                taken.kernel().close();
+            }
+        }
+    }
+
+    private static boolean holds(Path directory, byte[] needle) throws IOException {
+        try (Stream<Path> files = Files.walk(directory)) {
+            for (Path file : files.filter(Files::isRegularFile).toList()) {
+                if (file.getFileName().toString().equals("nodus.lock")) {
+                    continue;
+                }
+                byte[] content;
+                try {
+                    content = Files.readAllBytes(file);
+                } catch (NoSuchFileException finishedUpload) {
+                    continue;
+                }
+                for (int start = 0; start + needle.length <= content.length; start++) {
+                    if (Arrays.equals(content, start, start + needle.length, needle, 0, needle.length)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     @Test

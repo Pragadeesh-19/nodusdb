@@ -32,10 +32,12 @@ public final class BucketCut implements ErasureLayer {
     private final Bucket bucket;
     private final ErasureCoverage coverage;
     private final LongSupplier nanoClock;
+    private final long openingCheckpointLsn;
     private long searchedNanos;
     private long searchedReferenceSeq = NEVER_SEARCHED;
     private Anchor newest;
     private ShipState.CutRequest requested;
+    private boolean openingSnapshotReplaced;
 
     public BucketCut(GraphKernel kernel, ShipState state, Bucket bucket, ErasureCoverage coverage,
                      LongSupplier nanoClock) {
@@ -44,6 +46,7 @@ public final class BucketCut implements ErasureLayer {
         this.bucket = Objects.requireNonNull(bucket, "bucket");
         this.coverage = Objects.requireNonNull(coverage, "coverage");
         this.nanoClock = Objects.requireNonNull(nanoClock, "nanoClock");
+        this.openingCheckpointLsn = kernel.checkpointLsn();
     }
 
     @Override
@@ -72,6 +75,7 @@ public final class BucketCut implements ErasureLayer {
         long newestErase = kernel.newestEraseLsn();
         Anchor anchor = newestAnchor();
         if (anchor == null || anchor.snapshotLsn() < newestErase) {
+            replaceOpeningSnapshot(newestErase, due);
             return;
         }
         long keep = anchor.firstSeq();
@@ -81,6 +85,14 @@ public final class BucketCut implements ErasureLayer {
         }
         requested = new ShipState.CutRequest(newestErase, erased, keep, anchor.snapshotLsn());
         state.offerCut(requested);
+    }
+
+    private void replaceOpeningSnapshot(long newestErase, boolean due) {
+        long checkpointLsn = kernel.checkpointLsn();
+        if (due && !openingSnapshotReplaced && checkpointLsn >= newestErase && checkpointLsn == openingCheckpointLsn) {
+            openingSnapshotReplaced = true;
+            kernel.checkpoint();
+        }
     }
 
     private void finishRequested() {
