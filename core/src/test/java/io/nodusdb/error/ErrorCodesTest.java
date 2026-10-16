@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ErrorCodesTest {
 
     private static final int FIRST_CODE = -1;
-    private static final int LAST_CODE = -15;
+    private static final int LAST_CODE = -16;
 
     @Test
     void everyCodeIsUniqueAndInsideTheContractRange() {
@@ -31,7 +31,7 @@ class ErrorCodesTest {
     }
 
     @Test
-    void theCodesFormAContiguousRangeFromMinusOneToMinusFifteen() {
+    void theCodesFormAContiguousRangeFromMinusOneToMinusSixteen() {
         Set<Integer> values = Arrays.stream(ErrorCode.values()).map(ErrorCode::value).collect(Collectors.toSet());
 
         for (int value = FIRST_CODE; value >= LAST_CODE; value--) {
