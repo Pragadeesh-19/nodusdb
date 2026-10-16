@@ -62,6 +62,30 @@
 **Priority:** P2
 **Depends on:** The first CI run of Build Step 1
 
+### Lookup APIs and permission-level watch
+
+**What:** `LookupResources` ("what can alice view") and `LookupSubjects` ("who can view this document"), then standing lookups the engine keeps current from the change feed and streams as gained and lost members.
+
+**Why:** `AccessWatch` re-checks triples the application registers (D188). An application that needs every document a user lost access to cannot register every triple in advance.
+
+**Context:** Reverse evaluation through usersets and tuple-to-userset arrows, with pagination, and dependency tracking through nesting for the incremental part. The reachability closure in `kernel/closure` already answers member-to-group sets, so `LookupResources` can start from `MEMBER2GROUP` plus the INDIRECT scan. SpiceDB and OpenFGA (ListObjects) offer the plain lookups.
+
+**Effort:** XL
+**Priority:** P2
+**Depends on:** Build Step 6
+
+### Agent-memory Python API
+
+**What:** The Python API for AI agent memory with provenance, accepted in the CEO plan (D3.5, scope row 5, build order item 7).
+
+**Why:** It is the second market the CEO plan names, and no build step schedules it, so it would drop after Build Step 6.
+
+**Context:** Needs a short product review of the API shape and a typed memory schema before code. It uses tuples for memories, the change feed for updates and `as_of` for provenance. See `docs/designs/relationship-lakehouse.md`.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** Build Step 6
+
 ## Engine
 
 ### Low-latency writer-to-follower tail stream
@@ -124,7 +148,31 @@
 **Priority:** P3
 **Depends on:** Build Step 5
 
+### Checkpoints that do not pause writes
+
+**What:** Write the snapshot from a consistent read view on a background thread while the writer continues, instead of holding the writer for the whole snapshot.
+
+**Why:** A checkpoint pauses writes for 3.7 to 5.6 seconds at 30.6 million edges, so checkpoints stay manual (D202). With checkpoints that do not pause, nodus could checkpoint on a schedule and bound the replay of every `as_of` build, the growth of the local log and the time of a recovery.
+
+**Context:** Needs a copy-on-write or versioned read of the adjacency tables while the snapshot streams, which touches the seqlock design (D48, D86), so it needs its own review. Start at `GraphKernel.checkpointLocked` and `DurableStore.checkpoint`; the snapshot writer already streams sections. The `as_of` stats (replayed objects and records, build time) measure the gain.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** Build Step 6
+
 ## Shipping and lake
+
+### as_of beyond the bucket from the Iceberg table
+
+**What:** Build a past view from the rows of `nodus_log` when the target is older than the bucket's reach or before the newest erasure.
+
+**Why:** `as_of` reads only the bucket (D192), whose history an erasure cut deletes (D166), so a graph with frequent erasures has time travel only back to its last erasure. The table keeps every row, with erased names as pseudonyms, so the Step 5 guarantee still holds.
+
+**Context:** Only valid when the table starts at LSN 1: `EdgeLogProjector.begin` starts at the oldest retained chain object, so a table enabled late is partial. Record the first projected LSN as a table property first. The build replays rows by name into a replica kernel; it scans the whole table, and rows are not signed per object the way chain objects are.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** Build Step 6
 
 ### Snapshot-backed NameResolver for a projector outside the writer
 
