@@ -26,14 +26,18 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class S3ChaosTest {
@@ -141,17 +145,25 @@ class S3ChaosTest {
         }
     }
 
-    private List<String> chainKeys() {
+    private S3ObjectStore direct() {
         S3Config config = S3Config.of(upstream.endpoint(), upstream.region(), upstream.bucket())
                 .withPathStyle(true).withPrefix(upstream.prefix());
-        S3ObjectStore direct = new S3ObjectStore(config, new StaticCredentialsProvider(
+        return new S3ObjectStore(config, new StaticCredentialsProvider(
                 new Credentials(upstream.accessKey(), upstream.secretKey())), Clock.systemUTC());
+    }
+
+    private List<String> chainKeys() {
+        return keys(ChainLayout.CHAIN_PREFIX);
+    }
+
+    private List<String> keys(String prefix) {
+        S3ObjectStore direct = direct();
         try {
             List<String> keys = new ArrayList<>();
             String after = "";
             ListPage page;
             do {
-                page = direct.list(ChainLayout.CHAIN_PREFIX, after, 1000);
+                page = direct.list(prefix, after, 1000);
                 page.entries().stream().map(ObjectInfo::key).forEach(keys::add);
                 after = page.lastKey();
             } while (page.truncated());
@@ -188,6 +200,52 @@ class S3ChaosTest {
                 .filter(request -> request.method().equals("PUT") && request.target().contains("_nodus/chain/"))
                 .count();
         assertTrue(chainPuts > chain.size(), "the proxy dropped replies, so some objects were written twice");
+    }
+
+    @Test
+    void anErasureCutFinishesThroughLostRepliesAndLeavesAChainAFollowerCanStartFrom() throws IOException {
+        GraphKernel writer = writer(proxy.endpoint());
+        TupleStore tuples = TupleStore.open(writer);
+        tuples.applySchema(SchemaFixtures.DOCUMENTS);
+        for (int i = 0; i < 4; i++) {
+            tuples.write(new TupleTransaction().add("document:d" + i, "viewer", "user:alice-chaos-target"),
+                    Durability.LAKE);
+        }
+        tuples.write(new TupleTransaction().add("document:kept", "viewer", "user:bob"), Durability.LAKE);
+        proxy.inject(request -> request.method().equals("POST") && request.target().contains("delete"),
+                Fault.DROP_RESPONSE, 2);
+        proxy.inject(request -> request.method().equals("PUT") && request.target().contains("_nodus/chain/"),
+                Fault.DROP_RESPONSE, 2);
+
+        Token erased = tuples.erase("user:alice-chaos-target");
+        writer.erasureProgress().awaitErased(erased, Duration.ofSeconds(60));
+
+        byte[] id = "alice-chaos-target".getBytes(StandardCharsets.UTF_8);
+        S3ObjectStore direct = direct();
+        try {
+            for (String key : keys("")) {
+                byte[] content = direct.get(key).orElse(new byte[0]);
+                for (int start = 0; start + id.length <= content.length; start++) {
+                    assertFalse(Arrays.equals(content, start, start + id.length, id, 0, id.length),
+                            key + " still holds the erased id");
+                }
+            }
+        } finally {
+            direct.close();
+        }
+        List<String> chain = chainKeys();
+        long first = ChainLayout.chainSeq(chain.get(0)).orElseThrow();
+        for (int i = 0; i < chain.size(); i++) {
+            assertEquals(ChainLayout.chainKey(first + i), chain.get(i), "the kept chain has a gap");
+        }
+        assertTrue(first > 1, "the cut deleted the start of the chain");
+        long deletes = proxy.requests().stream()
+                .filter(request -> request.method().equals("POST") && request.target().contains("delete")).count();
+        assertTrue(deletes >= 2, "the cut sent the deletes whose replies were dropped: " + deletes);
+        FollowerRuntime follower = follow(upstream.endpoint());
+        await(() -> follower.state().phase() == Phase.CURRENT && follower.kernel().appliedLsn() >= erased.lsn(),
+                "a follower started after the cut to become current");
+        assertEquals(GraphDigest.of(writer), GraphDigest.of(follower.kernel()));
     }
 
     @Test
