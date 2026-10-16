@@ -1,0 +1,35 @@
+# Erasure baseline: windows-dev
+
+Machine: see bench/baseline/MACHINE.md. JDK: Oracle HotSpot 22.0.2+9-70, JMH 1.37. Measured 2026-10-16.
+
+## The write path after Build Step 5
+
+Applying a commit now asks whether an erasure is waiting to learn its LSN: one plain field read on the writer
+thread. KernelWriteBench removes and re-adds one edge of an in-memory kernel per operation. The same class was
+built on main (accc798) and on feat/authz-step5 and run alternately, four times each:
+
+    java -jar benchmarks.jar KernelWriteBench -wi 5 -w 2s -i 5 -r 2s -f 2
+
+| Build | Runs (ns/op) | Mean |
+|---|---|---|
+| main accc798 | 586.7, 576.8, 653.0, 639.9 | 614.1 |
+| feat/authz-step5 | 564.6, 637.2, 576.5, 690.6 | 617.2 |
+
+The difference is 0.5%, inside the spread between runs of one build. Both allocate 0.002 B/op, which is JMH's
+own background allocation. ReachabilityBench.addAndRemoveADirectMember, which writes through TupleStore, was run
+the same way twice per build and showed no consistent direction (error bars of 150 to 600 ns on about 2,300 ns).
+
+## Erasing a subject
+
+EraseBench gives one subject every grant on a fresh in-memory kernel before each invocation and times
+TupleStore.erase alone:
+
+    java -jar benchmarks.jar EraseBench -wi 5 -i 20 -f 2
+
+| Grants | Transactions | Time per erase |
+|---|---|---|
+| 1,000 | 1 | 2.80 ms (error 0.93 ms) |
+| 100,000 | 4 (chunks of 30,000) | 51.1 ms (error 1.1 ms) |
+
+About 0.5 us per removed tuple. The allocation JMH reports for this benchmark includes the per-invocation setup,
+which writes every grant again, so it is not a measure of the erase and is not recorded here.
