@@ -3,7 +3,10 @@ package io.nodusdb.capi;
 import io.nodusdb.authz.Durability;
 import io.nodusdb.authz.TupleTransaction;
 import io.nodusdb.authz.schema.SchemaFixtures;
+import io.nodusdb.error.ErrorCode;
 import io.nodusdb.error.HistoryExpiredException;
+import io.nodusdb.error.NodusException;
+import io.nodusdb.error.ShipTimeoutException;
 import io.nodusdb.error.StaleReadException;
 import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.json.JsonObject;
@@ -23,11 +26,13 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -242,6 +247,51 @@ class GraphSessionPastTest {
         JsonObject asOf = JsonParser.parseObject(view.statsJson()).requireObject("as_of");
         assertEquals(token.lsn(), asOf.requireLong("lsn"));
         assertTrue(asOf.requireLong("memory_bytes") > 0);
+    }
+
+    @Test
+    void aWriterWhoseShippingLagsRefusesToBuildAfterTheWait() throws IOException {
+        ShippingFixture fixture = ShippingFixture.in(root);
+        GraphSession live = writer(fixture);
+        live.applySchema(SchemaFixtures.DOCUMENTS);
+        grant(live, "document:a", "user:alice");
+        fixture.breakStore();
+        Token unshipped = live.writeTuples(new TupleTransaction().add("document:b", "viewer", "user:bob"),
+                Durability.LOCAL);
+
+        assertThrows(ShipTimeoutException.class, () -> live.openPast(new PastTarget.AtToken(unshipped),
+                GraphKernel.NO_MEMORY_LIMIT, Duration.ofMillis(200)));
+        assertEquals(0, live.openViews());
+    }
+
+    @Test
+    void aSnapshotWhoseBytesWereChangedIsRefusedAsUntrusted() throws IOException {
+        ShippingFixture fixture = ShippingFixture.in(root);
+        GraphSession live = writer(fixture);
+        live.applySchema(SchemaFixtures.DOCUMENTS);
+        Token checkpointed = grant(live, "document:a", "user:alice");
+        live.checkpoint();
+        Token token = grant(live, "document:b", "user:bob");
+        awaitReferenced(live, checkpointed.lsn());
+        try (Stream<Path> snapshots = Files.list(fixture.bucket().resolve("_nodus").resolve("snapshots"))) {
+            for (Path snapshot : snapshots.toList()) {
+                byte[] bytes = Files.readAllBytes(snapshot);
+                bytes[bytes.length - 1] ^= 0x01;
+                Files.write(snapshot, bytes);
+            }
+        }
+
+        NodusException refused = assertThrows(NodusException.class, () -> at(live, token));
+        assertEquals(ErrorCode.CHAIN_TRUST, refused.code());
+    }
+
+    private static void awaitReferenced(GraphSession live, long lsn) {
+        long deadline = System.nanoTime() + WAIT.toNanos();
+        while (JsonParser.parseObject(live.statsJson()).requireObject("shipping").requireObject("snapshot_references")
+                .requireLong("lsn") < lsn) {
+            assertTrue(System.nanoTime() < deadline, "the checkpoint's snapshot was never referenced");
+            Thread.onSpinWait();
+        }
     }
 
     @Test

@@ -16,6 +16,7 @@ from nodusdb import (  # noqa: E402
     Graph,
     NodusError,
     NodusHistoryExpiredError,
+    NodusSchemaError,
     Shipping,
     Token,
     Transaction,
@@ -267,6 +268,10 @@ class AccessWatchTest(unittest.TestCase):
             AccessWatch(self.graph, [("document:plan", "view")])
         with self.assertRaises(ValueError):
             AccessWatch(self.graph, [("document:plan", "view", "user:alice")] * 2)
+
+    def test_a_check_on_an_unknown_type_is_refused_at_creation(self):
+        with self.assertRaisesRegex(NodusSchemaError, "unknown type 'widget'"):
+            AccessWatch(self.graph, [("widget:a", "view", "user:alice")])
 
 
 @unittest.skipUnless(HAS_WATCH and HAS_FOLLOWER, "libnodusdb lacks the watch or follower exports")

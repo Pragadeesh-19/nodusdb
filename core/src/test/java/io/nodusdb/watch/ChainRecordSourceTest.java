@@ -1,6 +1,12 @@
 package io.nodusdb.watch;
 
+import io.nodusdb.chain.ChainCodec;
 import io.nodusdb.chain.ChainLayout;
+import io.nodusdb.chain.ChainObject;
+import io.nodusdb.chain.KeyFiles;
+import io.nodusdb.chain.SigningKey;
+import io.nodusdb.error.ErrorCode;
+import io.nodusdb.error.NodusException;
 import io.nodusdb.log.LogTailReader;
 import io.nodusdb.log.RecordStream;
 import io.nodusdb.log.RecordsGoneException;
@@ -130,6 +136,36 @@ class ChainRecordSourceTest {
         }
 
         assertThrows(RecordsGoneException.class, () -> readThrough(stream, LSNS_PER_OBJECT));
+    }
+
+    @Test
+    void anObjectWhoseBytesChangedIsRefusedAsUntrusted() throws IOException {
+        build(4);
+        String key = ChainLayout.chainKey(3);
+        byte[] bytes = memory.get(key).orElseThrow();
+        bytes[bytes.length / 2] ^= 0x01;
+        memory.put(key, bytes);
+
+        assertRefusedAfterTheFirstObject();
+    }
+
+    @Test
+    void anObjectSignedByAnotherKeyIsRefusedAsUntrusted() throws IOException {
+        build(4);
+        String key = ChainLayout.chainKey(3);
+        ChainObject genuine = ChainCodec.decode(memory.get(key).orElseThrow());
+        SigningKey impostor = new SigningKey(ChainBuilder.KEY_ID, KeyFiles.generate().getPrivate());
+        memory.put(key, ChainCodec.encode(genuine.header(), genuine.body(), impostor));
+
+        assertRefusedAfterTheFirstObject();
+    }
+
+    private void assertRefusedAfterTheFirstObject() throws IOException {
+        RecordStream stream = source.open(0).orElseThrow();
+        stream.next(1 << 20);
+
+        NodusException refused = assertThrows(NodusException.class, () -> stream.next(1 << 20));
+        assertEquals(ErrorCode.CHAIN_TRUST, refused.code());
     }
 
     @Test
