@@ -193,7 +193,8 @@ class DurableGraphShippingEdgeTest {
             ShipTimeoutException failed = assertThrows(ShipTimeoutException.class,
                     () -> store.write(grant("document:b"), Durability.LAKE, Duration.ofMillis(500)));
 
-            assertTrue(failed.getMessage().contains("had not reached the object store"), failed.getMessage());
+            assertTrue(failed.getMessage().contains("LSN " + failed.lsn()) && failed.getMessage().contains(
+                    "object store"), failed.getMessage());
             assertEquals(kernel.appliedLsn(), failed.lsn());
             assertTrue(store.check("document:b", "view", "user:alice"));
             assertTrue(kernel.shipWatermark().shippedLsn() < failed.lsn());
