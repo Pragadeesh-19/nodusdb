@@ -1,6 +1,7 @@
 package io.nodusdb.capi;
 
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastTarget;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.replica.FollowerConfig;
 import io.nodusdb.replica.FollowerRuntime;
@@ -9,6 +10,7 @@ import io.nodusdb.storage.DurableGraph;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 
 public final class GraphSessions {
 
@@ -38,6 +40,16 @@ public final class GraphSessions {
 
     public long adopt(GraphKernel kernel) {
         return table.open(new GraphSession(kernel));
+    }
+
+    public long openPast(long parentHandle, PastTarget target, long maxMemoryBytes, Duration wait) {
+        GraphSession view = table.get(parentHandle).openPast(target, maxMemoryBytes, wait);
+        try {
+            return table.open(view);
+        } catch (RuntimeException failure) {
+            view.close();
+            throw failure;
+        }
     }
 
     public long openFollower(FollowerConfig config, long maxMemoryBytes) throws IOException {

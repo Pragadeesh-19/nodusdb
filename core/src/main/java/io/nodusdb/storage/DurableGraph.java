@@ -3,7 +3,9 @@ package io.nodusdb.storage;
 import io.nodusdb.erasure.ErasureLayer;
 import io.nodusdb.erasure.ErasureRunner;
 import io.nodusdb.error.UpgradeRequiredException;
+import io.nodusdb.kernel.GraphHistory;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.LogRecovery;
@@ -141,9 +143,7 @@ public final class DurableGraph {
                 runtime.startShipping(kernel, log, files, directory.resolve(GraphFiles.SHIP_SCRATCH));
                 kernel.attachShipping(runtime.state());
             }
-            List<RecordSource> history = runtime == null ? List.of(new LogRecordSource(files, log))
-                    : List.of(new LogRecordSource(files, log), runtime.chainSource());
-            kernel.attachHistory(() -> history);
+            kernel.attachHistory(history(kernel, runtime, files, log, directory));
             List<ErasureLayer> shipped = runtime == null ? List.of()
                     : runtime.erasureLayers(kernel, directory);
             kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping), shipped));
@@ -153,6 +153,17 @@ public final class DurableGraph {
             throw e;
         }
         return new Recovery(kernel, sink.records(), recovered.discardedRecords(), recovered.truncatedBytes());
+    }
+
+    private static GraphHistory history(GraphKernel kernel, ShippingRuntime runtime, LogFileSystem files,
+                                        SegmentedLog log, Path directory) throws IOException {
+        RecordSource local = new LogRecordSource(files, log);
+        if (runtime == null) {
+            return new GraphHistory(List.of(local), PastSource.NONE);
+        }
+        Path scratch = directory.resolve(GraphFiles.HISTORY_SCRATCH);
+        FileTrees.deleteRecursively(scratch);
+        return new GraphHistory(List.of(local, runtime.chainSource()), runtime.pastSource(kernel, scratch));
     }
 
     private static Duration erasureCheckpointDelay(ShippingConfig shipping) {

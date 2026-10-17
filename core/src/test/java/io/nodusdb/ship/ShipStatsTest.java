@@ -7,6 +7,7 @@ import io.nodusdb.json.JsonParser;
 import io.nodusdb.kernel.ErasureProgress;
 import io.nodusdb.kernel.closure.ClosureStats;
 import io.nodusdb.log.ShipWatermark;
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.stats.ErasureReport;
 import io.nodusdb.stats.WatchReport;
 import org.junit.jupiter.api.Test;
@@ -28,7 +29,8 @@ class ShipStatsTest {
     }
 
     private static String statsJson(long epoch, long appliedLsn, ShipWatermark watermark) {
-        return ShipStats.json(epoch, appliedLsn, watermark, REACHABILITY, ErasureReport.NONE, WatchReport.NONE);
+        return ShipStats.json(epoch, appliedLsn, watermark, REACHABILITY, ErasureReport.NONE, WatchReport.NONE,
+                PastSource.PoolReport.NONE);
     }
 
     private static ShipState state() {
@@ -58,7 +60,8 @@ class ShipStatsTest {
         ErasureReport erasure = new ErasureReport(3, 812, List.of(new ErasureProgress.Layer("local", 812, false)),
                 "");
 
-        JsonObject report = parse(ShipStats.json(2, 900, ShipWatermark.NONE, REACHABILITY, erasure, WatchReport.NONE))
+        JsonObject report = parse(ShipStats.json(2, 900, ShipWatermark.NONE, REACHABILITY, erasure, WatchReport.NONE,
+                PastSource.PoolReport.NONE))
                 .requireObject("erasure");
 
         assertEquals(3, report.requireLong("erased_symbols"));

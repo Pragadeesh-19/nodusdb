@@ -1,12 +1,15 @@
 package io.nodusdb.storage;
 
+import io.nodusdb.config.ConfigFields;
 import io.nodusdb.erasure.BucketCut;
 import io.nodusdb.erasure.ErasureCoverage;
 import io.nodusdb.erasure.ErasureLayer;
 import io.nodusdb.erasure.LakeErasure;
+import io.nodusdb.history.BucketPast;
 import io.nodusdb.iceberg.DataFileWriter;
 import io.nodusdb.iceberg.IcebergTable;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.log.LogStore;
 import io.nodusdb.log.LogTailReader;
 import io.nodusdb.log.RecordSource;
@@ -111,6 +114,15 @@ final class ShippingRuntime implements AutoCloseable {
         ObjectStore store = reconciled.store();
         return new ChainRecordSource(store,
                 new ChainFetch(store, reconciled.keys().keyring(), ChainFetch.Trust.WHEN_KEY_KNOWN));
+    }
+
+    PastSource pastSource(GraphKernel kernel, Path scratch) {
+        ObjectStore store = reconciled.store();
+        long limit = ConfigFields.historyPoolLimit(reconciled.config().historyMemoryBytes(),
+                kernel.memoryLimitBytes());
+        return new BucketPast(kernel, store,
+                new ChainFetch(store, reconciled.keys().keyring(), ChainFetch.Trust.WHEN_KEY_KNOWN), scratch,
+                BucketPast.DEFAULT_DOWNLOAD_PARALLELISM, limit);
     }
 
     List<ErasureLayer> erasureLayers(GraphKernel kernel, Path directory) {

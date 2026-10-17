@@ -1,5 +1,6 @@
 package io.nodusdb.replica;
 
+import io.nodusdb.config.ConfigFields;
 import io.nodusdb.config.StoreConfig;
 import io.nodusdb.config.StoreConfigParser;
 import io.nodusdb.json.JsonObject;
@@ -17,7 +18,7 @@ import static io.nodusdb.config.ConfigFields.bounded;
 import static io.nodusdb.config.ConfigFields.path;
 import static io.nodusdb.config.ConfigFields.requestTimeout;
 
-public record FollowerConfig(StoreConfig storage, Trust trust, Follow follow) {
+public record FollowerConfig(StoreConfig storage, Trust trust, Follow follow, long historyMemoryBytes) {
 
     public record Trust(int keyId, Path publicKeyFile) {
     }
@@ -38,7 +39,7 @@ public record FollowerConfig(StoreConfig storage, Trust trust, Follow follow) {
     public static final Duration DEFAULT_READ_WAIT = Duration.ofSeconds(1);
     public static final int DEFAULT_DOWNLOAD_PARALLELISM = 4;
 
-    private static final Set<String> TOP_LEVEL = Set.of("store", "credentials", "trust", "follow");
+    private static final Set<String> TOP_LEVEL = Set.of("store", "credentials", "trust", "follow", "history");
     private static final Set<String> TRUST = Set.of("key_id", "public_key_file");
     private static final Set<String> FOLLOW = Set.of("poll_interval_ms", "read_wait_ms", "max_staleness_ms",
             "download_parallelism", "request_timeout_ms", "state_directory");
@@ -55,7 +56,7 @@ public record FollowerConfig(StoreConfig storage, Trust trust, Follow follow) {
             JsonObject followBlock = root.objectOr("follow", JsonObject.EMPTY);
             followBlock.requireKnownKeys(FOLLOW);
             return new FollowerConfig(storage.withRequestTimeout(requestTimeout(followBlock)), trust,
-                    follow(followBlock));
+                    follow(followBlock), ConfigFields.historyMemoryBytes(root));
         } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException("invalid follower configuration: " + invalid.getMessage());
         }

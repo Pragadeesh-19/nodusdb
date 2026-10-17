@@ -1,5 +1,6 @@
 package io.nodusdb.ship;
 
+import io.nodusdb.config.ConfigFields;
 import io.nodusdb.config.StoreConfig;
 import io.nodusdb.config.StoreConfigParser;
 import io.nodusdb.json.JsonObject;
@@ -21,7 +22,7 @@ import static io.nodusdb.config.ConfigFields.path;
 import static io.nodusdb.config.ConfigFields.requestTimeout;
 
 public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings ship, Iceberg iceberg,
-                             Duration erasureCheckpointDelay) {
+                             Duration erasureCheckpointDelay, long historyMemoryBytes) {
 
     public static final Duration DEFAULT_ERASURE_CHECKPOINT_DELAY = Duration.ofSeconds(60);
 
@@ -32,7 +33,7 @@ public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings 
     }
 
     private static final Set<String> TOP_LEVEL = Set.of("store", "credentials", "signing", "ship", "iceberg",
-            "erasure");
+            "erasure", "history");
     private static final Set<String> SIGNING = Set.of("key_file", "key_id", "public_key_file");
     private static final Set<String> SHIP = Set.of("interval_ms", "max_object_bytes", "backlog_cap_bytes",
             "retention_days", "request_timeout_ms");
@@ -52,7 +53,8 @@ public record ShippingConfig(StoreConfig storage, Signing signing, ShipSettings 
             ShipSettings ship = ship(shipBlock);
             return new ShippingConfig(storage.withRequestTimeout(requestTimeout(shipBlock)), signing, ship,
                     iceberg(root.objectOr("iceberg", JsonObject.EMPTY)),
-                    erasureCheckpointDelay(root.objectOr("erasure", JsonObject.EMPTY)));
+                    erasureCheckpointDelay(root.objectOr("erasure", JsonObject.EMPTY)),
+                    ConfigFields.historyMemoryBytes(root));
         } catch (IllegalArgumentException invalid) {
             throw new IllegalArgumentException("invalid shipping configuration: " + invalid.getMessage());
         }

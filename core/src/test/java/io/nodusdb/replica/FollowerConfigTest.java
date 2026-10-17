@@ -134,4 +134,23 @@ class FollowerConfigTest {
             assertTrue(message.contains(field), "'" + message + "' should name '" + field + "'");
         }
     }
+
+    @Test
+    void theHistoryBudgetIsReadInMegabytesAndDefaultsToTheGraphsLimit() {
+        assertEquals(512L << 20, FollowerConfig.parse(config(DIRECTORY, TRUST, "\"history\":{\"max_memory_mb\":512}"))
+                .historyMemoryBytes());
+        assertEquals(ConfigFields.HISTORY_LIMIT_OF_GRAPH, FollowerConfig.parse(config(DIRECTORY, TRUST)).historyMemoryBytes());
+        assertEquals(ConfigFields.HISTORY_LIMIT_OF_GRAPH,
+                FollowerConfig.parse(config(DIRECTORY, TRUST, "\"history\":{}")).historyMemoryBytes());
+        assertEquals(200L << 20, ConfigFields.historyPoolLimit(ConfigFields.HISTORY_LIMIT_OF_GRAPH, 200L << 20));
+        assertEquals(512L << 20, ConfigFields.historyPoolLimit(512L << 20, 200L << 20));
+    }
+
+    @Test
+    void aBadHistoryBudgetIsRefusedWithItsName() {
+        assertTrue(rejection(config(DIRECTORY, TRUST, "\"history\":{\"max_memory_mb\":0}")).contains("max_memory_mb"));
+        assertTrue(rejection(config(DIRECTORY, TRUST, "\"history\":{\"max_memory_mb\":\"big\"}"))
+                .contains("max_memory_mb"));
+        assertTrue(rejection(config(DIRECTORY, TRUST, "\"history\":{\"views\":2}")).contains("views"));
+    }
 }

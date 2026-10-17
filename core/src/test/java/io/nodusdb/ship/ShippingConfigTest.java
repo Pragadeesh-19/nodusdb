@@ -244,4 +244,23 @@ class ShippingConfigTest {
         assertFalse(parsed.storage().credentials().toString().contains("AKIAEXAMPLE"));
         assertFalse(parsed.toString().contains("s3cr3tValue"));
     }
+
+    @Test
+    void theHistoryBudgetIsReadInMegabytesAndDefaultsToTheGraphsLimit() {
+        assertEquals(512L << 20, ShippingConfig.parse(config(DIRECTORY, SIGNING, "\"history\":{\"max_memory_mb\":512}"))
+                .historyMemoryBytes());
+        assertEquals(ConfigFields.HISTORY_LIMIT_OF_GRAPH, ShippingConfig.parse(config(DIRECTORY, SIGNING)).historyMemoryBytes());
+        assertEquals(ConfigFields.HISTORY_LIMIT_OF_GRAPH,
+                ShippingConfig.parse(config(DIRECTORY, SIGNING, "\"history\":{}")).historyMemoryBytes());
+        assertEquals(200L << 20, ConfigFields.historyPoolLimit(ConfigFields.HISTORY_LIMIT_OF_GRAPH, 200L << 20));
+        assertEquals(512L << 20, ConfigFields.historyPoolLimit(512L << 20, 200L << 20));
+    }
+
+    @Test
+    void aBadHistoryBudgetIsRefusedWithItsName() {
+        assertTrue(rejection(config(DIRECTORY, SIGNING, "\"history\":{\"max_memory_mb\":0}")).contains("max_memory_mb"));
+        assertTrue(rejection(config(DIRECTORY, SIGNING, "\"history\":{\"max_memory_mb\":\"big\"}"))
+                .contains("max_memory_mb"));
+        assertTrue(rejection(config(DIRECTORY, SIGNING, "\"history\":{\"views\":2}")).contains("views"));
+    }
 }

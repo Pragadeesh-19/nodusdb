@@ -8,16 +8,24 @@ import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
 import io.nodusdb.kernel.changes.ChangeRing;
+import io.nodusdb.kernel.past.PastReport;
+import io.nodusdb.kernel.past.PastSource;
+import io.nodusdb.kernel.past.PastTarget;
+import io.nodusdb.kernel.past.PastView;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.replica.FollowerRuntime;
 import io.nodusdb.ship.ShipStats;
 import io.nodusdb.stats.ErasureReport;
+import io.nodusdb.stats.PastJson;
 import io.nodusdb.stats.WatchReport;
 import io.nodusdb.watch.ChangeBatch;
 import io.nodusdb.watch.ChangeFeed;
 
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class GraphSession implements AutoCloseable {
 
@@ -28,6 +36,9 @@ public final class GraphSession implements AutoCloseable {
     private final StringKeys strings;
     private final TupleStore tuples;
     private final FollowerRuntime follower;
+    private final PastView past;
+    private final GraphSession parent;
+    private final Set<GraphSession> views = ConcurrentHashMap.newKeySet();
     private final ThreadLocal<long[]> results = ThreadLocal.withInitial(() -> new long[INITIAL_RESULT_CAPACITY]);
     private final Object watchLock = new Object();
     private int watchBufferChanges = ChangeRing.DEFAULT_CAPACITY;
@@ -44,6 +55,8 @@ public final class GraphSession implements AutoCloseable {
         }
         this.tuples = TupleStore.open(kernel);
         this.follower = null;
+        this.past = null;
+        this.parent = null;
     }
 
     public GraphSession(FollowerRuntime follower) {
@@ -51,15 +64,28 @@ public final class GraphSession implements AutoCloseable {
         this.strings = new StringKeys(kernel);
         this.tuples = follower.tuples();
         this.follower = follower;
+        this.past = null;
+        this.parent = null;
+    }
+
+    private GraphSession(PastView past, GraphSession parent) {
+        this.kernel = past.kernel();
+        this.strings = new StringKeys(kernel);
+        this.tuples = TupleStore.open(kernel);
+        this.follower = null;
+        this.past = past;
+        this.parent = parent;
     }
 
     public synchronized void checkpoint() {
         requireOpen();
+        requireLive("checkpoint");
         kernel.checkpoint();
     }
 
     public synchronized void sync() {
         requireOpen();
+        requireLive("sync");
         kernel.sync();
     }
 
@@ -69,6 +95,17 @@ public final class GraphSession implements AutoCloseable {
             return;
         }
         closed = true;
+        if (past != null) {
+            try {
+                past.close();
+            } finally {
+                parent.views.remove(this);
+            }
+            return;
+        }
+        for (GraphSession view : List.copyOf(views)) {
+            view.close();
+        }
         ChangeFeed current = feed;
         if (current != null) {
             current.close();
@@ -80,8 +117,47 @@ public final class GraphSession implements AutoCloseable {
         kernel.close();
     }
 
+    public GraphSession openPast(PastTarget target, long maxMemoryBytes, Duration wait) {
+        requireOpen();
+        if (past != null) {
+            throw new UnsupportedFeatureException("a past view opens from the live graph, not from another view");
+        }
+        if (follower != null) {
+            follower.gate().requireReadable();
+        }
+        GraphSession view = new GraphSession(kernel.history().past().open(target, maxMemoryBytes, wait), this);
+        views.add(view);
+        if (closed) {
+            view.close();
+            throw new IllegalStateException("graph is closed");
+        }
+        return view;
+    }
+
+    public PastReport advancePast(PastTarget target, Duration wait) {
+        requireOpen();
+        if (past == null) {
+            throw new UnsupportedFeatureException("only a past view moves through time");
+        }
+        past.advance(target, wait);
+        return past.report();
+    }
+
+    public PastReport pastReport() {
+        requireOpen();
+        if (past == null) {
+            throw new UnsupportedFeatureException("this graph is not a past view");
+        }
+        return past.report();
+    }
+
+    public int openViews() {
+        return views.size();
+    }
+
     public int watchBuffer(int changes) {
         requireOpen();
+        requireLive("watch");
         synchronized (watchLock) {
             ChangeRing ring = kernel.changes();
             if (ring != null) {
@@ -93,6 +169,7 @@ public final class GraphSession implements AutoCloseable {
     }
 
     public ChangeBatch changes(Token after, long throughLsn, int limit, Duration wait) {
+        requireLive("watch");
         requireReadable();
         return feed().read(after, throughLsn, limit, wait);
     }
@@ -259,6 +336,7 @@ public final class GraphSession implements AutoCloseable {
 
     public void awaitErased(Token token, Duration timeout) {
         requireOpen();
+        requireLive("wait for an erasure");
         if (follower != null) {
             throw new UnsupportedFeatureException("a follower does not scrub erasures; wait on the writer");
         }
@@ -267,16 +345,21 @@ public final class GraphSession implements AutoCloseable {
 
     public void awaitShipped(Token token, Duration timeout) {
         requireOpen();
+        requireLive("wait for shipping");
         tuples.awaitShipped(token, timeout);
     }
 
     public String statsJson() {
         requireOpen();
+        if (past != null) {
+            return PastJson.json(kernel, past.report());
+        }
+        PastSource.PoolReport history = kernel.history().past().pool();
         if (follower != null) {
-            return follower.statsJson(watchReport());
+            return follower.statsJson(watchReport(), history);
         }
         return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark(), kernel.closureStats(),
-                ErasureReport.of(kernel), watchReport());
+                ErasureReport.of(kernel), watchReport(), history);
     }
 
     private synchronized Token writeLocally(TupleTransaction transaction) {
@@ -313,6 +396,15 @@ public final class GraphSession implements AutoCloseable {
         requireOpen();
         if (follower != null) {
             follower.gate().requireReadable();
+        }
+        if (past != null) {
+            past.refreshErasures();
+        }
+    }
+
+    private void requireLive(String action) {
+        if (past != null) {
+            throw new UnsupportedFeatureException("a past view is read-only and cannot " + action);
         }
     }
 

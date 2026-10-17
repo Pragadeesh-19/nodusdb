@@ -1,11 +1,13 @@
 package io.nodusdb.replica;
 
 import io.nodusdb.json.JsonWriter;
+import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastSource;
+import io.nodusdb.ship.EventLog;
+import io.nodusdb.stats.PastJson;
 import io.nodusdb.stats.ReachabilityJson;
 import io.nodusdb.stats.WatchJson;
 import io.nodusdb.stats.WatchReport;
-import io.nodusdb.kernel.GraphKernel;
-import io.nodusdb.ship.EventLog;
 
 import java.util.concurrent.TimeUnit;
 
@@ -16,7 +18,8 @@ public final class FollowerStats {
     private FollowerStats() {
     }
 
-    public static String json(GraphKernel kernel, FollowerState state, long nowNanos, WatchReport watch) {
+    public static String json(GraphKernel kernel, FollowerState state, long nowNanos, WatchReport watch,
+                              PastSource.PoolReport history) {
         FollowerState.Snapshot snapshot = state.snapshot(nowNanos);
         JsonWriter json = new JsonWriter();
         json.beginObject();
@@ -47,6 +50,7 @@ public final class FollowerStats {
         json.endObject();
         ReachabilityJson.write(json, kernel.closureStats());
         WatchJson.write(json, watch);
+        PastJson.writePool(json, history);
         json.endObject();
         return json.toString();
     }

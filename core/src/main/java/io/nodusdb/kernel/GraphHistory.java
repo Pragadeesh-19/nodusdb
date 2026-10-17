@@ -1,12 +1,17 @@
 package io.nodusdb.kernel;
 
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.log.RecordSource;
 
 import java.util.List;
+import java.util.Objects;
 
-public interface GraphHistory {
+public record GraphHistory(List<RecordSource> recordSources, PastSource past) {
 
-    GraphHistory NONE = List::of;
+    public static final GraphHistory NONE = new GraphHistory(List.of(), PastSource.NONE);
 
-    List<RecordSource> recordSources();
+    public GraphHistory {
+        recordSources = List.copyOf(recordSources);
+        Objects.requireNonNull(past, "past");
+    }
 }

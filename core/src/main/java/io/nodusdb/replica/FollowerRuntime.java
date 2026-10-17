@@ -2,8 +2,12 @@ package io.nodusdb.replica;
 
 import io.nodusdb.authz.TupleStore;
 import io.nodusdb.chain.Keyring;
+import io.nodusdb.config.ConfigFields;
 import io.nodusdb.config.StoreFactory;
+import io.nodusdb.history.BucketPast;
+import io.nodusdb.kernel.GraphHistory;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.ship.ChainFetch;
 import io.nodusdb.stats.WatchReport;
@@ -22,6 +26,7 @@ public final class FollowerRuntime implements AutoCloseable {
     private static final String SCRATCH_DIRECTORY = "scratch";
     private static final String SCRATCH_PREFIX = "nodusdb-follower-";
     private static final String THREAD_NAME = "nodusdb-follower";
+    private static final String HISTORY_SCRATCH = "history";
 
     private final GraphKernel kernel;
     private final TupleStore tuples;
@@ -50,7 +55,7 @@ public final class FollowerRuntime implements AutoCloseable {
         Keyring keyring = TrustedKeys.load(config.trust());
         ObjectStore store = StoreFactory.open(config.storage()).store();
         try {
-            return start(store, keyring, config.follow(), maxMemoryBytes);
+            return start(store, keyring, config.follow(), maxMemoryBytes, config.historyMemoryBytes());
         } catch (IOException | RuntimeException failure) {
             closeQuietly(store, failure);
             throw failure;
@@ -59,6 +64,11 @@ public final class FollowerRuntime implements AutoCloseable {
 
     public static FollowerRuntime start(ObjectStore store, Keyring keyring, FollowerConfig.Follow follow,
                                         long maxMemoryBytes) throws IOException {
+        return start(store, keyring, follow, maxMemoryBytes, ConfigFields.HISTORY_LIMIT_OF_GRAPH);
+    }
+
+    public static FollowerRuntime start(ObjectStore store, Keyring keyring, FollowerConfig.Follow follow,
+                                        long maxMemoryBytes, long historyMemoryBytes) throws IOException {
         Objects.requireNonNull(store, "store");
         Objects.requireNonNull(keyring, "keyring");
         Objects.requireNonNull(follow, "follow");
@@ -69,8 +79,10 @@ public final class FollowerRuntime implements AutoCloseable {
         FollowerState state = new FollowerState();
         FollowerCore core = new FollowerCore(store, keyring, sink, marker, state, follow, scratch,
                 System::nanoTime);
-        ChainRecordSource chain = new ChainRecordSource(store, new ChainFetch(store, keyring, ChainFetch.Trust.REQUIRED));
-        sink.kernel().attachHistory(() -> List.of(chain));
+        ChainFetch fetch = new ChainFetch(store, keyring, ChainFetch.Trust.REQUIRED);
+        BucketPast past = new BucketPast(sink.kernel(), store, fetch, scratch.resolve(HISTORY_SCRATCH),
+                follow.downloadParallelism(), ConfigFields.historyPoolLimit(historyMemoryBytes, maxMemoryBytes));
+        sink.kernel().attachHistory(new GraphHistory(List.of(new ChainRecordSource(store, fetch)), past));
         TupleStore tuples = TupleStore.open(sink.kernel());
         FollowerRunner runner = FollowerRunner.start(core, state, marker, THREAD_NAME);
         return new FollowerRuntime(sink.kernel(), tuples, state, follow, runner, store, scratch);
@@ -92,8 +104,8 @@ public final class FollowerRuntime implements AutoCloseable {
         return gate;
     }
 
-    public String statsJson(WatchReport watch) {
-        return FollowerStats.json(kernel, state, System.nanoTime(), watch);
+    public String statsJson(WatchReport watch, PastSource.PoolReport history) {
+        return FollowerStats.json(kernel, state, System.nanoTime(), watch, history);
     }
 
     public FollowerConfig.Follow follow() {

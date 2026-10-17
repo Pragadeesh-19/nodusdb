@@ -5,6 +5,7 @@ import io.nodusdb.json.JsonObject;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Set;
 
 public final class ConfigFields {
 
@@ -13,6 +14,11 @@ public final class ConfigFields {
     public static final long MAX_SECONDS = 86_400L;
     public static final long MAX_DAYS = 36_500L;
     public static final long MAX_BYTES = 1L << 50;
+    public static final long HISTORY_LIMIT_OF_GRAPH = -1;
+
+    private static final int MEGABYTE_SHIFT = 20;
+    private static final long MAX_MEGABYTES = MAX_BYTES >> MEGABYTE_SHIFT;
+    private static final Set<String> HISTORY = Set.of("max_memory_mb");
 
     private ConfigFields() {
     }
@@ -51,5 +57,16 @@ public final class ConfigFields {
     public static Duration requestTimeout(JsonObject block) {
         return block.has("request_timeout_ms") ? Duration.ofMillis(bounded(block, "request_timeout_ms", MAX_MILLIS))
                 : DEFAULT_REQUEST_TIMEOUT;
+    }
+
+    public static long historyMemoryBytes(JsonObject root) {
+        JsonObject block = root.objectOr("history", JsonObject.EMPTY);
+        block.requireKnownKeys(HISTORY);
+        return block.has("max_memory_mb") ? bounded(block, "max_memory_mb", MAX_MEGABYTES) << MEGABYTE_SHIFT
+                : HISTORY_LIMIT_OF_GRAPH;
+    }
+
+    public static long historyPoolLimit(long configuredBytes, long graphLimitBytes) {
+        return configuredBytes == HISTORY_LIMIT_OF_GRAPH ? graphLimitBytes : configuredBytes;
     }
 }

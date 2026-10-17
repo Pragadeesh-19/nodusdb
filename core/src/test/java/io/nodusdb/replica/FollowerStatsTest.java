@@ -5,6 +5,7 @@ import io.nodusdb.json.JsonNull;
 import io.nodusdb.json.JsonObject;
 import io.nodusdb.json.JsonParser;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.kernel.past.PastSource;
 import io.nodusdb.stats.WatchReport;
 import org.junit.jupiter.api.Test;
 
@@ -22,7 +23,8 @@ class FollowerStatsTest {
     private final FollowerState state = new FollowerState();
 
     private JsonObject parse(long now) {
-        return JsonParser.parseObject(FollowerStats.json(kernel, state, now, WatchReport.NONE));
+        return JsonParser.parseObject(FollowerStats.json(kernel, state, now, WatchReport.NONE,
+                PastSource.PoolReport.NONE));
     }
 
     @Test
