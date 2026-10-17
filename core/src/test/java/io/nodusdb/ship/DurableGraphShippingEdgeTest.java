@@ -277,6 +277,9 @@ class DurableGraphShippingEdgeTest {
         try {
             TupleStore store = schemaStore(kernel);
             Token shipped = store.write(grant("document:a"), Durability.LAKE);
+            ShipState shipping = (ShipState) kernel.shipWatermark();
+            await(() -> shipping.snapshot().references().lsn() >= kernel.checkpointLsn(),
+                    "the reference to the checkpoint taken at open");
             new EpochClaims(fixture.store(), 0x5EC0DL, ChainBuilder.KEY_ID, () -> 1_700_000_000_000_000L)
                     .claim(shipped.epoch() + 1, 4);
 

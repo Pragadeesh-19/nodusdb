@@ -1,7 +1,7 @@
 # Engineering review: Build Step 6, watch and as_of
 
 Status: decisions D187 to D203 accepted on 2026-10-16. Implementation scope is Build Step 6 (section 11), built on
-branch feat/authz-step6 in three milestones. Choices made while building are D204 to D221 in
+branch feat/authz-step6 in three milestones. Choices made while building are D204 to D222 in
 [`docs/decisions.md`](../decisions.md); where they differ from this document they win, and sections 6 and 9 below
 already follow them.
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 4.5, 8, 9 and 13, and

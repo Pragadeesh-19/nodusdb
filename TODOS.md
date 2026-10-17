@@ -334,7 +334,7 @@
 
 ### Watch and as_of
 
-Done in Build Step 6. `changes(after)` and `watch()` read committed changes by token from a ring in memory, the writer's log and the bucket chain; `AccessWatch` reports gained and lost access for registered checks. `as_of(token or time)` opens a read-only past view rebuilt from the bucket, on writers and followers, never before the newest erasure. Decisions D187 to D221.
+Done in Build Step 6. `changes(after)` and `watch()` read committed changes by token from a ring in memory, the writer's log and the bucket chain; `AccessWatch` reports gained and lost access for registered checks. `as_of(token or time)` opens a read-only past view rebuilt from the bucket, on writers and followers, never before the newest erasure. Decisions D187 to D222.
 
 ### Erasure
 
