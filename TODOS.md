@@ -332,6 +332,10 @@
 
 ## Completed
 
+### Watch and as_of
+
+Done in Build Step 6. `changes(after)` and `watch()` read committed changes by token from a ring in memory, the writer's log and the bucket chain; `AccessWatch` reports gained and lost access for registered checks. `as_of(token or time)` opens a read-only past view rebuilt from the bucket, on writers and followers, never before the newest erasure. Decisions D187 to D221.
+
 ### Erasure
 
 Done in Build Step 5. `erase(name)` scrubs memory and followers at once; the graph directory, the bucket (a signed `REDACTION` cut) and the Iceberg table (an overwrite and a full expiry) are scrubbed in the background, and `wait_erased(token)` waits for all of them. Decisions D159 to D186.

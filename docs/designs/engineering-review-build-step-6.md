@@ -1,8 +1,9 @@
 # Engineering review: Build Step 6, watch and as_of
 
 Status: decisions D187 to D203 accepted on 2026-10-16. Implementation scope is Build Step 6 (section 11), built on
-branch feat/authz-step6 in three milestones. Choices made while building are recorded in
-[`docs/decisions.md`](../decisions.md) after D203; where they differ from this document they win.
+branch feat/authz-step6 in three milestones. Choices made while building are D204 to D221 in
+[`docs/decisions.md`](../decisions.md); where they differ from this document they win, and sections 6 and 9 below
+already follow them.
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 4.5, 8, 9 and 13, and
 the CEO plan [`relationship-lakehouse.md`](relationship-lakehouse.md) decisions 5A and 6A. Where this document and
 those disagree about Build Step 6, this document wins (section 2 lists every amendment).
@@ -102,7 +103,8 @@ changes(after = (e, n), limit, wait):
   source = first of: ring (holds n + 1), open fallback reader at n + 1, local log (writer), chain
            none -> -17 NodusHistoryExpiredError
   read whole transactions until `limit` changes (at least one transaction)
-  ChangeExtractor: records -> entries (log and chain bytes go through the same extractor as the ring)
+  ChangeExtractor: records -> entries (log and chain bytes go through the same extractor as the ring; a single
+  tuple commit gives the ring its decoded values through the same encoding, D221)
   names from the live symbol table and catalog; an erased id reads as its pseudonym; epoch from the epoch history
   next cursor = (epoch, commit LSN) of the last transaction in the batch
 ```
@@ -147,8 +149,10 @@ PastGraph: check, has_edge, degree, khop, common_neighbors, token, commit_time, 
 ```
 
 C: `nodus_open_as_of(parent, kind, epoch, lsn_or_micros, max_memory_bytes, wait_ms, position_out, status)` returns a
-new handle; `nodus_past_advance(view, kind, epoch, lsn_or_micros, wait_ms, position_out)`; `nodus_destroy` closes a
-view without a checkpoint. `position_out` receives epoch, LSN and commit micros.
+new handle; `nodus_past_advance(view, kind, epoch, lsn_or_micros, wait_ms, position_out)` and
+`nodus_past_position(view, position_out)`; `nodus_destroy` closes a view without a checkpoint. `position_out` receives
+epoch, LSN and commit micros. The watch exports are `nodus_watch_buffer(handle, changes)` and `nodus_changes`, whose
+wire carries five names and five numbers per change (D211).
 
 ## 7. Failure modes
 
@@ -157,7 +161,7 @@ view without a checkpoint. `position_out` receives epoch, LSN and commit micros.
 | ring | wraps while a reader copies | concurrency test | count re-read after the copy; fall back | correct batch, from a later source |
 | ring | commit path regression | `KernelWriteBench` | 10% gate | nothing |
 | feed | cursor older than every source | unit, simulation I7 | | -17 |
-| feed | cursor names a write lost in a takeover | takeover test, I7 | epoch history | -13 |
+| feed | cursor names a write lost in a takeover | unit | epoch history | -13 |
 | feed | a segment is trimmed under an open reader | unit | reader dropped, chain tried | correct batch or -17 |
 | feed | chain object unreadable or forged | chaos, trust test | verified as a follower does | -15 |
 | feed | writer closed during a long poll | unit | the wait wakes | "graph is closed" |
@@ -197,13 +201,13 @@ end to end            Python: revoke on the writer, AccessWatch on a follower yi
 (JSON `"history": {"max_memory_mb": N}`). The stats document gains:
 
 ```
-"watch":   {"buffer_changes": 1048576, "allocated": true, "oldest_lsn": 4012, "fallback_readers": 1,
-            "expired": 0}
-"history": {"views": 1, "used_bytes": 41943040, "limit_bytes": 0}
+"watch":   {"enabled": true, "buffer_changes": 1048576, "serves_from_lsn": 4012, "published_lsn": 9120,
+            "fallback_readers": 1, "expired": 0}
+"history": {"configured": true, "views": 1, "used_bytes": 41943040, "limit_bytes": 0}
 ```
 
-A view's own stats add `"as_of": {"epoch": 3, "lsn": 812, "commit_micros": ..., "snapshot_lsn": 700,
-"replayed_objects": 4, "replayed_records": 9120, "build_ms": 310}`.
+A view's own stats hold its position, `"as_of": {"epoch": 3, "lsn": 812, "commit_micros": ..., "snapshot_lsn": 700,
+"replayed_objects": 4, "replayed_records": 9120, "build_ms": 310, "memory_bytes": ...}` and its reachability index.
 
 ## 10. Benchmarks
 

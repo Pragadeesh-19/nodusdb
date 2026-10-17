@@ -466,6 +466,60 @@ A subject with many tuples is removed in transactions of at most 30,000 tuples, 
 
 **What erasure cannot reach.** Copies made outside NodusDB are out of its hands: a backup or copy of the directory, a salvaged old directory, `pre-v2/` until `upgrade_cleanup()` runs, object versions or replicas kept by the bucket's own settings, and disk blocks the file system freed but did not overwrite. Anyone who can read a snapshot has the salt and can test a guessed name against a pseudonym, so a short or predictable name is only as private as the snapshot. Prefer opaque ids, such as UUIDs, for subjects. In the Iceberg table a name written again after its erasure keeps its new rows. After a restart the writer knows when such a name was erased only up to the snapshot it loaded, so new rows written before that snapshot can also show the pseudonym.
 
+## Watching changes
+
+`changes(after)` returns what was committed after a token, in log order and in whole transactions, with the cursor to pass next. `watch()` does the same in a loop and yields each batch.
+
+```python
+cursor = g.token                                   # remember where you are
+batch = g.changes(cursor, timeout=1.0)             # waits up to a second for the next commit
+for change in batch.changes:
+    print(change.kind, change.object, change.relation, change.subject, change.token)
+cursor = batch.next                                # store it, and resume from it after a restart
+
+for batch in g.watch(cursor):                      # the same, forever, until the graph closes
+    ...
+```
+
+A change is an `add`, a `remove`, a `schema` (with its version), an `epoch` (a writer started or took over) or an `erase` (with the pseudonym). `change.token` is the token its write returned. Names are looked up when the batch is read, so an erased name always reads as its pseudonym, also in changes from before the erasure. A change inside a transaction of several writes can name a tuple that was already there: the feed is the log, as written.
+
+`AccessWatch` turns the feed into gained and lost access for checks you register:
+
+```python
+from nodusdb import AccessWatch
+
+access = AccessWatch(follower, [("document:plan", "view", "user:alice")])
+for change in access.poll(timeout=1.0):           # an AccessChange per check whose answer flipped
+    if not change.allowed:
+        disconnect(change.subject, change.object)
+```
+
+Each check is answered once when the watch starts, and again after every batch, at that batch's token. It reports the net change per batch, so access granted and revoked inside one batch is not reported, and each poll costs one check per registered triple.
+
+**Where old cursors are read from.** Recent changes come from a ring in memory (`Graph(watch_buffer_changes=...)`, 1,048,576 changes and 24 MiB by default), which is created on the first watch call and is fed by every write and, on a follower, by every applied transaction. A cursor older than the ring is read from the writer's local log and then from the bucket's signed chain, which a follower uses too. A reader that is catching up stays open between calls, so a long catch-up does not search again on every call. When no source holds the changes after a cursor, the call raises `NodusHistoryExpiredError` (code -17); read the current state and start again from `g.token`. A cursor naming a write that was lost when the writer restarted raises `NodusTokenLostError`. A clean close checkpoints and trims the log, so a graph without shipping keeps no watch history across a restart.
+
+## Time travel
+
+`as_of` opens a read-only copy of the graph as it stood at a token or at a moment:
+
+```python
+from datetime import datetime, timedelta, timezone
+
+with g.as_of(datetime.now(timezone.utc) - timedelta(hours=3)) as then:
+    print(then.token, then.commit_time)            # the last commit at or before that moment
+    print(then.check("document:plan", "view", "user:alice"))
+    then.advance(datetime.now(timezone.utc) - timedelta(hours=1))   # forward only
+
+with g.as_of(token_of_a_write) as then:            # exactly the state that write produced
+    ...
+```
+
+The copy is rebuilt from the bucket: the newest snapshot at or before the target, then the chain replayed up to the target's last commit, all verified as a follower verifies them. It works on the writer and on followers, and a graph without shipping raises `NodusUnsupportedError` (`Shipping.directory` serves a single machine). On the writer the call first waits until its current writes are shipped, so an instant in the last second is exact; a follower answers from the chain it can read, and `then.token` says which commit it stands on. Every read works on it (`check`, `has_edge`, `khop`, `stats`), writes raise `NodusUnsupportedError`, and nested groups answer at full speed from the start, because the reachability index is rebuilt before the view is returned.
+
+A view holds a full copy of the graph. `max_memory_mb` limits one view (by default the graph's own limit), and `history_max_memory_mb` on `Shipping` or `Follower` limits all open views of a graph together. A view that does not fit raises `NodusMemoryError` and leaves nothing behind. `stats()["history"]` shows the open views and their memory, and a view's own `stats()["as_of"]` shows its snapshot, what it replayed and how long the build took. The build replays every chain object since the newest snapshot before the target, so it is as fast as your checkpoints are frequent: checkpoint on a schedule if you use time travel often.
+
+**How far back.** As far as the bucket keeps history (7 days by default, `retention_days`), and never before the newest erasure, because an erasure deletes the bucket history before it. A target outside that range raises `NodusHistoryExpiredError`. A view also forgets a name erased after it was opened, and it refuses to move forward past such an erasure. The Iceberg table keeps every row, with erased names as pseudonyms, for audits that need to reach further back with SQL.
+
 ## Concurrency
 
 The kernel supports one writer and any number of readers. Every mutation runs inside a seqlock: a version counter is odd while an edge change is in progress and even otherwise. A reader checks the counter before and after each query. If a write overlapped the query, the reader discards the result and runs it again. Readers never take a lock and never block the writer, and a query never returns a half-applied change.
@@ -615,7 +669,9 @@ Release wheels come from `.github/workflows/wheels.yml`. It builds the native li
 - **The reachability index is rebuilt after a restart.** It is not part of the snapshot, so after an open or a follower bootstrap, checks through nested groups use the evaluator, and its depth limit, until the background rebuild finishes. A group whose closure the memory budget or the entry cap refused stays on the evaluator until the nesting changes again.
 - **Transactions are bounded.** A transaction must fit one write of 1 MiB. Split larger loads, or use `add_edges_from`, which writes one record per edge.
 - **Node keys.** Integer keys are `long` values from 0 to `Integer.MAX_VALUE - 9`. String and UUID keys are mapped to integers and stored in a symbol table, which is not compacted yet.
-- **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges.
+- **Checkpoints pause writes.** A checkpoint writes the whole graph while the writer waits. It took 3.7 to 5.6 seconds for 30.6 million edges. Checkpoints are therefore not automatic, and an `as_of` build replays everything since the newest snapshot before its target.
+- **Watching is per transaction, not per permission.** `AccessWatch` re-checks the triples it is given; listing every object a subject gained or lost access to needs lookup APIs that are not built yet.
+- **Time travel stops at the bucket.** `as_of` reaches back as far as the bucket's retention and the newest erasure; older states are only in the Iceberg table, for SQL.
 - **Lake reads decode whole files.** A `get` that reaches committed data reads and decodes each file it checks. A key-column cache is the next step.
 - **No compaction.** Superseded rows and tombstones stay in the files until something removes them.
 - **Python call cost.** Each `ctypes` call takes a few microseconds. Use batch calls for bulk work.
