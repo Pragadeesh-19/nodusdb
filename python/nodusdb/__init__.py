@@ -5,6 +5,7 @@ from .errors import (
     NodusCorruptLogError,
     NodusError,
     NodusErasurePendingError,
+    NodusHistoryExpiredError,
     NodusIndeterminateError,
     NodusLogBacklogError,
     NodusMemoryError,
@@ -36,8 +37,13 @@ from .shipping import (
     static_credentials,
 )
 from .upgrade import UpgradeReport, upgrade, upgrade_cleanup
+from .watch import AccessChange, AccessWatch, Change, ChangeBatch
 
 __all__ = [
+    "AccessChange",
+    "AccessWatch",
+    "Change",
+    "ChangeBatch",
     "Follower",
     "Graph",
     "LakeTable",
@@ -46,6 +52,7 @@ __all__ = [
     "NodusCorruptLogError",
     "NodusError",
     "NodusErasurePendingError",
+    "NodusHistoryExpiredError",
     "NodusIndeterminateError",
     "NodusLogBacklogError",
     "NodusMemoryError",

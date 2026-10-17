@@ -6,12 +6,13 @@ import math
 import os
 import threading
 import time
-import typing
 import uuid
 import weakref
 
 from . import _native
+from . import watch as _watch
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
+from ._tokens import Token
 from .errors import NodusErasurePendingError, NodusShipTimeoutError, NodusStaleReadError, NodusUnsupportedError
 from .follower import Follower, TakeoverReport
 from .shipping import Shipping
@@ -35,15 +36,13 @@ KIND_STRING = 2
 KIND_NAMES = {KIND_UNSET: "no keys yet", KIND_INTEGER: "integer keys", KIND_STRING: "string keys"}
 DURABILITY = {"local": 0, "lake": 1}
 NO_TOKEN = -1
+NO_BOUND = -1
+DEFAULT_CHANGE_LIMIT = 1000
+MAX_CHANGE_LIMIT = 1_000_000
+INITIAL_CHANGE_BYTES = 1 << 16
+CHANGE_ATTEMPTS = 3
 CHECK_ABSENT = 0
 CHECK_GRANTED = 1
-
-
-class Token(typing.NamedTuple):
-    """The position of a write: the epoch of the writer tenure and the log sequence number."""
-
-    epoch: int
-    lsn: int
 
 
 class Transaction:
@@ -143,7 +142,12 @@ def _int32_pointer(column):
 
 class Graph:
     def __init__(self, library_path=None, result_capacity=DEFAULT_RESULT_CAPACITY, *, path=None, sync_mode="async",
-                 max_memory_mb=None, shipping=None, follow=None, takeover=False):
+                 max_memory_mb=None, shipping=None, follow=None, takeover=False, watch_buffer_changes=None):
+        if watch_buffer_changes is not None and (isinstance(watch_buffer_changes, bool)
+                                                 or not isinstance(watch_buffer_changes, int)):
+            raise TypeError(f"watch_buffer_changes must be an int, got {type(watch_buffer_changes).__name__}")
+        self._watch_buffer_changes = watch_buffer_changes
+        self._watch_ready = False
         limit = _memory_limit_bytes(max_memory_mb)
         configuration = _shipping_document(shipping, path)
         follower = _follower_document(follow, path, shipping)
@@ -306,6 +310,17 @@ class Graph:
         if hasattr(lib, "nodus_await_erased"):
             lib.nodus_await_erased.restype = ctypes.c_int
             lib.nodus_await_erased.argtypes = [thread, handle, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
+        if hasattr(lib, "nodus_watch_buffer"):
+            lib.nodus_watch_buffer.restype = ctypes.c_int
+            lib.nodus_watch_buffer.argtypes = [thread, handle, ctypes.c_int]
+        if hasattr(lib, "nodus_changes"):
+            int32s, int64s = ctypes.POINTER(ctypes.c_int32), ctypes.POINTER(ctypes.c_int64)
+            lib.nodus_changes.restype = ctypes.c_int
+            lib.nodus_changes.argtypes = [
+                thread, handle, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int, ctypes.c_int64,
+                ctypes.c_void_p, ctypes.c_int64, int32s, ctypes.c_int, int64s, ctypes.c_int, int32s, ctypes.c_int,
+                int64s, int64s,
+            ]
 
     def _shipping_export(self, name):
         return self._optional_export(name, "shipping")
@@ -422,6 +437,62 @@ class Graph:
                 return document
             capacity = length
         raise NodusError("stats kept growing while being read")
+
+    def changes(self, after, *, limit=DEFAULT_CHANGE_LIMIT, timeout=0.0):
+        """The changes committed after the token, as whole transactions in log order.
+
+        Waits up to timeout seconds when nothing has committed after the token, then returns an empty batch with the
+        same cursor. limit is a target, not a cap: a transaction is never split. Pass batch.next to the next call.
+        Raises NodusHistoryExpiredError when the changes after the token are no longer kept, and NodusTokenLostError
+        when the token names a write that never became durable."""
+        epoch, lsn = _token_parts(after)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_CHANGE_LIMIT:
+            raise ValueError(f"limit must be an int between 1 and {MAX_CHANGE_LIMIT}, got {limit!r}")
+        export = self._optional_export("nodus_changes", "watch")
+        self._configure_watch()
+        wait = _poll_milliseconds(timeout)
+        through = NO_BOUND
+        utf8_capacity, change_capacity = INITIAL_CHANGE_BYTES, limit
+        for _ in range(CHANGE_ATTEMPTS):
+            utf8 = ctypes.create_string_buffer(utf8_capacity)
+            lengths = (ctypes.c_int32 * (_watch.NAMES_PER_CHANGE * change_capacity))()
+            numbers = (ctypes.c_int64 * (_watch.NUMBERS_PER_CHANGE * change_capacity))()
+            kinds = (ctypes.c_int32 * change_capacity)()
+            sizes = (ctypes.c_int64 * 4)()
+            next_token = (ctypes.c_int64 * 2)()
+            count = export(
+                self._thread, self._require_open(), epoch, lsn, through, limit, wait, utf8, utf8_capacity,
+                lengths, len(lengths), numbers, len(numbers), kinds, len(kinds), sizes, next_token)
+            if count < 0:
+                raise self._failure(count, "changes failed")
+            if sizes[0] <= utf8_capacity and sizes[3] <= change_capacity:
+                return _watch.decode(count, utf8.raw, lengths, numbers, kinds, (next_token[0], next_token[1]),
+                                    self._kind == KIND_INTEGER)
+            utf8_capacity = max(utf8_capacity, sizes[0])
+            change_capacity = max(change_capacity, sizes[3])
+            through, wait = next_token[1], 0
+        raise NodusError("the changes kept growing while being read")
+
+    def watch(self, after=None, *, limit=DEFAULT_CHANGE_LIMIT, timeout=_watch.DEFAULT_POLL_TIMEOUT):
+        """Yield every batch of changes committed after the token (the current token when omitted), forever.
+
+        Each call waits up to timeout seconds for the next commit. The generator ends when the graph is closed."""
+        cursor = self.token if after is None else Token(*_token_parts(after))
+        while self._owned.value:
+            batch = self.changes(cursor, limit=limit, timeout=timeout)
+            cursor = batch.next
+            if batch.changes:
+                yield batch
+
+    def _configure_watch(self):
+        if self._watch_ready:
+            return
+        if self._watch_buffer_changes is not None:
+            export = self._optional_export("nodus_watch_buffer", "watch")
+            code = export(self._thread, self._require_open(), self._watch_buffer_changes)
+            if code < 0:
+                raise self._failure(code, "watch_buffer_changes was refused")
+        self._watch_ready = True
 
     def wait_until_current(self, timeout=DEFAULT_FOLLOW_TIMEOUT):
         """Wait, for at most timeout seconds, until a follower has loaded its snapshot and reached the chain head.
@@ -770,6 +841,14 @@ def _wait_milliseconds(timeout):
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     return int(min(max(1, math.ceil(timeout * 1000)), MAX_WAIT_MILLISECONDS))
+
+
+def _poll_milliseconds(timeout):
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise TypeError(f"timeout must be a number of seconds, got {type(timeout).__name__}")
+    if not math.isfinite(timeout) or timeout < 0:
+        raise ValueError(f"timeout must be zero or a positive number of seconds, got {timeout!r}")
+    return int(min(math.ceil(timeout * 1000), MAX_WAIT_MILLISECONDS))
 
 
 def _token_parts(token):

@@ -88,13 +88,20 @@ class NodusErasurePendingError(NodusError):
     token = None
 
 
+class NodusHistoryExpiredError(NodusError):
+    """The past this call asks for is no longer kept: a watch cursor older than every source of changes, or a point
+    in time before what the bucket still holds. Read the current state and start again from the current token."""
+
+    code = -17
+
+
 _BY_CODE = {
     error.code: error
     for error in (
         NodusMemoryError, NodusStaleReadError, NodusCheckDepthError, NodusSchemaError, NodusLogBacklogError,
         NodusWriterFencedError, NodusCorruptLogError, NodusUnsupportedError, NodusUpgradeRequiredError,
         NodusIndeterminateError, NodusTokenLostError, NodusShipTimeoutError, NodusChainTrustError,
-        NodusErasurePendingError,
+        NodusErasurePendingError, NodusHistoryExpiredError,
     )
 }
 
