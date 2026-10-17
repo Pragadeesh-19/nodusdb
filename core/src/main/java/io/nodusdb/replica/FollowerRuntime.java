@@ -5,12 +5,16 @@ import io.nodusdb.chain.Keyring;
 import io.nodusdb.config.StoreFactory;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.objectstore.ObjectStore;
+import io.nodusdb.ship.ChainFetch;
+import io.nodusdb.stats.WatchReport;
 import io.nodusdb.storage.FileTrees;
+import io.nodusdb.watch.ChainRecordSource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Objects;
 
 public final class FollowerRuntime implements AutoCloseable {
@@ -65,6 +69,8 @@ public final class FollowerRuntime implements AutoCloseable {
         FollowerState state = new FollowerState();
         FollowerCore core = new FollowerCore(store, keyring, sink, marker, state, follow, scratch,
                 System::nanoTime);
+        ChainRecordSource chain = new ChainRecordSource(store, new ChainFetch(store, keyring, ChainFetch.Trust.REQUIRED));
+        sink.kernel().attachHistory(() -> List.of(chain));
         TupleStore tuples = TupleStore.open(sink.kernel());
         FollowerRunner runner = FollowerRunner.start(core, state, marker, THREAD_NAME);
         return new FollowerRuntime(sink.kernel(), tuples, state, follow, runner, store, scratch);
@@ -86,8 +92,8 @@ public final class FollowerRuntime implements AutoCloseable {
         return gate;
     }
 
-    public String statsJson() {
-        return FollowerStats.json(kernel, state, System.nanoTime());
+    public String statsJson(WatchReport watch) {
+        return FollowerStats.json(kernel, state, System.nanoTime(), watch);
     }
 
     public FollowerConfig.Follow follow() {

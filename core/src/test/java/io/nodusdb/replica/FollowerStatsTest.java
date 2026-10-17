@@ -5,6 +5,7 @@ import io.nodusdb.json.JsonNull;
 import io.nodusdb.json.JsonObject;
 import io.nodusdb.json.JsonParser;
 import io.nodusdb.kernel.GraphKernel;
+import io.nodusdb.stats.WatchReport;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.TimeUnit;
@@ -21,7 +22,7 @@ class FollowerStatsTest {
     private final FollowerState state = new FollowerState();
 
     private JsonObject parse(long now) {
-        return JsonParser.parseObject(FollowerStats.json(kernel, state, now));
+        return JsonParser.parseObject(FollowerStats.json(kernel, state, now, WatchReport.NONE));
     }
 
     @Test

@@ -6,6 +6,8 @@ import io.nodusdb.log.ShipWatermark;
 import io.nodusdb.stats.ErasureJson;
 import io.nodusdb.stats.ErasureReport;
 import io.nodusdb.stats.ReachabilityJson;
+import io.nodusdb.stats.WatchJson;
+import io.nodusdb.stats.WatchReport;
 
 public final class ShipStats {
 
@@ -16,7 +18,7 @@ public final class ShipStats {
     }
 
     public static String json(long epoch, long appliedLsn, ShipWatermark watermark, ClosureStats reachability,
-                              ErasureReport erasure) {
+                              ErasureReport erasure, WatchReport watch) {
         JsonWriter json = new JsonWriter();
         json.beginObject();
         json.name("epoch").value(epoch);
@@ -29,6 +31,7 @@ public final class ShipStats {
         }
         ReachabilityJson.write(json, reachability);
         ErasureJson.write(json, erasure);
+        WatchJson.write(json, watch);
         json.endObject();
         return json.toString();
     }

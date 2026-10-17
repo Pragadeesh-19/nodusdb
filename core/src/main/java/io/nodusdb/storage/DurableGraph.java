@@ -8,6 +8,7 @@ import io.nodusdb.kernel.symbols.Pseudonym;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.LogRecovery;
 import io.nodusdb.log.LogStore;
+import io.nodusdb.log.RecordSource;
 import io.nodusdb.log.RecoveryResult;
 import io.nodusdb.log.ReplaySink;
 import io.nodusdb.log.SegmentedLog;
@@ -22,6 +23,7 @@ import io.nodusdb.ship.ShippingLogStore;
 import io.nodusdb.storage.DirectoryFormat.Layout;
 import io.nodusdb.storage.snapshot.SnapshotMeta;
 import io.nodusdb.storage.snapshot.SnapshotReader;
+import io.nodusdb.watch.LogRecordSource;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -139,6 +141,9 @@ public final class DurableGraph {
                 runtime.startShipping(kernel, log, files, directory.resolve(GraphFiles.SHIP_SCRATCH));
                 kernel.attachShipping(runtime.state());
             }
+            List<RecordSource> history = runtime == null ? List.of(new LogRecordSource(files, log))
+                    : List.of(new LogRecordSource(files, log), runtime.chainSource());
+            kernel.attachHistory(() -> history);
             List<ErasureLayer> shipped = runtime == null ? List.of()
                     : runtime.erasureLayers(kernel, directory);
             kernel.attachErasure(ErasureRunner.durable(kernel, erasureCheckpointDelay(shipping), shipped));

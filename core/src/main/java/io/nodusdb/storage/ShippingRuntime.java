@@ -9,6 +9,7 @@ import io.nodusdb.iceberg.IcebergTable;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.log.LogStore;
 import io.nodusdb.log.LogTailReader;
+import io.nodusdb.log.RecordSource;
 import io.nodusdb.log.io.LogFileSystem;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.projection.EdgeLogProjector;
@@ -33,6 +34,7 @@ import io.nodusdb.ship.ShippingBootstrap.Reconciled;
 import io.nodusdb.ship.ShippingConfig;
 import io.nodusdb.ship.SnapshotShipper;
 import io.nodusdb.ship.SnapshotUploader;
+import io.nodusdb.watch.ChainRecordSource;
 
 import java.nio.file.Path;
 import java.time.Duration;
@@ -103,6 +105,12 @@ final class ShippingRuntime implements AutoCloseable {
                 projectedSeq(),
                 retentionInterval(settings), "nodus-retention");
         closers.add(retention::close);
+    }
+
+    RecordSource chainSource() {
+        ObjectStore store = reconciled.store();
+        return new ChainRecordSource(store,
+                new ChainFetch(store, reconciled.keys().keyring(), ChainFetch.Trust.WHEN_KEY_KNOWN));
     }
 
     List<ErasureLayer> erasureLayers(GraphKernel kernel, Path directory) {

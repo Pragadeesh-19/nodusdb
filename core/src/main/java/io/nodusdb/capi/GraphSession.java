@@ -7,10 +7,14 @@ import io.nodusdb.error.UnsupportedFeatureException;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.KeyKind;
 import io.nodusdb.kernel.Token;
+import io.nodusdb.kernel.changes.ChangeRing;
 import io.nodusdb.kernel.traversal.OutputBufferTooSmallException;
 import io.nodusdb.replica.FollowerRuntime;
 import io.nodusdb.ship.ShipStats;
 import io.nodusdb.stats.ErasureReport;
+import io.nodusdb.stats.WatchReport;
+import io.nodusdb.watch.ChangeBatch;
+import io.nodusdb.watch.ChangeFeed;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -25,6 +29,9 @@ public final class GraphSession implements AutoCloseable {
     private final TupleStore tuples;
     private final FollowerRuntime follower;
     private final ThreadLocal<long[]> results = ThreadLocal.withInitial(() -> new long[INITIAL_RESULT_CAPACITY]);
+    private final Object watchLock = new Object();
+    private int watchBufferChanges = ChangeRing.DEFAULT_CAPACITY;
+    private volatile ChangeFeed feed;
     private volatile boolean closed;
     private long[] edges = new long[INITIAL_RESULT_CAPACITY];
     private long[] keyIds = new long[INITIAL_RESULT_CAPACITY];
@@ -62,11 +69,51 @@ public final class GraphSession implements AutoCloseable {
             return;
         }
         closed = true;
+        ChangeFeed current = feed;
+        if (current != null) {
+            current.close();
+        }
         if (follower != null) {
             follower.close();
             return;
         }
         kernel.close();
+    }
+
+    public int watchBuffer(int changes) {
+        requireOpen();
+        synchronized (watchLock) {
+            ChangeRing ring = kernel.changes();
+            if (ring != null) {
+                return ring.capacity();
+            }
+            watchBufferChanges = ChangeRing.requireCapacity(changes);
+            return watchBufferChanges;
+        }
+    }
+
+    public ChangeBatch changes(Token after, long throughLsn, int limit, Duration wait) {
+        requireReadable();
+        return feed().read(after, throughLsn, limit, wait);
+    }
+
+    private ChangeFeed feed() {
+        ChangeFeed current = feed;
+        if (current != null) {
+            return current;
+        }
+        synchronized (watchLock) {
+            if (feed == null) {
+                feed = new ChangeFeed(kernel, kernel.history().recordSources(), watchBufferChanges);
+            }
+            return feed;
+        }
+    }
+
+    private WatchReport watchReport() {
+        ChangeFeed current = feed;
+        return current == null ? WatchReport.of(kernel.changes(), 0, 0)
+                : WatchReport.of(kernel.changes(), current.openReaders(), current.expiredReads());
     }
 
     public KeyKind keyKind() {
@@ -226,10 +273,10 @@ public final class GraphSession implements AutoCloseable {
     public String statsJson() {
         requireOpen();
         if (follower != null) {
-            return follower.statsJson();
+            return follower.statsJson(watchReport());
         }
         return ShipStats.json(kernel.epoch(), kernel.appliedLsn(), kernel.shipWatermark(), kernel.closureStats(),
-                ErasureReport.of(kernel));
+                ErasureReport.of(kernel), watchReport());
     }
 
     private synchronized Token writeLocally(TupleTransaction transaction) {
