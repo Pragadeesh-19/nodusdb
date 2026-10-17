@@ -5,6 +5,7 @@ import io.nodusdb.kernel.adjacency.AdjacencyTable;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.changes.ChangeRing;
 import io.nodusdb.kernel.closure.ClosureIndex;
 import io.nodusdb.kernel.closure.ClosureLimits;
 import io.nodusdb.kernel.closure.ClosureMaintainer;
@@ -49,6 +50,7 @@ public final class GraphKernel implements AutoCloseable {
     private byte[] memorySalt;
     private volatile ShipWatermark shipWatermark = ShipWatermark.NONE;
     private volatile ErasureProgress erasure = ErasureProgress.NONE;
+    private volatile GraphHistory history = GraphHistory.NONE;
     private volatile boolean closed;
 
     public GraphKernel() {
@@ -150,6 +152,42 @@ public final class GraphKernel implements AutoCloseable {
 
     public ErasureProgress erasureProgress() {
         return erasure;
+    }
+
+    public void attachHistory(GraphHistory attached) {
+        Objects.requireNonNull(attached, "attached");
+        writer.lock();
+        try {
+            if (history != GraphHistory.NONE) {
+                throw new IllegalStateException("history is already attached");
+            }
+            this.history = attached;
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public GraphHistory history() {
+        return history;
+    }
+
+    public ChangeRing enableChanges(int capacity) {
+        writer.lock();
+        try {
+            requireOpen();
+            ChangeRing ring = state.changes();
+            if (ring == null) {
+                ring = new ChangeRing(capacity, state.appliedLsn());
+                state.changes(ring);
+            }
+            return ring;
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public ChangeRing changes() {
+        return state.changes();
     }
 
     public ShipWatermark shipWatermark() {
@@ -277,6 +315,10 @@ public final class GraphKernel implements AutoCloseable {
                 return;
             }
             closed = true;
+            ChangeRing ring = state.changes();
+            if (ring != null) {
+                ring.close();
+            }
             if (storage != null) {
                 closeStorage();
             }
@@ -643,7 +685,15 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
+        recordChanges(scratch, lsn);
         return lsn;
+    }
+
+    private void recordChanges(RecordBatch batch, long lastLsn) {
+        ChangeRing ring = state.changes();
+        if (ring != null) {
+            ring.record(batch.bytes(), 0, batch.size(), lastLsn, log.lastCommitMicros());
+        }
     }
 
     private int writePairs(RecordType type, long[] pairs, int pairCount) {
@@ -729,6 +779,7 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
+        recordChanges(batch, lsn);
         if (state.erasures().newest() != erasedBefore) {
             erasure.wake();
         }

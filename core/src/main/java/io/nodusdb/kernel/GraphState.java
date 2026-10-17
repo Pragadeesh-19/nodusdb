@@ -2,6 +2,7 @@ package io.nodusdb.kernel;
 
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.changes.ChangeRing;
 import io.nodusdb.kernel.closure.ClosureIndex;
 import io.nodusdb.kernel.closure.ClosureLimits;
 import io.nodusdb.kernel.closure.TupleGraph;
@@ -26,6 +27,7 @@ final class GraphState implements TupleGraph {
     private volatile long lastCommitMicros;
     private final ErasedSymbols.Log erasures = new ErasedSymbols.Log();
     private final ClosureIndex closure;
+    private volatile ChangeRing changes;
     private boolean faulted;
 
     GraphState(MemoryBudget budget, ClosureLimits closureLimits) {
@@ -48,6 +50,14 @@ final class GraphState implements TupleGraph {
 
     ErasedSymbols.Log erasures() {
         return erasures;
+    }
+
+    ChangeRing changes() {
+        return changes;
+    }
+
+    void changes(ChangeRing ring) {
+        changes = ring;
     }
 
     long lastCommitMicros() {

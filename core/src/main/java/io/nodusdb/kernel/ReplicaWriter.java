@@ -1,5 +1,6 @@
 package io.nodusdb.kernel;
 
+import io.nodusdb.kernel.changes.ChangeRing;
 import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.log.record.MalformedTransactionException;
 import io.nodusdb.log.record.RecordReader;
@@ -107,6 +108,10 @@ final class ReplicaWriter {
             replay(bytes, start, end);
         } finally {
             sequence.endWrite();
+        }
+        ChangeRing ring = state.changes();
+        if (ring != null) {
+            ring.record(bytes, start, end, state.appliedLsn(), state.lastCommitMicros());
         }
     }
 
