@@ -1,0 +1,72 @@
+# Watch and as_of baseline: windows-dev
+
+Machine: see bench/baseline/MACHINE.md. JDK: Oracle HotSpot 22.0.2+9-70, JMH 1.37. Measured 2026-10-17.
+
+## The write path with a watcher attached
+
+KernelWriteBench removes and re-adds one edge of an in-memory kernel per operation, so one operation is two
+commits. `watcher=on` creates the change ring (1,048,576 entries) before the measurement, so every commit also
+writes its changes there. The same class was built on main (c1a1018) and on feat/authz-step6 and run alternately,
+four times each:
+
+    java -jar benchmarks.jar KernelWriteBench -wi 5 -w 2s -i 5 -r 2s -f 2 -prof gc
+
+The first build parsed the commit's record bytes back into ring entries. It failed the 10% gate:
+
+| Build | Runs (ns/op) | Mean |
+|---|---|---|
+| main c1a1018 | 738.0, 732.9, 710.1, 731.5 | 728.1 |
+| branch, watcher off | 759.8, 750.7, 739.8, 741.5 | 747.9 |
+| branch, watcher on | 906.9, 893.1, 909.2, 851.2 | 890.1 |
+
+That is 22.2% over main. Recording one autocommit tuple alone measured 62 ns, the same with a ring of 65,536 or
+1,048,576 entries and the same with the volatile publish replaced by a plain store, so the cost was neither cache
+misses nor the fence. A JFR profile of that probe was flat over the record decoding (type lookups, buffer reads
+with their bounds checks, the second pass). The single-tuple commit path now hands the ring the values it has
+already decoded (D221). After that change:
+
+| Build | Runs (ns/op) | Mean |
+|---|---|---|
+| main c1a1018 | 734.7, 708.0, 730.3, 710.5 | 720.8 |
+| branch, watcher off | 764.2, 710.7, 763.2, 716.3 | 738.6 |
+| branch, watcher on | 787.6, 764.2, 778.5, 776.1 | 776.6 |
+
+Watcher on is 7.7% over main, about 19 ns per commit. Watcher off is 2.5% over main, inside the spread between
+runs of one build. Every row allocates 0.002 to 0.003 B/op, which is JMH's own background allocation.
+
+## Reading changes
+
+ChangeFeedBench writes 4,000 single-edge commits and then reads the first 1,000 changes after the same cursor on
+every operation, through ChangeFeed with names resolved:
+
+    java -jar benchmarks.jar ChangeFeedBench -wi 5 -i 10 -f 2 -prof gc
+
+| Source | Time per 1,000 changes | Per change | Allocated per change |
+|---|---|---|---|
+| ring (in-memory kernel) | 125.8 us (error 1.8) | 126 ns | 296 B |
+| log (durable kernel, no ring) | 1,780.5 us (error 8.5) | 1.78 us | 3,018 B |
+
+About 7.9 million changes per second from the ring and 560,000 from the log. The allocation is the Change
+objects, their names and, from the log, the batches read; it is on the reading thread, not the commit path. These
+runs used the build before D221, which changes only how commits enter the ring.
+
+## Building a past view
+
+AsOfBench ships a graph of n grants through a directory bucket in transactions of 5,000, then times opening one
+view at the last token and closing it. `snapshot` checkpoints after the grants, so the view loads a snapshot that
+holds them all; `replay` checkpoints before them, so the view loads an empty snapshot and replays every chain
+object:
+
+    java -jar benchmarks.jar AsOfBench -wi 3 -i 10 -f 2 -prof gc
+
+| Grants | From | Build (ms) |
+|---|---|---|
+| 10,000 | snapshot | 95.6 (error 22.3) |
+| 10,000 | replay | 99.8 (error 15.8) |
+| 100,000 | snapshot | 260.2 (error 20.9) |
+| 100,000 | replay | 372.7 (error 15.3) |
+
+At 100,000 grants, replaying the chain costs about 110 ms more than loading the same state from a snapshot. A
+build includes the bucket lookups, the download and its sha256 check, the load, the replay and the reachability
+rebuild; these runs do not separate them. The build does not wait on a poll interval when the bucket already holds
+the target. These runs used the build before D221, which does not touch this path.
