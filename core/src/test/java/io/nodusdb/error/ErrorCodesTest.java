@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -18,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ErrorCodesTest {
 
     private static final int FIRST_CODE = -1;
-    private static final int LAST_CODE = -16;
+    private static final int LAST_CODE = -17;
 
     @Test
     void everyCodeIsUniqueAndInsideTheContractRange() {
@@ -31,7 +32,7 @@ class ErrorCodesTest {
     }
 
     @Test
-    void theCodesFormAContiguousRangeFromMinusOneToMinusSixteen() {
+    void theCodesFormAContiguousRangeFromMinusOneToMinusSeventeen() {
         Set<Integer> values = Arrays.stream(ErrorCode.values()).map(ErrorCode::value).collect(Collectors.toSet());
 
         for (int value = FIRST_CODE; value >= LAST_CODE; value--) {
@@ -46,6 +47,8 @@ class ErrorCodesTest {
         expected.put(new ChainFormatException("damaged"), ErrorCode.CHAIN_TRUST);
         expected.put(new CheckDepthException("depth"), ErrorCode.CHECK_DEPTH);
         expected.put(new CorruptLogException("corrupt"), ErrorCode.CORRUPT_LOG);
+        expected.put(new ErasurePendingException(2, 81, List.of("bucket")), ErrorCode.ERASURE_PENDING);
+        expected.put(new HistoryExpiredException("expired"), ErrorCode.HISTORY_EXPIRED);
         expected.put(new IndeterminateOutcomeException("indeterminate"), ErrorCode.INDETERMINATE);
         expected.put(new LogBacklogException("backlog"), ErrorCode.LOG_BACKLOG);
         expected.put(new SchemaViolationException("schema"), ErrorCode.SCHEMA_VIOLATION);
