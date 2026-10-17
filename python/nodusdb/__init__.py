@@ -27,7 +27,7 @@ from .follower import (
     restore,
     salvage,
 )
-from .graph import Graph, Token, Transaction
+from .graph import Graph, PastGraph, Token, Transaction
 from .lake import LakeTable, key_hash
 from .shipping import (
     Shipping,
@@ -63,6 +63,7 @@ __all__ = [
     "NodusUnsupportedError",
     "NodusUpgradeRequiredError",
     "NodusWriterFencedError",
+    "PastGraph",
     "Restored",
     "SalvageReport",
     "SalvagedChange",

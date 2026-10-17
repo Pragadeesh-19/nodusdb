@@ -57,6 +57,7 @@ class Shipping:
     iceberg_commit_interval_s: typing.Optional[int] = None
     iceberg_table_retention_days: typing.Optional[int] = None
     erasure_checkpoint_delay_s: typing.Optional[int] = None
+    history_max_memory_mb: typing.Optional[int] = None
 
     @classmethod
     def directory(cls, path, **settings):
@@ -100,6 +101,8 @@ class Shipping:
             document["iceberg"] = iceberg
         if self.erasure_checkpoint_delay_s is not None:
             document["erasure"] = {"checkpoint_delay_s": self.erasure_checkpoint_delay_s}
+        if self.history_max_memory_mb is not None:
+            document["history"] = {"max_memory_mb": self.history_max_memory_mb}
         return json.dumps(document)
 
 

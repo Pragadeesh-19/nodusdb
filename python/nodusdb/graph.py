@@ -10,6 +10,7 @@ import uuid
 import weakref
 
 from . import _native
+from . import history as _history
 from . import watch as _watch
 from ._native import MEMORY_LIMIT, NodusError, NodusMemoryError, error_for, serialized
 from ._tokens import Token
@@ -161,10 +162,11 @@ class Graph:
         self._follower = follower is not None
         self.takeover_report = None
         handle = self._open(path, sync_mode, limit, configuration, follower, takeover)
-        self._owned = _native.OwnedHandle(
-            self._lib, self._isolate, handle, _destroyer(self._lib),
-            "graph close failed; the final checkpoint did not complete")
-        self._finalizer = weakref.finalize(self, _native.release_unclosed, self._owned, "Graph")
+        self._adopt(handle, result_capacity, "Graph", "graph close failed; the final checkpoint did not complete")
+
+    def _adopt(self, handle, result_capacity, kind_name, close_failure):
+        self._owned = _native.OwnedHandle(self._lib, self._isolate, handle, _destroyer(self._lib), close_failure)
+        self._finalizer = weakref.finalize(self, _native.release_unclosed, self._owned, kind_name)
         try:
             self._kind = self._lib.nodus_key_kind(self._thread, handle)
             if self._kind < 0:
@@ -310,6 +312,19 @@ class Graph:
         if hasattr(lib, "nodus_await_erased"):
             lib.nodus_await_erased.restype = ctypes.c_int
             lib.nodus_await_erased.argtypes = [thread, handle, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64]
+        if hasattr(lib, "nodus_open_as_of"):
+            int64s = ctypes.POINTER(ctypes.c_int64)
+            lib.nodus_open_as_of.restype = _native.HANDLE
+            lib.nodus_open_as_of.argtypes = [
+                thread, handle, ctypes.c_int, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+                int64s, ctypes.POINTER(ctypes.c_int),
+            ]
+            lib.nodus_past_advance.restype = ctypes.c_int
+            lib.nodus_past_advance.argtypes = [
+                thread, handle, ctypes.c_int, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, int64s,
+            ]
+            lib.nodus_past_position.restype = ctypes.c_int
+            lib.nodus_past_position.argtypes = [thread, handle, int64s]
         if hasattr(lib, "nodus_watch_buffer"):
             lib.nodus_watch_buffer.restype = ctypes.c_int
             lib.nodus_watch_buffer.argtypes = [thread, handle, ctypes.c_int]
@@ -483,6 +498,28 @@ class Graph:
             cursor = batch.next
             if batch.changes:
                 yield batch
+
+    def as_of(self, when, *, timeout=DEFAULT_SHIP_TIMEOUT, max_memory_mb=None):
+        """A read-only PastGraph of this graph as it stood at a token or at an aware datetime.
+
+        The past is rebuilt from the bucket, so shipping must be configured; on the writer the call first waits,
+        up to timeout seconds, until its current writes are shipped. The view stands on the last commit at or
+        before the target and reports it as token and commit_time. It reaches back as far as the bucket keeps
+        history and never before the newest erasure (NodusHistoryExpiredError). It holds a full copy of the graph
+        in memory, limited by max_memory_mb and by the graph's history budget. Close it, or use a with block."""
+        kind, epoch, value = _history.target(when)
+        limit = _memory_limit_bytes(max_memory_mb)
+        export = self._optional_export("nodus_open_as_of", "as_of")
+        position = (ctypes.c_int64 * _history.POSITION_FIELDS)()
+        status = ctypes.c_int(0)
+        handle = export(self._thread, self._require_open(), kind, epoch, value, limit, _wait_milliseconds(timeout),
+                        position, ctypes.byref(status))
+        if not handle:
+            if status.value == MEMORY_LIMIT:
+                raise NodusMemoryError("the past view does not fit its memory limit or the history budget")
+            detail = _native.last_error_message(self._lib, self._thread)
+            raise error_for(status.value, f"as_of failed: {detail}" if detail else "as_of failed")
+        return PastGraph._from_handle(self, handle, position)
 
     def _configure_watch(self):
         if self._watch_ready:
@@ -788,6 +825,56 @@ class Graph:
     def _limit_message(self, operation):
         return (f"{operation} would exceed max_memory_mb={self._max_memory_mb}; the graph is unchanged, "
                 "except that a batch keeps the edges it applied before the limit")
+
+
+class PastGraph(Graph):
+    """A read-only view of a graph at a past token or instant, opened by Graph.as_of.
+
+    Every read a Graph offers works on it: check, has_edge, degree, khop, common_neighbors, token, stats. Writes,
+    erasure, checkpoints and watching raise NodusUnsupportedError. advance() moves it forward in time; it never moves
+    back. A name erased after the view was opened is forgotten by the view too. Closing the graph it came from closes
+    it."""
+
+    def __init__(self, *args, **kwargs):
+        raise TypeError("a PastGraph is opened with Graph.as_of")
+
+    @classmethod
+    def _from_handle(cls, parent, handle, position):
+        view = cls.__new__(cls)
+        view._parent = parent
+        view._lib, view._isolate = parent._lib, parent._isolate
+        view._lock = threading.RLock()
+        view._events = _EventLog()
+        view._max_memory_mb = None
+        view._shipping = False
+        view._follower = False
+        view._watch_buffer_changes = None
+        view._watch_ready = False
+        view.takeover_report = None
+        view._adopt(handle, parent._result_capacity, "PastGraph", "past view close failed")
+        view._position = _history.position(position)
+        return view
+
+    @property
+    def token(self):
+        """The commit this view stands on."""
+        return self._position[0]
+
+    @property
+    def commit_time(self):
+        """When the commit this view stands on was made, or None for a graph that keeps no commit times."""
+        return self._position[1]
+
+    @serialized
+    def advance(self, when, *, timeout=DEFAULT_SHIP_TIMEOUT):
+        """Move the view forward to a later token or aware datetime and return the token it now stands on."""
+        kind, epoch, value = _history.target(when)
+        position = (ctypes.c_int64 * _history.POSITION_FIELDS)()
+        code = self._lib.nodus_past_advance(self._thread, self._require_open(), kind, epoch, value,
+                                            _wait_milliseconds(timeout), position)
+        self._require_success(code, "advance failed")
+        self._position = _history.position(position)
+        return self._position[0]
 
 
 def _memory_limit_bytes(megabytes):

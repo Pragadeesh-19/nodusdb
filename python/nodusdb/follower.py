@@ -31,6 +31,7 @@ class Follower:
     download_parallelism: typing.Optional[int] = None
     request_timeout_ms: typing.Optional[int] = None
     state_directory: typing.Optional[Path] = None
+    history_max_memory_mb: typing.Optional[int] = None
 
     @classmethod
     def directory(cls, path, **settings):
@@ -61,6 +62,8 @@ class Follower:
         })
         if follow:
             document["follow"] = follow
+        if self.history_max_memory_mb is not None:
+            document["history"] = {"max_memory_mb": self.history_max_memory_mb}
         return json.dumps(document)
 
 
