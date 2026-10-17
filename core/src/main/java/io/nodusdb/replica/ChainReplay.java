@@ -29,12 +29,17 @@ public final class ChainReplay {
     }
 
     public Optional<ReplayPosition> bootstrap(ReplicaSink sink) throws IOException {
-        Iterator<Anchor> candidates = anchors.candidates();
+        return bootstrap(sink, AnchorBounds.NONE, ReplayLimit.ALL);
+    }
+
+    public Optional<ReplayPosition> bootstrap(ReplicaSink sink, AnchorBounds bounds, ReplayLimit limit)
+            throws IOException {
+        Iterator<Anchor> candidates = anchors.candidates(bounds);
         while (candidates.hasNext()) {
             Anchor anchor = candidates.next();
             Optional<Path> snapshot = download(anchor);
             if (snapshot.isPresent()) {
-                return Optional.of(start(anchor, snapshot.get(), sink));
+                return Optional.of(start(anchor, snapshot.get(), sink, limit));
             }
         }
         return Optional.empty();
@@ -45,6 +50,11 @@ public final class ChainReplay {
     }
 
     public Optional<ChainObject> advance(ReplayPosition position, ReplicaSink sink, Consumer<ChainObject> guard) {
+        return advance(position, sink, guard, ReplayLimit.ALL);
+    }
+
+    public Optional<ChainObject> advance(ReplayPosition position, ReplicaSink sink, Consumer<ChainObject> guard,
+                                         ReplayLimit limit) {
         Optional<ChainObject> next = chainFetch.fetch(position.cursor().seq() + 1);
         if (next.isEmpty()) {
             return next;
@@ -52,8 +62,24 @@ public final class ChainReplay {
         guard.accept(next.get());
         position.cursor().accept(next.get());
         position.requirePinnedUnchanged(next.get());
-        applyRecords(next.get(), position, sink);
+        applyRecords(next.get(), position, sink, limit);
         return next;
+    }
+
+    public static void applyRecords(ChainObject object, ReplayPosition position, ReplicaSink sink,
+                                    ReplayLimit limit) {
+        if (!(object.body() instanceof ChainBody.Records records) || records.lsnLast() <= position.appliedLsn()) {
+            return;
+        }
+        long last = Math.min(records.lsnLast(), limit.lastLsn(records, position.appliedLsn()));
+        if (last <= position.appliedLsn()) {
+            return;
+        }
+        long first = Math.max(records.lsnFirst(), position.appliedLsn() + 1);
+        byte[] bytes = first == records.lsnFirst() && last == records.lsnLast() ? records.records()
+                : RecordSlice.between(records.records(), first, last);
+        sink.apply(bytes, first, last);
+        position.applied(last);
     }
 
     public int catchUp(ReplayPosition position, ReplicaSink sink) {
@@ -80,7 +106,8 @@ public final class ChainReplay {
         }
     }
 
-    private ReplayPosition start(Anchor anchor, Path snapshot, ReplicaSink sink) throws IOException {
+    private ReplayPosition start(Anchor anchor, Path snapshot, ReplicaSink sink, ReplayLimit limit)
+            throws IOException {
         long loaded;
         try {
             loaded = sink.load(snapshot);
@@ -94,17 +121,7 @@ public final class ChainReplay {
         ChainObject first = chainFetch.require(anchor.firstSeq());
         ReplayPosition position = new ReplayPosition(ChainCursor.startingAfter(first), loaded, anchor.reference());
         position.requirePinnedUnchanged(first);
-        applyRecords(first, position, sink);
+        applyRecords(first, position, sink, limit);
         return position;
-    }
-
-    private static void applyRecords(ChainObject object, ReplayPosition position, ReplicaSink sink) {
-        if (!(object.body() instanceof ChainBody.Records records) || records.lsnLast() <= position.appliedLsn()) {
-            return;
-        }
-        long first = Math.max(records.lsnFirst(), position.appliedLsn() + 1);
-        byte[] bytes = first == records.lsnFirst() ? records.records() : RecordSlice.from(records.records(), first);
-        sink.apply(bytes, first, records.lsnLast());
-        position.applied(records.lsnLast());
     }
 }

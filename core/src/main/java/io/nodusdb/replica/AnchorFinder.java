@@ -9,7 +9,9 @@ import io.nodusdb.objectstore.ObjectInfo;
 import io.nodusdb.objectstore.ObjectStore;
 import io.nodusdb.ship.ChainFetch;
 import io.nodusdb.ship.ChainHead;
+import io.nodusdb.storage.snapshot.SnapshotHeaders;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
@@ -39,7 +41,30 @@ public final class AnchorFinder {
     }
 
     public Iterator<Anchor> candidates() {
-        return new Candidates(newestFirst());
+        return candidates(AnchorBounds.NONE);
+    }
+
+    public Iterator<Anchor> candidates(AnchorBounds bounds) {
+        List<Candidate> admitted = new ArrayList<>();
+        for (Candidate candidate : newestFirst()) {
+            if (bounds.admits(candidate.lsn())) {
+                admitted.add(candidate);
+            }
+        }
+        return new Candidates(admitted, bounds);
+    }
+
+    private boolean committedBy(Candidate candidate, long maxCommitMicros) {
+        Optional<byte[]> header = store.getRange(candidate.key(), 0, SnapshotHeaders.BYTES);
+        if (header.isEmpty() || header.get().length != SnapshotHeaders.BYTES) {
+            return false;
+        }
+        try {
+            SnapshotHeaders.Position position = SnapshotHeaders.parse(header.get(), candidate.key());
+            return position.lsn() == candidate.lsn() && position.lastCommitMicros() <= maxCommitMicros;
+        } catch (IOException damaged) {
+            return false;
+        }
     }
 
     private List<Candidate> newestFirst() {
@@ -123,18 +148,24 @@ public final class AnchorFinder {
     private final class Candidates implements Iterator<Anchor> {
 
         private final Iterator<Candidate> remaining;
+        private final AnchorBounds bounds;
         private int examined;
         private Anchor ready;
 
-        Candidates(List<Candidate> candidates) {
+        Candidates(List<Candidate> candidates, AnchorBounds bounds) {
             this.remaining = candidates.iterator();
+            this.bounds = bounds;
         }
 
         @Override
         public boolean hasNext() {
             while (ready == null && examined < MAX_EXAMINED && remaining.hasNext()) {
+                Candidate candidate = remaining.next();
+                if (bounds.boundsTime() && !committedBy(candidate, bounds.maxCommitMicros())) {
+                    continue;
+                }
                 examined++;
-                ready = anchorFor(remaining.next()).orElse(null);
+                ready = anchorFor(candidate).orElse(null);
             }
             return ready != null;
         }

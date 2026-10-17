@@ -404,4 +404,71 @@ class ChainReplayTest {
         }
         return out.toByteArray();
     }
+
+    private void twoTransactionsPerObject() {
+        chain.snapshotRef(10, 1);
+        chain.records(concat(ChainBuilder.transaction(11, 2), ChainBuilder.transaction(14, 2)), 11, 16);
+        chain.records(concat(ChainBuilder.transaction(17, 2), ChainBuilder.transaction(20, 2)), 17, 22);
+    }
+
+    @Test
+    void aLimitStopsInsideTheAnchorsFirstObjectAndTheRestCanBeAppliedLater() throws IOException {
+        chain.snapshotRef(10, 1);
+        chain.records(concat(ChainBuilder.transaction(11, 2), ChainBuilder.transaction(14, 2),
+                ChainBuilder.transaction(17, 2)), 11, 19);
+        chain.snapshotRef(13, 2);
+        ChainReplay replay = replay(store);
+
+        ReplayPosition position = replay.bootstrap(sink, new AnchorBounds(13, 13, Long.MAX_VALUE),
+                (records, applied) -> 16).orElseThrow();
+
+        assertEquals(List.of(13L), sink.loaded);
+        assertEquals(16, position.appliedLsn());
+        assertEquals(List.of(new Applied(14, 16, sink.applied.get(0).bytes())), sink.applied);
+        ChainObject held = new ChainFetch(store, ChainBuilder.keyring(), Trust.REQUIRED).require(2);
+        ChainReplay.applyRecords(held, position, sink, ReplayLimit.ALL);
+        assertEquals(19, position.appliedLsn());
+        assertEquals(new Applied(17, 19, sink.applied.get(1).bytes()), sink.applied.get(1));
+        assertEquals(sink.applied.get(0).bytes(), sink.applied.get(1).bytes());
+    }
+
+    @Test
+    void anAdvanceWithALimitStopsAtTheLastCommitTheLimitAllows() throws IOException {
+        twoTransactionsPerObject();
+        ChainReplay replay = replay(store);
+        ReplayPosition position = replay.bootstrap(sink).orElseThrow();
+        assertEquals(10, position.appliedLsn());
+
+        replay.advance(position, sink, object -> { }, (records, applied) -> 13).orElseThrow();
+
+        assertEquals(13, position.appliedLsn());
+        assertEquals(List.of(new Applied(11, 13, sink.applied.get(0).bytes())), sink.applied);
+    }
+
+    @Test
+    void aLimitStopsInsideALaterObjectAndALimitAtTheAppliedLsnAppliesNothing() throws IOException {
+        twoTransactionsPerObject();
+        ChainReplay replay = replay(store);
+        ReplayPosition position = replay.bootstrap(sink).orElseThrow();
+        replay.advance(position, sink).orElseThrow();
+        assertEquals(16, position.appliedLsn());
+
+        replay.advance(position, sink, object -> { }, (records, applied) -> 19).orElseThrow();
+        assertEquals(19, position.appliedLsn());
+        assertEquals(new Applied(17, 19, sink.applied.get(1).bytes()), sink.applied.get(1));
+
+        ChainObject held = new ChainFetch(store, ChainBuilder.keyring(), Trust.REQUIRED).require(3);
+        ChainReplay.applyRecords(held, position, sink, (records, applied) -> applied);
+        assertEquals(19, position.appliedLsn());
+        assertEquals(2, sink.applied.size());
+    }
+
+    @Test
+    void anAnchorBoundThatAdmitsNoSnapshotFindsNothing() throws IOException {
+        twoTransactionsPerObject();
+
+        assertEquals(Optional.empty(), replay(store).bootstrap(sink, new AnchorBounds(11, 20, Long.MAX_VALUE),
+                ReplayLimit.ALL));
+        assertEquals(List.of(), sink.loaded);
+    }
 }

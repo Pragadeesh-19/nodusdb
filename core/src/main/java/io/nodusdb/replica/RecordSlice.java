@@ -13,6 +13,22 @@ final class RecordSlice {
     private RecordSlice() {
     }
 
+    static byte[] between(byte[] records, long firstLsn, long lastLsn) {
+        byte[] tail = from(records, firstLsn);
+        RecordReader reader = new RecordReader().wrap(ByteBuffer.wrap(tail), 0, tail.length);
+        while (reader.hasRecord()) {
+            if (reader.lsn() == lastLsn) {
+                if (!reader.isCommitPoint()) {
+                    throw new ChainTrustException("LSN " + lastLsn + " is not a commit point");
+                }
+                reader.advance();
+                return reader.position() == tail.length ? tail : Arrays.copyOf(tail, reader.position());
+            }
+            reader.advance();
+        }
+        throw new ChainTrustException("the records do not reach LSN " + lastLsn);
+    }
+
     static byte[] from(byte[] records, long firstLsn) {
         RecordReader reader = new RecordReader().wrap(ByteBuffer.wrap(records), 0, records.length);
         boolean previousEndedTransaction = true;

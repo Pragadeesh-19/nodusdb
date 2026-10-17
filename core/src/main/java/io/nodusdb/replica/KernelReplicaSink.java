@@ -6,21 +6,29 @@ import io.nodusdb.storage.snapshot.SnapshotReader;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Objects;
 
-final class KernelReplicaSink implements ReplicaSink {
+public final class KernelReplicaSink implements ReplicaSink {
 
     private final GraphKernel kernel;
     private SnapshotMeta loaded;
 
     KernelReplicaSink(long maxMemoryBytes) {
-        this.kernel = GraphKernel.openReplica(maxMemoryBytes);
+        this(GraphKernel.openReplica(maxMemoryBytes));
     }
 
-    GraphKernel kernel() {
+    public KernelReplicaSink(GraphKernel kernel) {
+        this.kernel = Objects.requireNonNull(kernel, "kernel");
+        if (!kernel.isReplica()) {
+            throw new IllegalArgumentException("a replica sink applies records to a replica kernel");
+        }
+    }
+
+    public GraphKernel kernel() {
         return kernel;
     }
 
-    SnapshotMeta loaded() {
+    public SnapshotMeta loaded() {
         if (loaded == null) {
             throw new IllegalStateException("no snapshot was loaded");
         }

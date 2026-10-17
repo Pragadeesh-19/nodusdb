@@ -28,6 +28,13 @@ record SnapshotHeader(long lsn, long epoch, long lastCommitMicros, int nodeCapac
                 throw new IOException("snapshot is truncated: " + source);
             }
         }
+        return parse(bytes, source.toString());
+    }
+
+    static SnapshotHeader parse(ByteBuffer bytes, String source) throws IOException {
+        if (bytes.limit() < SnapshotFormat.HEADER_BYTES) {
+            throw new IOException("snapshot is truncated: " + source);
+        }
         if (bytes.getInt(0) != SnapshotFormat.MAGIC) {
             throw new IOException("not a nodus snapshot: " + source);
         }

@@ -47,6 +47,23 @@ class RecordSliceTest {
     }
 
     @Test
+    void betweenKeepsWholeTransactionsFromTheFirstThroughTheLastCommit() {
+        assertArrayEquals(first, RecordSlice.between(all, 1, 3));
+        assertArrayEquals(second, RecordSlice.between(all, 4, 6));
+        assertArrayEquals(concat(second, third), RecordSlice.between(all, 4, 9));
+        assertArrayEquals(all, RecordSlice.between(all, 1, 9));
+    }
+
+    @Test
+    void betweenRefusesAnEndThatIsNotACommitOrNotThere() {
+        ChainTrustException inside = assertThrows(ChainTrustException.class, () -> RecordSlice.between(all, 1, 5));
+        assertTrue(inside.getMessage().contains("not a commit point"), inside.getMessage());
+        ChainTrustException beyond = assertThrows(ChainTrustException.class, () -> RecordSlice.between(all, 4, 12));
+        assertTrue(beyond.getMessage().contains("do not reach"), beyond.getMessage());
+        assertThrows(ChainTrustException.class, () -> RecordSlice.between(all, 2, 6));
+    }
+
+    @Test
     void startingInsideATransactionIsRefused() {
         for (long lsn : new long[]{2, 3, 5, 6, 8, 9}) {
             ChainTrustException refused = assertThrows(ChainTrustException.class, () -> RecordSlice.from(all, lsn));
