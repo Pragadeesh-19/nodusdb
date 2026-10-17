@@ -5,6 +5,7 @@ import io.nodusdb.kernel.adjacency.AdjacencyTable;
 import io.nodusdb.kernel.adjacency.EdgeKey;
 import io.nodusdb.kernel.adjacency.EdgeTables;
 import io.nodusdb.kernel.catalog.RelationCatalog;
+import io.nodusdb.kernel.changes.ChangeEntry;
 import io.nodusdb.kernel.changes.ChangeRing;
 import io.nodusdb.kernel.closure.ClosureIndex;
 import io.nodusdb.kernel.closure.ClosureLimits;
@@ -733,7 +734,11 @@ public final class GraphKernel implements AutoCloseable {
         } finally {
             sequence.endWrite();
         }
-        recordChanges(scratch, lsn);
+        ChangeRing ring = state.changes();
+        if (ring != null) {
+            ring.recordTuple(add ? ChangeEntry.ADD : ChangeEntry.REMOVE, object, relation, subjectRelation, subject,
+                    lsn, log.lastCommitMicros());
+        }
         return lsn;
     }
 

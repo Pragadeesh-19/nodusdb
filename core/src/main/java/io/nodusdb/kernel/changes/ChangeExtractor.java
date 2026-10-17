@@ -25,12 +25,26 @@ public final class ChangeExtractor {
         if (!record.isCommitPoint()) {
             return false;
         }
-        sink.entry(lsn, ChangeEntry.meta(ChangeEntry.COMMIT, 0, 0), commitMicros);
+        commit(lsn, commitMicros, sink);
         return true;
     }
 
+    public static void autocommitTuple(int kind, int object, int relation, int subjectRelation, int subject,
+                                       long lsn, long commitMicros, EntrySink sink) {
+        tuple(kind, object, relation, subjectRelation, subject, lsn, sink);
+        commit(lsn, commitMicros, sink);
+    }
+
     private static void tuple(RecordReader record, long lsn, int kind, EntrySink sink) {
-        sink.entry(lsn, ChangeEntry.meta(kind, record.relation(), record.subjectRelation()),
-                ChangeEntry.ids(record.object(), record.subject()));
+        tuple(kind, record.object(), record.relation(), record.subjectRelation(), record.subject(), lsn, sink);
+    }
+
+    private static void tuple(int kind, int object, int relation, int subjectRelation, int subject, long lsn,
+                              EntrySink sink) {
+        sink.entry(lsn, ChangeEntry.meta(kind, relation, subjectRelation), ChangeEntry.ids(object, subject));
+    }
+
+    private static void commit(long lsn, long commitMicros, EntrySink sink) {
+        sink.entry(lsn, ChangeEntry.meta(ChangeEntry.COMMIT, 0, 0), commitMicros);
     }
 }

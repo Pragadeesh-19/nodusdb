@@ -272,6 +272,49 @@ class ChangeRingTest {
     }
 
     @Test
+    void aDecodedTupleIsRecordedExactlyAsItsRecordWouldBe() {
+        ChangeRing parsed = ring();
+        ChangeRing decoded = ring();
+        int[][] tuples = {{ChangeEntry.ADD, 4, 3, 0, 8}, {ChangeEntry.REMOVE, Integer.MAX_VALUE, 65_535, 65_535, 0},
+                {ChangeEntry.ADD, 0, 1, 2, Integer.MAX_VALUE}};
+        long[] lsns = {11, 12, 40};
+        for (int i = 0; i < tuples.length; i++) {
+            int[] tuple = tuples[i];
+            RecordBatch batch = new RecordBatch();
+            batch.autocommitTuple(tuple[0] == ChangeEntry.ADD ? RecordType.TUPLE_ADD : RecordType.TUPLE_REMOVE,
+                    tuple[1], tuple[2], tuple[3], tuple[4]);
+            parsed.record(batch.bytes(), 0, batch.size(), lsns[i], MICROS + lsns[i]);
+            decoded.recordTuple(tuple[0], tuple[1], tuple[2], tuple[3], tuple[4], lsns[i], MICROS + lsns[i]);
+        }
+
+        for (long after : new long[]{10, 11, 39}) {
+            ChangeBuffer expected = new ChangeBuffer();
+            ChangeBuffer actual = new ChangeBuffer();
+            assertEquals(parsed.read(after, Long.MAX_VALUE, 10, expected),
+                    decoded.read(after, Long.MAX_VALUE, 10, actual), "after " + after);
+            assertEquals(expected.size(), actual.size(), "after " + after);
+            for (int i = 0; i < expected.size(); i++) {
+                assertEquals(expected.lsn(i), actual.lsn(i), "after " + after + " entry " + i);
+                assertEquals(expected.meta(i), actual.meta(i), "after " + after + " entry " + i);
+                assertEquals(expected.payload(i), actual.payload(i), "after " + after + " entry " + i);
+            }
+        }
+        assertEquals(parsed.publishedLsn(), decoded.publishedLsn());
+        assertEquals(parsed.servesFromLsn(), decoded.servesFromLsn());
+        assertEquals(39, decoded.servesFromLsn());
+    }
+
+    @Test
+    void recordTupleRefusesAChangeThatIsNotATupleWithAPositiveLsn() {
+        ChangeRing ring = ring();
+
+        assertThrows(IllegalArgumentException.class, () -> ring.recordTuple(ChangeEntry.COMMIT, 1, 1, 0, 2, 11, 0));
+        assertThrows(IllegalArgumentException.class, () -> ring.recordTuple(ChangeEntry.SCHEMA, 1, 1, 0, 2, 11, 0));
+        assertThrows(IllegalArgumentException.class, () -> ring.recordTuple(ChangeEntry.ADD, 1, 1, 0, 2, 0, 0));
+        assertEquals(10, ring.publishedLsn());
+    }
+
+    @Test
     void recordRefusesInputThatIsNotOneWholeTransaction() {
         ChangeRing ring = ring();
         RecordBatch batch = new RecordBatch();

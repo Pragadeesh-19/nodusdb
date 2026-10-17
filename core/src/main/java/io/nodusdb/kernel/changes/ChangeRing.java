@@ -18,6 +18,7 @@ public final class ChangeRing {
     private static final VarHandle PUBLISHED;
     private static final long NANOS_PER_MILLI = TimeUnit.MILLISECONDS.toNanos(1);
     private static final int MAX_ATTEMPTS = 8;
+    private static final long TUPLE_ENTRIES = 2;
     private static final int HELD = 0;
     private static final int NOT_HELD = 1;
     private static final int RETRY = 2;
@@ -108,24 +109,31 @@ public final class ChangeRing {
         if (firstLsn < 1) {
             throw new IllegalArgumentException(records + " records cannot end at LSN " + lastLsn);
         }
-        if (firstLsn != publishedLsn + 1) {
-            restartSpan(firstLsn - 1);
-        }
-        if ((long) records + 1 > capacity) {
-            restartSpan(lastLsn);
-            publish(lastLsn);
+        if (!reserve(firstLsn, lastLsn, (long) records + 1)) {
             return;
         }
-        LIMIT.setOpaque(this, written + records + 1);
-        VarHandle.releaseFence();
         reader.rewind();
         long lsn = firstLsn;
         while (reader.hasRecord()) {
             ChangeExtractor.extract(reader, lsn++, commitMicros, writer);
             reader.advance();
         }
-        PUBLISHED.setRelease(this, written);
-        publish(lastLsn);
+        complete(lastLsn);
+    }
+
+    public void recordTuple(int kind, int object, int relation, int subjectRelation, int subject, long lsn,
+                            long commitMicros) {
+        if (!ChangeEntry.isTuple(kind)) {
+            throw new IllegalArgumentException("a tuple change is an add or a remove: " + kind);
+        }
+        if (lsn < 1) {
+            throw new IllegalArgumentException("a tuple change has a positive LSN: " + lsn);
+        }
+        if (!reserve(lsn, lsn, TUPLE_ENTRIES)) {
+            return;
+        }
+        ChangeExtractor.autocommitTuple(kind, object, relation, subjectRelation, subject, lsn, commitMicros, writer);
+        complete(lsn);
     }
 
     public boolean read(long afterLsn, long boundLsn, int maxChanges, ChangeBuffer out) {
@@ -255,6 +263,25 @@ public final class ChangeRing {
 
     private int slot(long index) {
         return (int) (index & mask) * ChangeEntry.LONGS;
+    }
+
+    private boolean reserve(long firstLsn, long lastLsn, long entries) {
+        if (firstLsn != publishedLsn + 1) {
+            restartSpan(firstLsn - 1);
+        }
+        if (entries > capacity) {
+            restartSpan(lastLsn);
+            publish(lastLsn);
+            return false;
+        }
+        LIMIT.setOpaque(this, written + entries);
+        VarHandle.releaseFence();
+        return true;
+    }
+
+    private void complete(long lastLsn) {
+        PUBLISHED.setRelease(this, written);
+        publish(lastLsn);
     }
 
     private void restartSpan(long lsn) {
