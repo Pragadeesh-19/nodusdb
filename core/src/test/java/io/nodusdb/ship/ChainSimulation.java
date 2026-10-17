@@ -53,6 +53,8 @@ final class ChainSimulation implements AutoCloseable {
     private static final int FOLLOWERS = 3;
     private static final int SETTLE_STEPS = 4_000;
     private static final double FAULT_RATE = 0.04;
+    private static final int PROBE_PERCENT = 20;
+    private static final long PROBE_SEED_FACTOR = 7_919;
 
     private final class Follower {
 
@@ -111,10 +113,13 @@ final class ChainSimulation implements AutoCloseable {
     private ShipState.CutRequest pendingCut;
     private ShipState cutState;
     private long coveredEraseLsn;
+    private final Random probing;
+    private final HistoryProbe probe;
 
     ChainSimulation(long seed, Path directory) throws IOException {
         this.seed = seed;
         this.random = new Random(seed);
+        this.probing = new Random(seed * PROBE_SEED_FACTOR + 1);
         this.directory = directory;
         ShipSettings settings = ShipSettings.defaults().withRetention(Duration.ofDays(7));
         this.rig = new ShipperRig(new MemoryObjectStore(storeMillis::get), settings, SyncMode.SYNC);
@@ -124,6 +129,8 @@ final class ChainSimulation implements AutoCloseable {
         for (int id = 0; id < FOLLOWERS; id++) {
             followers.add(new Follower(id));
         }
+        this.probe = new HistoryProbe(rig.memory, Files.createDirectories(directory.resolve("scratch-history")),
+                committed, this::stateAt, this::lastChainLsn, this::require, seed);
     }
 
     void run(int count) throws IOException {
@@ -131,6 +138,9 @@ final class ChainSimulation implements AutoCloseable {
             steps++;
             nanos.addAndGet(STEP_NANOS);
             act();
+            if (probing.nextInt(100) < PROBE_PERCENT) {
+                probe.step();
+            }
         }
     }
 
@@ -151,6 +161,7 @@ final class ChainSimulation implements AutoCloseable {
         require(maxShipped <= rig.log.lastLsn(), "a shipped LSN exceeds the log");
         verifyNoErasedNames();
         verifyFencing();
+        probe.settle();
     }
 
     @Override
@@ -387,6 +398,7 @@ final class ChainSimulation implements AutoCloseable {
         for (Follower follower : followers) {
             follower.store.randomFaults(seed + 31L * follower.id + steps, FAULT_RATE, FAULT_RATE, 0);
         }
+        probe.faults(true, seed + 97L + steps, FAULT_RATE);
     }
 
     private void disableFaults() {
@@ -395,6 +407,7 @@ final class ChainSimulation implements AutoCloseable {
         for (Follower follower : followers) {
             follower.store.stopRandomFaults();
         }
+        probe.faults(false, 0, 0);
     }
 
     private void restartFollower(Follower follower) throws IOException {

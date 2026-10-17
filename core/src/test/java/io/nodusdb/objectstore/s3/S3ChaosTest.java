@@ -7,10 +7,14 @@ import io.nodusdb.authz.schema.SchemaFixtures;
 import io.nodusdb.chain.ChainLayout;
 import io.nodusdb.kernel.GraphKernel;
 import io.nodusdb.kernel.Token;
+import io.nodusdb.kernel.changes.ChangeRing;
+import io.nodusdb.kernel.past.PastTarget;
+import io.nodusdb.kernel.past.PastView;
 import io.nodusdb.log.LogConfig;
 import io.nodusdb.log.SyncMode;
 import io.nodusdb.objectstore.ListPage;
 import io.nodusdb.objectstore.ObjectInfo;
+import io.nodusdb.objectstore.ObjectStoreException;
 import io.nodusdb.objectstore.s3.FaultProxy.Fault;
 import io.nodusdb.replica.FollowerConfig;
 import io.nodusdb.replica.FollowerRuntime;
@@ -19,6 +23,9 @@ import io.nodusdb.ship.ShippingConfig;
 import io.nodusdb.ship.ShippingFixture;
 import io.nodusdb.storage.DurableGraph;
 import io.nodusdb.storage.GraphDigest;
+import io.nodusdb.watch.ChangeBatch;
+import io.nodusdb.watch.ChangeFeed;
+import io.nodusdb.watch.ChangeKind;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -267,6 +274,72 @@ class S3ChaosTest {
                 .filter(request -> request.method().equals("GET") && request.target().contains("_nodus/snapshots/"))
                 .count();
         assertTrue(snapshotGets >= 3, "the cut downloads were retried: " + snapshotGets);
+    }
+
+    @Test
+    void aWatchOnAFollowerReadsAnOldCursorFromTheChainThroughCutReplies() throws IOException {
+        GraphKernel writer = writer(upstream.endpoint());
+        TupleStore tuples = TupleStore.open(writer);
+        tuples.applySchema(SchemaFixtures.DOCUMENTS);
+        Token start = writer.token();
+        List<Token> written = new ArrayList<>();
+        for (int i = 0; i < 6; i++) {
+            written.add(tuples.write(new TupleTransaction().add("document:w" + i, "viewer", "user:alice"),
+                    Durability.LAKE));
+        }
+        FollowerRuntime follower = follow(proxy.endpoint());
+        Token last = written.get(written.size() - 1);
+        await(() -> follower.state().phase() == Phase.CURRENT && follower.kernel().appliedLsn() >= last.lsn(),
+                "the follower to apply every write");
+        proxy.inject(request -> request.method().equals("GET") && request.target().contains("_nodus/chain/"),
+                Fault.TRUNCATE_RESPONSE, 4);
+        ChangeFeed feed = new ChangeFeed(follower.kernel(), follower.kernel().history().recordSources(),
+                ChangeRing.MIN_CAPACITY);
+
+        List<Token> seen = new ArrayList<>();
+        Token cursor = start;
+        int failures = 0;
+        while (cursor.lsn() < last.lsn() && failures < 50) {
+            try {
+                ChangeBatch batch = feed.read(cursor, ChangeFeed.NO_BOUND, 100, Duration.ZERO);
+                batch.changes().stream().filter(change -> change.kind() == ChangeKind.ADD)
+                        .forEach(change -> seen.add(change.token()));
+                cursor = batch.next();
+            } catch (ObjectStoreException interrupted) {
+                failures++;
+            }
+        }
+        feed.close();
+
+        assertEquals(written, seen);
+        assertTrue(failures > 0, "the proxy cut some chain reads");
+    }
+
+    @Test
+    void anAsOfBuildOnAFollowerSurvivesCutSnapshotDownloadsAndMatchesTheWriter() throws IOException {
+        GraphKernel writer = writer(upstream.endpoint());
+        TupleStore tuples = TupleStore.open(writer);
+        tuples.applySchema(SchemaFixtures.DOCUMENTS);
+        for (int i = 0; i < 4; i++) {
+            tuples.write(new TupleTransaction().add("document:p" + i, "viewer", "user:alice"), Durability.LAKE);
+        }
+        writer.checkpoint();
+        Token target = tuples.write(new TupleTransaction().add("document:q", "viewer", "user:bob"), Durability.LAKE);
+        GraphDigest expected = GraphDigest.of(writer);
+        tuples.write(new TupleTransaction().add("document:later", "viewer", "user:carol"), Durability.LAKE);
+        FollowerRuntime follower = follow(proxy.endpoint());
+        await(() -> follower.state().phase() == Phase.CURRENT, "the follower to become current");
+        proxy.inject(request -> request.method().equals("GET") && request.target().contains("_nodus/snapshots/"),
+                Fault.TRUNCATE_RESPONSE, 2);
+
+        PastView view = follower.kernel().history().past().open(new PastTarget.AtToken(target),
+                GraphKernel.NO_MEMORY_LIMIT, Duration.ofSeconds(30));
+        try {
+            assertEquals(target, view.report().position());
+            assertEquals(expected, GraphDigest.of(view.kernel()));
+        } finally {
+            view.close();
+        }
     }
 
     @Test
