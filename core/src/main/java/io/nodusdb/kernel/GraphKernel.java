@@ -66,12 +66,12 @@ public final class GraphKernel implements AutoCloseable {
     }
 
     private GraphKernel(long maxMemoryBytes, ClosureLimits closureLimits, boolean replica) {
-        if (maxMemoryBytes < NO_MEMORY_LIMIT) {
-            throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
-        }
+        this(budgetOf(maxMemoryBytes), closureLimits, replica);
+    }
+
+    private GraphKernel(MemoryBudget budget, ClosureLimits closureLimits, boolean replica) {
+        Objects.requireNonNull(budget, "budget");
         Objects.requireNonNull(closureLimits, "closureLimits");
-        MemoryBudget budget = maxMemoryBytes == NO_MEMORY_LIMIT
-                ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
         this.state = new GraphState(budget, closureLimits);
         this.sequence = state.sequence();
         this.applier = new RecordApplier(state);
@@ -91,6 +91,54 @@ public final class GraphKernel implements AutoCloseable {
 
     public static GraphKernel openReplica(long maxMemoryBytes, ClosureLimits closureLimits) {
         return new GraphKernel(maxMemoryBytes, closureLimits, true);
+    }
+
+    public static GraphKernel openReplica(MemoryBudget budget) {
+        return new GraphKernel(budget, ClosureLimits.fromEnvironment(), true);
+    }
+
+    private static MemoryBudget budgetOf(long maxMemoryBytes) {
+        if (maxMemoryBytes < NO_MEMORY_LIMIT) {
+            throw new IllegalArgumentException("memory limit must not be negative: " + maxMemoryBytes);
+        }
+        return maxMemoryBytes == NO_MEMORY_LIMIT ? MemoryBudget.unlimited() : MemoryBudget.limitedTo(maxMemoryBytes);
+    }
+
+    public MemoryBudget budget() {
+        return state.budget();
+    }
+
+    public void completeClosure() {
+        writer.lock();
+        try {
+            requireOpen();
+            ClosureIndex index = state.closure();
+            while (index.hasWork()) {
+                sequence.beginWrite();
+                try {
+                    index.runSlice();
+                } finally {
+                    sequence.endWrite();
+                }
+            }
+        } finally {
+            writer.unlock();
+        }
+    }
+
+    public boolean scrubSymbol(int symbolId, byte[] pseudonym) {
+        requireReplica("scrub a symbol");
+        Objects.requireNonNull(pseudonym, "pseudonym");
+        writer.lock();
+        try {
+            requireOpen();
+            if (symbolId < 0 || symbolId >= state.symbols().size() || state.symbols().isErased(symbolId)) {
+                return false;
+            }
+            return state.symbols().erase(symbolId, pseudonym);
+        } finally {
+            writer.unlock();
+        }
     }
 
     public boolean isReplica() {

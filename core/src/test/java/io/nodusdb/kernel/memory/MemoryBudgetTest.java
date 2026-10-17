@@ -78,6 +78,69 @@ class MemoryBudgetTest {
     }
 
     @Test
+    void aBudgetDrawingOnAPoolIsRefusedWhenThePoolRunsOutAndKeepsItsOwnCount() {
+        MemoryBudget pool = MemoryBudget.limitedTo(100);
+        MemoryBudget first = MemoryBudget.drawingOn(pool, 80);
+        MemoryBudget second = MemoryBudget.drawingOn(pool, Long.MAX_VALUE);
+        first.charge(60);
+
+        assertThrows(MemoryLimitExceededException.class, () -> second.charge(41));
+        assertThrows(MemoryLimitExceededException.class, () -> first.charge(21));
+
+        assertEquals(0, second.used());
+        assertEquals(60, first.used());
+        assertEquals(60, pool.used());
+        assertFalse(second.canCharge(41));
+        assertThrows(MemoryLimitExceededException.class, () -> second.require(41));
+        second.charge(40);
+        assertEquals(100, pool.used());
+    }
+
+    @Test
+    void releasingABudgetReturnsItsChargesToThePool() {
+        MemoryBudget pool = MemoryBudget.limitedTo(100);
+        MemoryBudget view = MemoryBudget.drawingOn(pool, 100);
+        view.charge(70);
+
+        view.releaseAll();
+
+        assertEquals(0, view.used());
+        assertEquals(0, pool.used());
+        MemoryBudget.drawingOn(pool, 100).charge(100);
+        assertEquals(100, pool.used());
+    }
+
+    @Test
+    void concurrentChargesNeverPassThePoolLimit() throws InterruptedException {
+        MemoryBudget pool = MemoryBudget.limitedTo(10_000);
+        Thread[] threads = new Thread[4];
+        for (int t = 0; t < threads.length; t++) {
+            MemoryBudget view = MemoryBudget.drawingOn(pool, Long.MAX_VALUE);
+            threads[t] = new Thread(() -> {
+                for (int i = 0; i < 10_000; i++) {
+                    try {
+                        view.charge(1);
+                    } catch (MemoryLimitExceededException full) {
+                        return;
+                    }
+                }
+            });
+            threads[t].start();
+        }
+        for (Thread thread : threads) {
+            thread.join();
+        }
+
+        assertEquals(10_000, pool.used());
+    }
+
+    @Test
+    void aPoolIsRequiredAndALimitMustBePositive() {
+        assertThrows(NullPointerException.class, () -> MemoryBudget.drawingOn(null, 10));
+        assertThrows(IllegalArgumentException.class, () -> MemoryBudget.drawingOn(MemoryBudget.unlimited(), 0));
+    }
+
+    @Test
     void theExceptionNamesTheLimitTheUsageAndTheRequest() {
         MemoryBudget budget = MemoryBudget.limitedTo(100);
         budget.charge(70);
