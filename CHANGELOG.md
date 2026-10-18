@@ -25,9 +25,13 @@
 - Time travel. `Graph.as_of(token_or_datetime)` opens a read-only `PastGraph` rebuilt from the bucket, on writers and followers, standing on the last commit at or before the target; `PastGraph.advance(later)` moves it forward. Views have their own memory limit and share `history_max_memory_mb` (`Shipping` and `Follower`); `stats()["history"]` reports them and a view's `stats()["as_of"]` reports its build.
 - Error code -17, `NodusHistoryExpiredError`, when a watch cursor or an `as_of` target is older than the history that is still kept, or older than the newest erasure.
 - C exports `nodus_changes`, `nodus_watch_buffer`, `nodus_open_as_of`, `nodus_past_advance` and `nodus_past_position`.
+- A compatibility promise for 0.1.x, in the README: the graph directory format does not change within 0.1.x, a directory from rc1 opens only after `upgrade()`, and the Python API only grows. A golden directory in the tests pins the format.
+- `nodusdb.__version__`, a PyPI description, and the Apache-2.0 license, a `NOTICE` and the license of the GraalVM runtime inside every wheel.
 
 ### Changed
 
+- The wheels are one `py3-none-<platform>` file per platform instead of one per Python version. They install on every CPython from 3.10 on, including 3.14, and Python 3.9 is no longer supported.
+- The native library in the wheels is built with GraalVM Community Edition 25. The development status is Beta.
 - A snapshot reference is committed to the chain only once the chain holds every record up to its LSN, and a transaction that erases a name always starts a new chain object.
 
 ### Fixed

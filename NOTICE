@@ -1,0 +1,11 @@
+NodusDB
+Copyright 2026 Pragadeesh
+
+NodusDB is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The native library that the Python package loads, libnodusdb, is compiled ahead of time with GraalVM Community
+Edition Native Image. The compiled library contains the Native Image runtime and classes from OpenJDK. Those parts are
+licensed under the GNU General Public License, version 2, with the Classpath Exception. The text is in
+licenses/graalvm-native-image.txt, taken from the GraalVM distribution that built the library.
+
+Source code for those components: https://github.com/oracle/graal and https://github.com/openjdk/jdk

@@ -1,0 +1,65 @@
+name: verify release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        default: ""
+      smoke:
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to install from PyPI; empty means the version in python/pyproject.toml
+        type: string
+        default: ""
+      smoke:
+        description: Run the full smoke test; turn off to only import a release that predates it
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify on the index (${{ matrix.platform.tag }}, python ${{ matrix.python }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-22.04, tag: linux-x86_64 }
+          - { runner: ubuntu-22.04-arm, tag: linux-arm64 }
+          - { runner: macos-15-intel, tag: macos-x86_64 }
+          - { runner: macos-14, tag: macos-arm64 }
+          - { runner: windows-2022, tag: windows-x86_64 }
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the released version from the index
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_published.py install --version "$VERSION"
+
+      - name: Smoke test the installed package
+        if: ${{ inputs.smoke }}
+        run: python python/tests/wheel_smoke.py
+
+      - name: Import the installed package
+        if: ${{ !inputs.smoke }}
+        run: python -c "import nodusdb; print(nodusdb.__file__)"
+
+      - name: Check what a plain install resolves to
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python scripts/verify_published.py resolve --version "$VERSION"

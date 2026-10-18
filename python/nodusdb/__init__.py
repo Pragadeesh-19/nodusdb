@@ -1,4 +1,5 @@
 from ._native import find_library
+from ._version import __version__
 from .errors import (
     NodusChainTrustError,
     NodusCheckDepthError,
@@ -40,6 +41,7 @@ from .upgrade import UpgradeReport, upgrade, upgrade_cleanup
 from .watch import AccessChange, AccessWatch, Change, ChangeBatch
 
 __all__ = [
+    "__version__",
     "AccessChange",
     "AccessWatch",
     "Change",

@@ -63,20 +63,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up GraalVM 25 (Oracle)
+      - name: Set up GraalVM 25 (Oracle) for the Java tests
         uses: graalvm/setup-graalvm@v1
         with:
           java-version: "25"
           distribution: graalvm
           github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Expose GRAALVM_HOME
-        shell: bash
-        run: echo "GRAALVM_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
-
-      - name: Configure MSVC for native-image
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -90,6 +82,9 @@ jobs:
         env:
           NODUS_REQUIRE_PYTHON_VERIFIERS: "1"
         run: mvn -B -ntp test "-Dnodus.sim.seeds=300"
+
+      - name: Set up the native toolchain
+        uses: ./.github/actions/native-toolchain
 
       - name: Build native shared library
         run: mvn -B -ntp -Pnative -pl core package -DskipTests

@@ -15,30 +15,34 @@ CI builds the GraalVM native library on Ubuntu, macOS (arm64), and Windows and r
 
 Use it for state that changes all the time: agent working memory, live permission graphs, session graphs. Edges come in and go out constantly, and a query has to finish before the next event arrives.
 
-These results come from `python/benchmarks/compare.py`. The run loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000 of them, and then runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
+These results come from `python/benchmarks/compare.py`, run on 2026-10-18 against the native library the wheels carry (GraalVM Community Edition 25.0.2). The run loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000 of them, and then runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
 
 | Configuration | Insert edges/s | Delete edges/s | 3-hop median | Common neighbors median |
 |---|---:|---:|---:|---:|
-| NodusDB, flat `array('q')` | 1,246,720 | 1,331,386 | 10.5 µs | 7.1 µs |
-| NodusDB, batch of tuples | 462,169 | 522,139 | 11.0 µs | 7.3 µs |
-| NodusDB, single-edge calls | 203,442 | 202,660 | 11.7 µs | 7.2 µs |
-| NetworkX, batch | 149,633 | 299,071 | 36.0 µs | 6.6 µs |
-| SQLite, `executemany` | 124,846 | 123,609 | 113.7 µs | 22.5 µs |
-| SQLite, one statement per row | 100,403 | 96,992 | 152.0 µs | 22.3 µs |
+| NodusDB, flat `array('q')` | 162,689 | 137,975 | 27.3 µs | 15.6 µs |
+| NodusDB, batch of tuples | 132,281 | 119,379 | 27.3 µs | 15.7 µs |
+| NodusDB, single-edge calls | 71,962 | 66,951 | 27.3 µs | 19.0 µs |
+| NetworkX, single | 149,164 | 324,683 | 35.4 µs | 6.1 µs |
+| NetworkX, batch | 136,750 | 307,860 | 41.2 µs | 9.1 µs |
+| SQLite, `executemany` | 133,632 | 132,545 | 113.6 µs | 23.3 µs |
+| SQLite, one statement per row | 101,553 | 100,175 | 114.1 µs | 23.3 µs |
 
 From the same run:
 
-- Loading through the flat buffer is about 8 times faster than NetworkX's batch insert. Tuple batches are about 3 times faster.
-- The 3-hop median is about 11 times faster than SQLite's batched form, and about 14 times faster than SQLite with one statement per row.
-- NetworkX was slightly faster on common neighbors (6.6 µs against 7.3 µs). Treat that query as a tie.
+- Inserts are close to NetworkX and SQLite. The flat buffer loads 1.2 times as fast as NetworkX's batch insert and as SQLite's `executemany`.
+- NetworkX removes edges 2.2 to 2.4 times as fast as NodusDB's flat buffer does.
+- The 3-hop median is 1.3 to 1.5 times faster than NetworkX and about 4 times faster than SQLite.
+- NetworkX is faster on common neighbors (6.1 and 9.1 µs against 15.6 µs).
 
-The in-process JMH run measures a different graph and gives a 3-hop median of 15.2 µs. The raw data is in [`bench/baseline/windows-dev.json`](bench/baseline/windows-dev.json). The machine and the exact command are in [`bench/baseline/MACHINE.md`](bench/baseline/MACHINE.md).
+An earlier version of this table, measured on 2026-10-03 at commit `0b05475` (before typed log records, native-memory storage, the memory budget and the change feed), reported 1.25 million inserts per second and a 10.5 µs 3-hop median. That commit, rebuilt with GraalVM CE 22.0.2 and run on the same laptop on 2026-10-18, measured 1.06 to 1.30 million inserts per second and 10.3 to 10.7 µs. The code in this release is slower on this benchmark: 6.5 to 8 times on inserts and about 2.6 times on the 3-hop median. A native-image build runs the insert path 11 to 13 times slower than the same code on a JVM (`python/benchmarks/native_ratio.py`).
 
-These are single runs on a laptop CPU that boosts and throttles, so absolute throughput moved by a wide margin between runs during development. The ordering held in every run except the common-neighbors tie.
+The in-process JMH run (`GraphTraversalBench`, a different graph) gives a 3-hop median of 21.2 µs and a common-neighbors median of 0.50 µs, against 15.2 µs and 0.30 µs on 2026-10-03. The raw data is in [`bench/baseline/release-windows-dev.txt`](bench/baseline/release-windows-dev.txt), which also compares three GraalVM toolchains; the older baseline is [`bench/baseline/windows-dev.json`](bench/baseline/windows-dev.json). The machine and the exact command are in [`bench/baseline/MACHINE.md`](bench/baseline/MACHINE.md).
+
+These are single runs on a laptop CPU that boosts and throttles. Three runs of the NodusDB insert rate agreed within 5%.
 
 ### Durability on a real graph
 
-The durable benchmark uses the SNAP soc-Pokec graph: 30,622,564 directed edges. It is a real social network, not generated data. Each phase runs in its own process with a 6 GB heap. The full commands and the digests are in [`bench/baseline/durability-windows-dev.txt`](bench/baseline/durability-windows-dev.txt).
+The durable benchmark uses the SNAP soc-Pokec graph: 30,622,564 directed edges. It is a real social network, not generated data. Each phase runs in its own process with a 6 GB heap. The full commands and the digests are in [`bench/baseline/durability-windows-dev.txt`](bench/baseline/durability-windows-dev.txt). These numbers were measured between 2026-10-04 and 2026-10-05 on JDK 22.0.2, before the authorization work, and were not re-run for this release.
 
 | Phase | Result |
 |---|---|
@@ -84,7 +88,7 @@ Not built yet: Iceberg table metadata and Avro manifests (the manifest is Iceber
 
 ## Against other engines
 
-Two suites compare NodusDB with other engines on real data. The graph suite runs on the SNAP soc-Pokec social network, 30,622,564 directed edges. The lakehouse suite runs on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024. Each engine and workload runs in its own process. The answers are cross-checked: the permission digests, the Pokec hub degrees, and the taxi revenue total agree across every engine that finished. Each number is a single run on the same laptop as the rest of this file. The raw output is in `bench/baseline/`. The graph suite takes about 2.5 hours and the lake suite about 20 minutes.
+Two suites compare NodusDB with other engines on real data. The graph suite runs on the SNAP soc-Pokec social network, 30,622,564 directed edges. The lakehouse suite runs on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024. Each engine and workload runs in its own process. The answers are cross-checked: the permission digests, the Pokec hub degrees, and the taxi revenue total agree across every engine that finished. Each number is a single run on the same laptop as the rest of this file. Both suites ran on 2026-10-04 with a native library built by GraalVM CE 22.0.2, before the authorization work, and have not been re-run since. The graph results describe the engine as it was then; the first table in this file shows that its per-call cost has changed. The raw output is in `bench/baseline/`. The graph suite takes about 2.5 hours and the lake suite about 20 minutes.
 
 ### Graph suite
 
@@ -147,7 +151,7 @@ On disk after ingest, the durable graph takes 258 MB, SQLite 822 MB, and DuckDB 
 - Kùzu's bulk load failed in workload A with `Buffer manager exception: ... The buffer pool is full`. It ran at default settings everywhere. I have not tuned the buffer pool, so its numbers may change with configuration.
 - Kùzu and igraph hit the 1,200-second budget in workload B. Their rates count only the operations they completed.
 - Peak RSS in workload A includes the Pokec data that each worker loads. Use the on-disk figures to compare footprint.
-- Traversal on Pokec is not sub-microsecond. The design targets sub-microsecond k-hop queries, and this suite does not reach that target. The smaller benchmarks above (10 to 15 µs) do not reach it either.
+- Traversal on Pokec is not sub-microsecond. The design targets sub-microsecond k-hop queries, and this suite does not reach that target. The smaller benchmarks above (21 to 27 µs) do not reach it either.
 
 ### Lakehouse suite
 
@@ -195,7 +199,7 @@ Each engine's W4 row is DuckDB reading that engine's own files. The W4 layout of
 
 ## Quickstart
 
-Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building). Release wheels install with `pip install nodusdb` and need no compiler or GraalVM. The release workflow builds them, and they become available once a release is published.
+Install the Python package from a checkout. It needs the native library, so build it or point `NODUSDB_LIBRARY` at a copy. See [Building](#building). Release wheels install with `pip install nodusdb` on Python 3.10 or newer and need no compiler or GraalVM.
 
 ```sh
 pip install -e python/
@@ -606,11 +610,11 @@ The Java sources compile for JDK 22.
 Prerequisites:
 
 - JDK 22 and Maven 3.9 or newer.
-- Python 3.9 or newer. The tests ran on 3.12.
-- GraalVM with `native-image`, for the native library only: CE 22.0.2 locally, or Oracle GraalVM 25 as in CI. The toolchain changes the speed of the library. A local build with GraalVM CE 23 ran `add_edge` in about 1.2 ms where CE 22.0.2 took 9 microseconds, because memory-segment access was not optimized. Check a new toolchain with a timing before you trust it.
+- Python 3.10 or newer. The tests ran on 3.12.
+- GraalVM Community Edition with `native-image`, for the native library only: 25.0.2 as in CI and in the wheels, or 22.0.2. The toolchain changes the speed of the library. On the development laptop the two Community Edition versions agree within 5%. Oracle GraalVM 25 took about a third less time per call on the same code, but its free license allows redistributing the compiled library only without a fee for products that bundle it, so the wheels, which are Apache-2.0, use the Community Edition. A local build with GraalVM CE 23 ran `add_edge` in about 1.2 ms where CE 22.0.2 took 9 microseconds, because memory-segment access was not optimized. Check a new toolchain with a timing before you trust it.
 - On Windows, Visual Studio 2022 with the C++ build tools.
 
-CI runs the Java tests on Oracle GraalVM 25 with 3 to 4 cores and a slow disk. A test that passes on a 16-core machine can fail there when it assumes a background thread is idle, has finished, or has not started. Before you push a change that touches threads, shipping, followers or any test that waits, run the suite pinned to two cores with CPU spinners on them (Windows):
+CI runs the Java tests on Oracle GraalVM 25 with 3 to 4 cores and a slow disk; only the native library uses the Community Edition. A test that passes on a 16-core machine can fail there when it assumes a background thread is idle, has finished, or has not started. Before you push a change that touches threads, shipping, followers or any test that waits, run the suite pinned to two cores with CPU spinners on them (Windows):
 
 ```powershell
 $env:JAVA_HOME = "C:\path\to\graalvm-jdk-25"
@@ -657,7 +661,17 @@ java -jar bench/target/benchmarks.jar -prof gc
 
 The Python loader looks in `NODUSDB_LIBRARY`, then `python/nodusdb/bin/<os>-<arch>/`, then `target/native/`. CI copies the library into `bin/`. If you rebuild `target/native/` by hand, copy it into `bin/` too, or the loader keeps using the old copy.
 
-Release wheels come from `.github/workflows/wheels.yml`. It builds the native library on Linux (x86_64 and arm64), macOS (x86_64 and arm64), and Windows, and then runs cibuildwheel for CPython 3.9 to 3.13. Each wheel is smoke-tested against the installed package. The workflow runs on every push. It publishes to PyPI only when a release is published, through trusted publishing and a required reviewer on the `pypi` environment. Linux wheels are tagged `manylinux_2_34`, so they need glibc 2.34 or newer: Ubuntu 22.04 and later, Debian 12, and RHEL 9. The Linux wheels are installed and smoke-tested on the host runner, because the manylinux2014 build container cannot install a 2.34 wheel. macOS wheels target 11.0 and later. Windows wheels are x86_64 only.
+Release wheels come from `.github/workflows/wheels.yml`. It builds the native library with GraalVM Community Edition on Linux (x86_64 and arm64), macOS (x86_64 and arm64), and Windows, and then runs cibuildwheel once per platform. The native library is the only compiled part of the package and Python loads it through `ctypes`, so each wheel is tagged `py3-none-<platform>` and works on every CPython from 3.10 on. Every wheel is then installed and smoke-tested on Python 3.10 to 3.14 on its own platform, and the smoke test calls each feature family and checks the license files and `__version__`. A separate step points `Shipping.s3` at `https://s3.amazonaws.com` with a fake key from the installed wheel and requires the S3 authentication error, which shows that the library trusts public certificates. The workflow runs on every push. It publishes to PyPI only when a release is published, through trusted publishing and a required reviewer on the `pypi` environment. Before it uploads, `scripts/check_release.py` requires the release tag to be `v` plus the package version, the release's pre-release flag to match the version suffix, and the five expected wheels to be present. Linux wheels are tagged `manylinux_2_34`, so they need glibc 2.34 or newer: Ubuntu 22.04 and later, Debian 12, and RHEL 9. The manylinux2014 build container cannot install a 2.34 wheel, so the install step runs on the host runner. macOS wheels target 11.0 and later. Windows wheels are x86_64 only.
+
+## Compatibility
+
+This is what 0.1.x promises. A golden graph directory in the test suite pins the first two items: a test opens it with the current code on every build.
+
+- **Graph directories.** The on-disk format does not change within 0.1.x: format 2, with typed log records and a version 3 snapshot. A directory written by any 0.1.x release opens in every later 0.1.x release. A release that meets a newer format refuses to open it with `graph directory format N needs a newer nodusdb` and leaves the files alone.
+- **Directories from 0.1.0rc1.** They use the earlier format and are refused with `NodusUpgradeRequiredError` until `nodusdb.upgrade(path)` converts them. The upgrade keeps the original files in `pre-v2/`. It cannot be undone: rc1 refuses an upgraded directory.
+- **The Python API.** The names and signatures in this README stay in 0.1.x. Releases may add new ones. A change that breaks an existing call waits for 0.2.
+- **The native library.** The C functions inside it are not an interface. The wheel carries its own copy, so the package and the library always match.
+- **Not covered yet.** The signed chain in the bucket and the Iceberg table carry their own format versions, but this promise does not cover them yet.
 
 ## Limits
 

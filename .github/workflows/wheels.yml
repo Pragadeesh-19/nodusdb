@@ -30,20 +30,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up GraalVM 25 (Oracle)
-        uses: graalvm/setup-graalvm@v1
-        with:
-          java-version: "25"
-          distribution: graalvm
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Expose GRAALVM_HOME
-        shell: bash
-        run: echo "GRAALVM_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
-
-      - name: Configure MSVC for native-image
-        if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Set up the native toolchain
+        uses: ./.github/actions/native-toolchain
 
       - name: Build native shared library
         run: mvn -B -ntp -Pnative -pl core package -DskipTests
@@ -79,27 +67,34 @@ jobs:
           - runner: ubuntu-22.04
             tag: linux-x86_64
             archs: x86_64
-            plat: manylinux_2_34_x86_64
+            wheel_platform: manylinux_2_34_x86_64
             test_skip: "*-manylinux*"
           - runner: ubuntu-22.04-arm
             tag: linux-arm64
             archs: aarch64
-            plat: manylinux_2_34_aarch64
+            wheel_platform: manylinux_2_34_aarch64
             test_skip: "*-manylinux*"
           - runner: macos-15-intel
             tag: macos-x86_64
             archs: x86_64
+            wheel_platform: macosx_11_0_x86_64
             test_skip: ""
           - runner: macos-14
             tag: macos-arm64
             archs: arm64
+            wheel_platform: macosx_11_0_arm64
             test_skip: ""
           - runner: windows-2022
             tag: windows-x86_64
             archs: AMD64
+            wheel_platform: win_amd64
             test_skip: ""
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: Restore native library
         uses: actions/download-artifact@v4
@@ -107,45 +102,103 @@ jobs:
           name: native-${{ matrix.tag }}
           path: python/nodusdb/bin/${{ matrix.tag }}
 
-      - name: Build and test wheels
+      - name: Stage the license files into the package
+        run: python scripts/stage_package_files.py
+
+      - name: Build and test the wheel
         uses: pypa/cibuildwheel@v2.23.4
         with:
           package-dir: python
           output-dir: dist
         env:
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp312-*"
           CIBW_SKIP: "*-musllinux_* *-manylinux_i686 *-win32 pp*"
           CIBW_ARCHS: ${{ matrix.archs }}
           CIBW_TEST_COMMAND: "python {package}/tests/wheel_smoke.py"
           CIBW_TEST_SKIP: ${{ matrix.test_skip }}
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --plat ${{ matrix.plat }} -w {dest_dir} {wheel}"
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair --plat ${{ matrix.wheel_platform }} -w {dest_dir} {wheel}"
           CIBW_ENVIRONMENT_MACOS: "MACOSX_DEPLOYMENT_TARGET=11.0"
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: "delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
-      - name: Smoke test Linux wheel on the host
-        if: runner.os == 'Linux'
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Check the wheel name
+        run: python scripts/check_release.py wheels --dir dist --platform ${{ matrix.wheel_platform }}
 
-      - name: Install and run Linux wheel on the host
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -eu
-          python -m pip install dist/*cp312*manylinux*.whl
-          python python/tests/wheel_smoke.py
-
-      - name: Upload wheels
+      - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.tag }}
           path: dist/*.whl
           if-no-files-found: error
 
+  install:
+    name: install (${{ matrix.platform.tag }}, python ${{ matrix.python }})
+    needs: wheels
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-22.04, tag: linux-x86_64 }
+          - { runner: ubuntu-22.04-arm, tag: linux-arm64 }
+          - { runner: macos-15-intel, tag: macos-x86_64 }
+          - { runner: macos-14, tag: macos-arm64 }
+          - { runner: windows-2022, tag: windows-x86_64 }
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Download the wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheels-${{ matrix.platform.tag }}
+          path: dist
+
+      - name: Install the wheel
+        shell: bash
+        run: python -m pip install dist/*.whl
+
+      - name: Smoke test the installed wheel
+        run: python python/tests/wheel_smoke.py
+
+      - name: Check that the library trusts the certificates of S3
+        if: matrix.python == '3.12'
+        run: python scripts/https_probe.py
+
+  guard:
+    name: check the release
+    needs: [wheels, install]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the release tag and the package version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: python scripts/check_release.py tag --tag "$RELEASE_TAG" --prerelease "$RELEASE_PRERELEASE"
+
+      - name: Download wheels
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check that the wheels are exactly the expected five
+        run: python scripts/check_release.py wheels --dir dist
+
   publish:
     name: publish to PyPI
-    needs: wheels
+    needs: guard
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     environment: pypi
@@ -159,26 +212,14 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Check for a PyPI API token
-        id: token
-        env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -n "$PYPI_API_TOKEN" ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish with API token
-        if: steps.token.outputs.present == 'true'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
-          password: ${{ secrets.PYPI_API_TOKEN }}
-
       - name: Publish with trusted publishing
-        if: steps.token.outputs.present != 'true' && github.event_name == 'release'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist
+          skip-existing: true
+
+  verify:
+    name: verify the published release
+    needs: publish
+    if: github.event_name == 'release'
+    uses: ./.github/workflows/verify-release.yml

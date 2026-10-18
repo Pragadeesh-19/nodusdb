@@ -30,3 +30,8 @@ CLAUDE.md
 .DS_Store
 Thumbs.db
 *.log
+
+# License files staged into the Python package at build time
+python/LICENSE
+python/NOTICE
+python/licenses/
