@@ -330,6 +330,44 @@
 **Priority:** P3
 **Depends on:** none
 
+## Release and packaging
+
+### Wheels for more platforms
+
+**What:** Build and publish wheels for musllinux (Alpine), Linux with glibc older than 2.34, and Windows arm64.
+
+**Why:** A user on Alpine images, RHEL 8, Ubuntu 20.04, Debian 11, Amazon Linux 2 or a Windows ARM laptop gets pip's bare "no matching distribution" and no source package to fall back on.
+
+**Context:** D50 chose manylinux_2_34 on purpose and the README documents it. The matrix is in `.github/workflows/wheels.yml`. Start with manylinux_2_28 and Windows arm64, which have hosted runners; musl is the hard one because native-image needs a musl toolchain.
+
+**Effort:** L
+**Priority:** P3
+**Depends on:** D224 and D225 (the toolchain and the py3-none tags, which the new wheels follow)
+
+### A source package that explains an unsupported platform
+
+**What:** Publish an sdist whose only job is to fail with a readable message ("no prebuilt library for this platform; supported platforms are ...") when pip falls back to it.
+
+**Why:** With wheels only, pip reports "Could not find a version that satisfies the requirement nodusdb" and the user cannot learn the cause.
+
+**Context:** `CLAUDE.md` section 7 and D50 say wheels only; this would revise that. The sdist must never be chosen on a supported platform, where a wheel always wins.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** the platform list above, and D227 (the page it points to)
+
+### Pin the release workflow's actions
+
+**What:** Pin every third-party action in `wheels.yml` by commit SHA and add `.github/dependabot.yml` for github-actions.
+
+**Why:** The publish job holds `id-token: write`. `pypa/gh-action-pypi-publish@release/v1`, `graalvm/setup-graalvm@v1`, `ilammy/msvc-dev-cmd@v1` and `pypa/cibuildwheel@v2.23.4` can change underneath the workflow. The reviewer gate on the `pypi` environment limits the damage but does not read the action's code.
+
+**Context:** Do it as its own change after 0.1.0 so a pin mistake is not mistaken for a release mistake. Without Dependabot the pins go stale.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** D228
+
 ## Completed
 
 ### Watch and as_of
