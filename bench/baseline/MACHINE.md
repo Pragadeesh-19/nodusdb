@@ -47,4 +47,6 @@ java -jar bench/target/benchmarks.jar "CheckModelBench|ReachabilityBench" -f 2 -
 
 `CheckModelBench` measured 384, 526 and 1,687 ns against 410, 552 and 1,781 ns in `follower-windows-dev.json`, so the index adds nothing measurable to checks that do not go through nested groups. Every check allocates the same bytes with the index on or off; that allocation is the string handling in `TupleStore.check`.
 
+`release-windows-dev.txt` holds the measurements behind the choice of the wheel toolchain (GraalVM CE 22.0.2, CE 25.0.2 and Oracle GraalVM 25 on the same code), the comparison of the code behind the first README table with the release code, the table in the README, and `GraphTraversalBench`. The commands are in the file.
+
 The laptop CPU boosts and throttles. Expect variation of tens of percent between runs on this machine, and compare runs only when they were taken in similar conditions.

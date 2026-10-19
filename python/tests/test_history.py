@@ -24,6 +24,8 @@ from nodusdb import (  # noqa: E402
     generate_signing_key,
 )
 
+SNAPSHOT_WAIT_SECONDS = 30
+
 SCHEMA = """
 schema 1
 type user
@@ -69,6 +71,12 @@ class AsOfTest(unittest.TestCase):
         self.graphs.append(graph)
         graph.apply_schema(SCHEMA)
         return graph
+
+    def await_snapshot_reference(self, graph, lsn):
+        deadline = time.monotonic() + SNAPSHOT_WAIT_SECONDS
+        while graph.stats()["shipping"]["snapshot_references"]["lsn"] < lsn:
+            self.assertLess(time.monotonic(), deadline, f"no snapshot at or after LSN {lsn} was ever referenced")
+            time.sleep(0.01)
 
     def grant(self, graph, document, user):
         return graph.write(Transaction().add(document, "viewer", user), durability="lake")
@@ -136,9 +144,10 @@ class AsOfTest(unittest.TestCase):
     def test_history_before_the_newest_erasure_is_gone_and_a_view_forgets_a_name_erased_later(self):
         graph = self.writer()
         early = self.grant(graph, "document:plan", "user:carol")
-        graph.erase("user:carol")
+        erased = graph.erase("user:carol")
         graph.checkpoint()
         later = self.grant(graph, "document:spec", "user:alice")
+        self.await_snapshot_reference(graph, erased.lsn)
 
         with self.assertRaises(NodusHistoryExpiredError):
             graph.as_of(early)

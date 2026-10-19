@@ -368,6 +368,30 @@
 **Priority:** P2
 **Depends on:** D228
 
+### An as_of right after an erasure can raise history-expired
+
+**What:** When no snapshot at or after the newest erasure is in the chain yet, but the writer has taken one that is still being referenced, make `as_of` wait for that reference within its own timeout instead of raising -17.
+
+**Why:** The cut that an erasure makes removes the older snapshots. A view asked for at once, before the checkpoint's snapshot is uploaded and referenced, finds no anchor and raises `NodusHistoryExpiredError`, although the history is only a moment from being available. It showed as a flaky test (D240).
+
+**Context:** `BucketPast.prepare` waits on `ShipWatermark.awaitShipped`, which counts shipped records only. The snapshot reference LSN is in `ShipState` (`references().lsn()`) but not in the `ShipWatermark` interface. The fix is to expose it there and wait for `max(checkpoint LSN, erasure floor)` to be referenced before the anchor search.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** none
+
+### The in-memory write path is slower than it was at Ring 3
+
+**What:** Find out why 1,000,000 flat inserts take about 6 seconds in the release library where commit `0b05475` took under 1 second, and why 3-hop is 2.6 times slower.
+
+**Why:** The README used to claim 1.25 million inserts per second. The release library measures about 165 thousand on the same laptop (D238). The design target is millions of edge writes per second.
+
+**Context:** `python/benchmarks/native_ratio.py` shows the library running the insert path 11 to 13 times slower than the same code on a JVM, so native-image code for off-heap access is a large part of it. Oracle GraalVM 25 takes about a third less time per call than the Community Edition. Between 0b05475 and now the engine gained typed log records, native-memory storage, the memory budget, a seqlock on every write and the change feed. `bench/baseline/release-windows-dev.txt` holds the comparison.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** none
+
 ## Completed
 
 ### Watch and as_of

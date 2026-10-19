@@ -2,7 +2,7 @@
 
 Status: decisions D223 to D233 accepted on 2026-10-18. The work is built on branch release/0.1.0rc2. The release itself
 (tagging, publishing, yanking) happens only after the branch is merged and each publish is approved by the owner.
-Choices made while building are recorded in [`docs/decisions.md`](../decisions.md) after D233; where they differ from
+Choices made while building are D234 to D240 in [`docs/decisions.md`](../decisions.md); where they differ from
 this document they win.
 
 The package on PyPI is `0.1.0rc1`, published on 2026-10-05 from commit `743f842`. Main is 182 commits ahead of it:

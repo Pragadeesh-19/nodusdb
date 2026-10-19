@@ -1,0 +1,87 @@
+# Release baseline: windows-dev
+
+Machine: see bench/baseline/MACHINE.md. Python 3.12, JMH 1.37 on Oracle HotSpot 22.0.2+9-70. Measured on 2026-10-18.
+Native libraries built from commit 5927971 (main) with three toolchains:
+
+| Name | Toolchain |
+|---|---|
+| ce22 | GraalVM Community Edition 22.0.2+9.1 |
+| ce25 | GraalVM Community Edition 25.0.2+10.1 (the toolchain of the wheels, D224) |
+| ora25 | Oracle GraalVM 25.0.4+7.1 |
+
+## Toolchains compared
+
+native_ratio.py runs the same Java probe in the JVM and inside the native library, three alternating rounds:
+
+    python python/benchmarks/native_ratio.py --library <dll> --limit 1000
+
+| Toolchain | add_edge, native ns/op (rounds) | has_edge, native ns/op (rounds) | add_edge ratio to the JVM |
+|---|---|---|---|
+| ce22 | 6,706 / 6,993 / 6,387 | 693 / 746 / 671 | 12.10 / 12.33 / 11.03 |
+| ce25 | 6,636 / 6,605 / 6,617 | 690 / 696 / 683 | 11.44 / 11.53 / 12.60 |
+| ora25 | 4,371 / 4,587 / 4,290 | 447 / 471 / 425 | 8.03 / 8.22 / 7.32 |
+
+The medians of ce25 and ce22 are 1.3% apart on add_edge and 0.4% apart on has_edge, inside D224's 10% rule. Oracle
+GraalVM took about a third less time per call. CI measured ratios on Oracle GraalVM 25 of 6.14 and 7.96 (Windows)
+and 2.87 and 8.18 (macOS) in run 39051369528; the Community Edition ratios on CI are set by the first CI run of the
+release branch.
+
+compare.py with only the NodusDB backend, one million edges, two rounds per toolchain:
+
+    NODUSDB_LIBRARY=<dll> python python/benchmarks/compare.py --backends nodusdb
+
+| Toolchain | flat inserts/s | flat deletes/s | 3-hop median | common neighbors median |
+|---|---|---|---|---|
+| ce22 | 169,460 / 160,466 | 140,175 / 140,457 | 27.6 / 29.1 us | 15.3 / 15.3 us |
+| ce25 | 158,226 / 166,323 | 137,453 / 133,076 | 29.8 / 27.2 us | 15.7 / 16.6 us |
+| ora25 | 233,996 / 220,327 | 198,952 / 194,356 | 22.9 / 22.4 us | 13.8 / 13.9 us |
+
+Size of the library and of its deflated copy (what a wheel carries):
+
+| Toolchain | Library | Deflated |
+|---|---|---|
+| ce22 | 40,931,328 bytes | 14,251,677 bytes |
+| ce25 | 39,092,224 bytes | 13,491,760 bytes |
+| ora25 | 56,930,304 bytes | 24,475,233 bytes |
+
+The Windows wheel built from the ce25 library is 13,534,319 bytes. The rc1 wheel was 4,905,655 bytes.
+
+## The code behind the README's first table, against the release code
+
+Commit 0b05475 (2026-10-03, the commit that recorded the original table) was built with ce22 and run with its own
+compare.py, alternating with the release code built with ce22, on 2026-10-18:
+
+| Code | flat inserts/s | batch inserts/s | single inserts/s | 3-hop median |
+|---|---|---|---|---|
+| 0b05475 | 1,301,428 / 1,056,179 | 562,414 / 548,896 | 215,027 / 214,664 | 10.7 / 10.3 us |
+| release code | 169,954 / 167,184 | 139,983 / 143,653 | 75,587 / 72,816 | 26.5 / 27.3 us |
+
+The old numbers reproduce on this laptop today, so the difference is in the code: 6.5 to 8 times on flat inserts and
+about 2.6 times on the 3-hop median. The cause has not been investigated.
+
+## The README's graph table (ce25, all backends, one run)
+
+    NODUSDB_LIBRARY=<ce25 dll> python python/benchmarks/compare.py
+
+| Configuration | inserts/s | deletes/s | 2-hop | 3-hop | 3-hop mean | common neighbors |
+|---|---|---|---|---|---|---|
+| nodusdb single | 71,962 | 66,951 | 17.6 us | 27.3 us | 30.6 us | 19.0 us |
+| nodusdb batch | 132,281 | 119,379 | 18.1 us | 27.3 us | 30.3 us | 15.7 us |
+| nodusdb flat | 162,689 | 137,975 | 17.8 us | 27.3 us | 30.3 us | 15.6 us |
+| networkx single | 149,164 | 324,683 | 17.1 us | 35.4 us | 38.8 us | 6.1 us |
+| networkx batch | 136,750 | 307,860 | 17.3 us | 41.2 us | 48.5 us | 9.1 us |
+| sqlite3 single | 101,553 | 100,175 | 53.9 us | 114.1 us | 133.0 us | 23.3 us |
+| sqlite3 batch | 133,632 | 132,545 | 58.2 us | 113.6 us | 129.7 us | 23.3 us |
+
+Every backend returned the same answers for 50 k-hop and 50 common-neighbor queries before timing.
+
+## GraphTraversalBench (JMH, in the JVM)
+
+    java -jar bench/target/benchmarks.jar GraphTraversalBench -wi 3 -i 5 -f 2 -prof gc
+
+| Benchmark | 2026-10-18 | 2026-10-03 (windows-dev.json) |
+|---|---|---|
+| commonNeighbors | 499.3 ns (error 9.8) | 303.6 ns |
+| kHopDepthThree | 21,174.4 ns (error 616.6) | 15,234.4 ns |
+
+Allocation: 0 B/op for commonNeighbors and 0.015 B/op for kHopDepthThree, which is JMH's own background allocation.
