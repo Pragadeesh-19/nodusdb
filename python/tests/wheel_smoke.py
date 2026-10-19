@@ -1,6 +1,8 @@
 import importlib.metadata
 import pathlib
 import shutil
+import subprocess
+import sys
 import tempfile
 import uuid
 
@@ -101,6 +103,18 @@ def check_lake_table():
         assert table.get(1) == {"amount": 5}
 
 
+def check_quiet_standard_error():
+    program = (
+        "import tempfile, nodusdb\n"
+        "with nodusdb.LakeTable(tempfile.mkdtemp(), {'amount': 'int64'}) as table:\n"
+        "    table.upsert(1, {'amount': 5})\n"
+        "    assert table.get(1) == {'amount': 5}\n"
+    )
+    result = subprocess.run([sys.executable, "-c", program], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert "WARNING" not in result.stderr, f"the library wrote a warning to standard error:\n{result.stderr}"
+
+
 def main():
     check_installation()
     check_graph_basics()
@@ -108,6 +122,7 @@ def main():
     check_old_directory_upgrade()
     check_shipped_features()
     check_lake_table()
+    check_quiet_standard_error()
     print("nodusdb", nodusdb.__version__, nodusdb.__file__, "ok")
 
 
