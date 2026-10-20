@@ -8,8 +8,9 @@ Before the native-memory fix, every MemorySegment read or write in the native li
 against under 2 ns on the JVM. The graph ratio was 5.8 to 7.7 for add_edge and 12.5 to 14.2 for has_edge in
 CI, and the lake sum ran about 350 times slower than on the JVM. With NativeMemory the laptop measured 2.5 to 2.7
 for add_edge, 1.8 to 2.2 for has_edge, 2.2 to 2.3 for lake ingest, 1.2 for the lake sum and 2.3 to 2.4 for
-the lake flush. The limit of 10 leaves about 3.7 times headroom over the worst of those and fails any change
-that brings back per-element segment access, which costs ten times or more."""
+the lake flush. CI (run 39454244353) measured 1.0 to 2.0 for add_edge, 1.4 to 1.5 for has_edge and 0.3 to 1.9
+for the lake on Windows, Ubuntu and macOS. The limit of 10 leaves about five times headroom over the worst CI
+ratio and fails any change that brings back per-element segment access, which costs ten times or more."""
 
 import argparse
 import ctypes
