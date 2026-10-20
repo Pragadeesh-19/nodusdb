@@ -380,6 +380,18 @@
 **Priority:** P2
 **Depends on:** none
 
+### The lake write path is about 40 times slower in the native library than on 2026-10-04
+
+**What:** Find why `LakeTable` ingest fell from 846,137 to 21,017 rows per second, a 250,000-row Snappy flush from 0.265 s to 9.9 s, and the native sum over 1,000,000 rows from 4.0 ms to 922.6 ms, and restore the old speed.
+
+**Why:** The lake engine is half of what this project offers, and the README and `docs/lake.md` carried the 2026-10-04 figures as if they described 0.1.0. They do not. The output files are unchanged (same sizes, same query times in DuckDB), so the loss is on the write side.
+
+**Context:** `bench/baseline/lake-release-windows-dev.txt` has the run and what it narrows down. A library built on 2026-10-07 with GraalVM CE 22 is as slow, so it is not the toolchain in the wheels. The same Java code on a plain JVM is fast (`DeltaMemTableBench` 299 ns per upsert). `python/benchmarks/lake_native_probe.py` times upsert, sum, single upsert and flush through the wheel; the native sum spends about 485 ns per element. The pattern matches memory-segment access that native-image does not optimize, in loops that touch native columns element by element. Start by profiling `NativeColumn` reads and writes in the native library and checking whether `Arena.ofAuto` segments take a slow path there. The lake moved its columns to native memory on 2026-10-05 (commits `c099214` to `d823261`), the day after `lake-heavyweights-windows-dev-v2.json` was measured at `3fdf779`, and `67061ff` switched to GC-managed arenas the same day. Build the native library at `3fdf779` and at those commits and time `python/benchmarks/lake_native_probe.py` on each.
+
+**Effort:** M
+**Priority:** P1
+**Depends on:** none
+
 ## Completed
 
 ### Native performance gate against a recorded toolchain baseline

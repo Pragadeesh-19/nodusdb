@@ -1,0 +1,97 @@
+# Lake suite on the 0.1.0 library: windows-dev
+
+Machine: see bench/baseline/MACHINE.md. Measured on 2026-10-20 with python/benchmarks/benchmark_lake_heavyweights.py
+(run, all workloads), the native library from the nodusdb 0.1.0 wheel on PyPI (GraalVM Community Edition 25.0.2),
+Python 3.12.7, pyarrow 26.0.0 and DuckDB 1.5.6. Raw output: lake-heavyweights-release-windows-dev.json.
+The previous suite (2026-10-04, library built by GraalVM CE 22.0.2) is lake-heavyweights-windows-dev-v2.json.
+
+    NODUSDB_LIBRARY=<site-packages>/nodusdb/bin/windows-x86_64/libnodusdb.dll \
+        python python/benchmarks/benchmark_lake_heavyweights.py run --out lake-heavyweights-release-windows-dev.json
+
+## Result: the NodusDB lake path is far slower than it was on 2026-10-04
+
+Every other engine ran in the same range as before or faster. NodusDB's output files are unchanged (same sizes,
+same revenue total, and DuckDB scans them in the same time). Its write path and its native aggregate are not.
+
+| Measure | 2026-10-04 | 2026-10-20 |
+|---|---:|---:|
+| W1 ingest, rows/s | 846,137 | 21,017 |
+| W2 upserts/s, one call per row | 39,335 | 16,632 |
+| W2 upserts/s, columnar batch | 1,763,882 | 25,092 |
+| W2 deletes/s, one call per key | 467,542 | 97,090 |
+| W3 flush of 250,000 rows, Snappy | 0.265 s | 9.924 s |
+| W3 flush of 250,000 rows, no compression | 0.187 s | 6.136 s |
+| W4 grouped scan of its files, median | 12.8 ms | 13.4 ms |
+| W4 native sum and average in memory, 1M rows, median | 4.0 ms | 922.6 ms |
+
+### Workload 1: streaming ingestion of 1,000,000 taxi trips
+
+| engine | rows/s | seconds | peak RSS MB |
+|---|---|---|---|
+| nodus-lake | 21,017 | 47.58 | 369 |
+| duckdb | 147,314 | 6.79 | 390 |
+| pyarrow | 547,340 | 1.83 | 377 |
+| sqlite | 285,608 | 3.50 | 557 |
+
+### Workload 2: 500,000 keyed updates and 100,000 deletes
+
+| engine | upserts/s | deletes/s | peak RSS MB |
+|---|---|---|---|
+| nodus-lake | 16,632 | 97,090 | 623 |
+| nodus-lake-batch | 25,092 | 118,402 | 410 |
+| duckdb | did not finish | did not finish | |
+| pyarrow | 329,166 | 710,651 | 681 |
+| sqlite | 243,167 | 259,898 | 615 |
+
+The DuckDB worker was stopped by hand after about 35 minutes of CPU time in the update loop. On 2026-10-04 it
+measured 960 upserts/s and 930 deletes/s, which is 520 seconds and 108 seconds.
+
+### Workload 3: flush of a 250,000-row buffer
+
+| engine | flush seconds | rows/s | files | size MB |
+|---|---|---|---|---|
+| nodus-lake | 9.924 | 25,190 | 1 | 3.95 |
+| nodus-lake-uncompressed | 6.136 | 40,741 | 1 | 5.40 |
+| duckdb | 1.124 | 222,500 | 1 | 3.66 |
+| pyarrow | 0.194 | 1,288,413 | 1 | 3.96 |
+| sqlite | 0.092 | 2,725,919 | 1 | 11.85 |
+
+### Workload 4: DuckDB aggregate over each source (latency in ms)
+
+| source | files | size MB | median ms | p99 ms | revenue total |
+|---|---|---|---|---|---|
+| nodus clean (250k-row files) | 3 | 15.71 | 13.4 | 40.4 | 27,486,629.10 |
+| nodus in-memory native, ungrouped (no files) | 0 | 0.00 | 922.6 | 1,173.3 | 27,486,629.10 |
+| nodus streaming (5k-row files) | 101 | 16.97 | 25.6 | 28.6 | 27,486,629.10 |
+| duckdb COPY parts | 4 | 14.47 | 15.0 | 16.2 | 27,486,629.10 |
+| duckdb COPY parts, ungrouped | 4 | 14.47 | 7.9 | 9.8 | 27,486,629.10 |
+| pyarrow parts | 4 | 15.51 | 17.8 | 22.0 | 27,486,629.10 |
+
+## Where the time goes: not found, but narrowed
+
+1. A library built locally on 2026-10-07 (older than the wheel, built with GraalVM CE 22) is as slow: W1 25,622 rows/s
+   and a W3 flush of 8.79 s. So this is not the Community Edition 25 toolchain, and not the wheel.
+2. The same Java code on a plain JVM is fast. `DeltaMemTableBench.sustainedUpsert`, one fork, 3 warmup and 5
+   measured iterations, JDK 22.0.2: 298.8 ns/op (error 6.8). The baseline in lake-windows-dev.json is 227 ns/op.
+   That run is a smoke test, not a baseline.
+3. `python/benchmarks/lake_native_probe.py` times the pieces through the wheel, 200,000 rows:
+
+        upsert_table 200000 rows: 2.565 s, 77,965 rows/s
+        sum over 200000 rows: 97.0 ms
+        2000 single upserts: 25.6 us each
+        flush 200000 rows: 6.645 s
+
+   The native sum is a four-accumulator loop. At 97 ms for 200,000 rows it spends about 485 ns per element, which is
+   hundreds of times what a compiled loop over memory costs.
+
+The pattern (fast on a JVM, very slow in the native library, worst in loops that touch native columns element by
+element) matches the symptom recorded for GraalVM CE 23 in docs/building.md: memory-segment access that the
+native-image compiler does not optimize. The graph kernel also uses native memory and is only 6 to 14 times slower
+than on a JVM, so the lake's access pattern is what differs. The cause is open work; see TODOS.md.
+
+## Suspect
+
+The lake was rewritten onto native memory on 2026-10-05, the day after the previous suite was measured at commit
+3fdf779 (bench(lake): add columnar and uncompressed engines and a native aggregate row). The commits are c099214
+through d823261, and 67061ff (fix(native): use GC-managed arenas so the native image can close memory) followed. The
+2026-10-04 figures therefore describe the heap-array implementation, not the code in 0.1.0.
