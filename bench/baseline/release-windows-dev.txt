@@ -110,3 +110,17 @@ deletes/s, 36.3 us 3-hop; batch 125,816 and 109,051, 28.0 us; single 68,140 and 
 136,678 and 260,822, 36.5 us; networkx batch 111,109 and 248,606, 34.7 us; sqlite3 single 89,964 and 100,349,
 115.2 us; sqlite3 batch 119,701 and 117,563, 139.2 us. Inserts on 2026-10-20 ran about 10% below 2026-10-18 for every
 toolchain, as the README warns for this laptop.
+
+## Community Edition ratios on CI, 2026-10-20 (run 39381570240, commit a7e8cf5)
+
+native_ratio.py on the GitHub runners, native library built by CE 25.0.2:
+
+| Runner | add_edge native / JVM ns/op, ratio | has_edge native / JVM ns/op, ratio | add_tuple with shipping off / on |
+|---|---|---|---|
+| ubuntu-latest | 2,087 / 362, 5.77 | 213 / 15, 14.18 | 24,279 / 24,644, ratio 1.02 |
+| windows-latest | 1,807 / 236, 7.66 | 162 / 13, 12.49 | 13,993 / 14,119, ratio 1.01 |
+| macos-latest (arm64) | 1,457 / 238, 6.12 | 165 / 13, 12.67 | 13,412 / 13,864, ratio 1.03 |
+
+The default limit of native_ratio.py is 30, about twice the worst ratio (14.18). Wheel sizes from the same run:
+linux x86_64 13,401,442 bytes, linux arm64 13,099,705, macOS x86_64 13,247,036, macOS arm64 13,229,872, Windows
+13,493,192 (artifact sizes, about 66 MB for the five).

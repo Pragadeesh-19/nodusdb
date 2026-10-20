@@ -50,18 +50,6 @@
 **Priority:** P2
 **Depends on:** Build Step 1
 
-### Check the native performance gate against a recorded toolchain baseline
-
-**What:** Record the native-to-JVM ratios that CI measures on GraalVM 25, then lower the default limit of `python/benchmarks/native_ratio.py` from 50 to about twice the recorded ratios.
-
-**Why:** The review proposed a limit of 5. The same code measured 9.5 for `add_edge` and 16.9 for `has_edge` on a laptop with GraalVM CE 22.0.2, because ahead-of-time code is slower than JIT code for off-heap access. A limit of 50 passes that build and still fails the CE 23 library, which was about 130 times slower than CE 22.
-
-**Context:** Decision note I12 in `docs/decisions.md`. The first CI run on this branch gives the GraalVM 25 numbers.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** The first CI run of Build Step 1
-
 ### Lookup APIs and permission-level watch
 
 **What:** `LookupResources` ("what can alice view") and `LookupSubjects` ("who can view this document"), then standing lookups the engine keeps current from the change feed and streams as gained and lost members.
@@ -393,6 +381,10 @@
 **Depends on:** none
 
 ## Completed
+
+### Native performance gate against a recorded toolchain baseline
+
+Done in the 0.1.0 release work. CI builds the library with GraalVM CE 25 and measured native-to-JVM ratios of 5.8 to 7.7 for `add_edge` and 12.5 to 14.2 for `has_edge` on Ubuntu, Windows and macOS. The default limit of `python/benchmarks/native_ratio.py` is now 30, about twice the worst of them, down from 50. It passes CE 22.0.2 and CE 25 and fails the CE 23 library. Decisions D237 and D241.
 
 ### Watch and as_of
 

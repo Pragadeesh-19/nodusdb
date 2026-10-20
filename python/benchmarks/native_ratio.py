@@ -5,8 +5,11 @@ inside the native library, so both sides execute the same Java code and no forei
 
 Ahead-of-time code is slower than JIT-compiled code for off-heap memory access. On a laptop with GraalVM CE
 22.0.2 the ratio measured 9.5 for add_edge and 16.9 for has_edge, and the CE 23 library, which does not
-optimize memory-segment access, ran add_edge about 130 times slower than that build. The default limit of 50
-passes the first and fails the second. Lower it with --limit once a CI toolchain has a recorded baseline."""
+optimize memory-segment access, ran add_edge about 130 times slower than that build. CI builds the library
+with GraalVM CE 25 and measured 5.8 to 7.7 for add_edge and 12.5 to 14.2 for has_edge on Ubuntu, Windows and
+macOS (bench/baseline/release-windows-dev.txt). The default limit of 30 is about twice the worst of those: it
+passes the CE 22.0.2 and CE 25 builds and fails the CE 23 library and any change that makes the native code
+several times slower."""
 
 import argparse
 import ctypes
@@ -24,7 +27,7 @@ from nodusdb import _native  # noqa: E402
 DEFAULT_OPERATIONS = 200_000
 DEFAULT_RUNS = 5
 DEFAULT_WARMUPS = 2
-DEFAULT_LIMIT = 50.0
+DEFAULT_LIMIT = 30.0
 PROBE_CLASS = "io.nodusdb.capi.PerformanceProbe"
 
 
