@@ -1,7 +1,6 @@
 import argparse
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 PLATFORMS = (
@@ -12,11 +11,15 @@ PLATFORMS = (
     "win_amd64",
 )
 PRE_RELEASE = re.compile(r"(a|b|rc)\d+|\.dev\d+")
+VERSION_LINE = re.compile(r'^version\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 PYPROJECT = Path(__file__).resolve().parents[1] / "python" / "pyproject.toml"
 
 
 def package_version(pyproject=PYPROJECT):
-    return tomllib.loads(Path(pyproject).read_text(encoding="utf-8"))["project"]["version"]
+    found = VERSION_LINE.findall(Path(pyproject).read_text(encoding="utf-8"))
+    if len(found) != 1:
+        raise ValueError(f"expected one version line in {pyproject}, found {len(found)}")
+    return found[0]
 
 
 def is_prerelease(version):

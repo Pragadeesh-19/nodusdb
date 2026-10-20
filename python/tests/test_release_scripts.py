@@ -94,6 +94,31 @@ class WheelCheckTest(unittest.TestCase):
     def test_the_package_version_is_read_from_pyproject(self):
         self.assertRegex(check_release.package_version(), r"^\d+\.\d+\.\d+")
 
+    def test_the_version_agrees_with_a_toml_parser(self):
+        try:
+            import tomllib
+        except ImportError:
+            self.skipTest("tomllib needs Python 3.11")
+        parsed = tomllib.loads(check_release.PYPROJECT.read_text(encoding="utf-8"))["project"]["version"]
+
+        self.assertEqual(parsed, check_release.package_version())
+
+    def test_the_version_needs_exactly_one_version_line(self):
+        for text in ["[project]\nname = 'x'\n", 'version = "1.0"\nversion = "2.0"\n']:
+            with self.subTest(text=text):
+                path = Path(tempfile.mkdtemp(prefix="nodus-pyproject-")) / "pyproject.toml"
+                path.write_text(text, encoding="utf-8")
+
+                with self.assertRaises(ValueError):
+                    check_release.package_version(path)
+
+    def test_the_scripts_import_without_a_toml_module(self):
+        for name in ("check_release", "verify_published"):
+            with self.subTest(script=name):
+                source = (REPOSITORY / "scripts" / f"{name}.py").read_text(encoding="utf-8")
+
+                self.assertNotIn("tomllib", source)
+
 
 class HttpsProbeTest(unittest.TestCase):
     def test_the_s3_authentication_error_means_tls_worked(self):
