@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/nodusdb)](https://pypi.org/project/nodusdb/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-**An embedded graph database and lake write buffer for Python.** It runs inside your process. No server, no JVM to install, no network calls: `pip install nodusdb` and import it.
+**An embedded graph database and lake write buffer for Python.** It runs inside your process. No server and no JVM to install: `pip install nodusdb` and import it. It makes network calls only if you ask it to ship its log to a bucket.
 
 NodusDB has two engines built from the same low-level ideas:
 
@@ -189,7 +189,7 @@ If you need to write Parquet quickly today, use PyArrow or DuckDB. If you are he
 
 ## Beyond one process
 
-Everything above works in memory. A durable graph can go further, and each step builds on the one before it.
+Everything above works in one process. A durable graph can go further, and each step builds on the one before it.
 
 | You want | NodusDB does |
 |---|---|
