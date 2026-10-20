@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Documentation
+
+- The README is rewritten as a front door, and its long sections moved into guides under `docs/`: the graph engine, permissions, the lake engine, operations (durability, shipping, followers, erasure, change feeds, time travel), benchmarks, building and testing, and a first-principles page, `docs/how-it-works.md`.
+- `examples/` holds six runnable scripts, and `python/tests/test_examples.py` runs them.
+- `CONTRIBUTING.md` describes how to build, test and change the code.
+
+### Known limits found while measuring
+
+- The lake write path in the native library is far slower than the figures reported on 2026-10-04: about 40 times slower on ingest and on a 250,000-row flush, measured on 2026-10-20 against the 0.1.0 wheel. The columns moved from Java arrays to native memory on 2026-10-05 and those figures describe the earlier implementation. The Parquet files themselves are unchanged and DuckDB scans them as fast as before. `bench/baseline/lake-release-windows-dev.txt` has the run, and `python/benchmarks/lake_native_probe.py` times the pieces. The README and `docs/lake.md` no longer quote the earlier figures as current.
+- The README's status paragraph listed readers that run in parallel on one handle as open. They run in parallel since the engineering review of 2026-10-06 (D75); only writes, checkpoint and close serialize.
+- The README gave 3.7 to 5.6 seconds for a checkpoint at 30.6 million edges. That was the figure before the two-section snapshot. It is about 9 seconds since commit `974ba2d`.
+
 ## 0.1.0
 
 The same code as 0.1.0rc2 without the pre-release label. 0.1.0rc2 was published and installed from PyPI on Linux (x86_64 and arm64), macOS (Intel and Apple silicon) and Windows, on Python 3.10 and 3.14, before this release, so this section lists no further changes. The changes since 0.1.0rc1 are under 0.1.0rc2 below.

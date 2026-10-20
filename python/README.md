@@ -47,7 +47,7 @@ Common neighbors: [4]
 
 ## Status
 
-This is a beta release. One writer and many readers share a graph, and calls on one handle run one at a time.
+This is a beta release. One writer and many readers share a graph: reads run in parallel and writes on one handle run one at a time.
 The [README](https://github.com/Pragadeesh-19/nodusdb#readme) covers each feature, the
 [limits](https://github.com/Pragadeesh-19/nodusdb#limits) and the
 [compatibility promise](https://github.com/Pragadeesh-19/nodusdb#compatibility) for 0.1.x. Changes are listed in the

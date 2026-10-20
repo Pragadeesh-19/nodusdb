@@ -23,8 +23,8 @@ upsert, delete                                get
 ```
 
 - `DeltaMemTable` is one buffer. It holds a key-hash column, a row-kind column (`INSERT` or
-  `TOMBSTONE`), one array per numeric column, and one byte slab for UTF-8 text. Keys resolve
-  through `LongIntIndex`.
+  `TOMBSTONE`), one native column per numeric field, and one native byte slab for UTF-8 text. Keys resolve
+  through `NativeKeyIndex`.
 - `LakeTable` holds three buffer references. `active` takes writes. `frozen` is being flushed.
   `spare` becomes the next `active`.
 - `ParquetWriter` and `ParquetReader` read and write Parquet with no dependency beyond the JDK.
@@ -174,9 +174,8 @@ The tests that read files back with PyArrow skip in CI, because the CI image doe
 statistics layout, and the columnar upsert against a row-by-row oracle, so those paths run in CI
 without PyArrow.
 
-Not built: the Arrow C Data Interface exporter. The columns live on the Java heap, and the GC can
-move them while native code holds a pointer. Zero-copy export needs off-heap storage first, so
-the flush copies at the boundary instead.
+Not built: the Arrow C Data Interface exporter. The columns now live in native memory, which is the
+precondition D26 set for a zero-copy export, but the exporter itself has not been written.
 
 ## Python
 
@@ -216,10 +215,12 @@ are rejected, and so is any column whose length differs from the key's.
 - Once two buffers are full and a flush is still pending, writers block. Sustained overload
   therefore shows up as latency.
 - No compaction. Tombstones and superseded rows accumulate.
+- The native write path is far slower than it was before the columns moved to native memory (about 40 times on ingest
+  and on the flush). See the first lake item in TODOS.md.
 - Single-call upserts from Python are slow. Each call crosses ctypes and builds a row dictionary,
   which the columnar path avoids. The W2 results show the difference.
-- Snappy is pure Java and is most of the remaining flush time. The uncompressed setting removes it,
-  at the cost of larger files.
+- Snappy is pure Java. Turning it off cut the 2026-10-20 flush from 9.9 s to 6.1 s,
+  at the cost of files 36% larger.
 - The clean W4 layout's p99 is higher than DuckDB's own files. The cause is not isolated.
 - The native aggregate covers only the active buffer. Committed files are not part of it.
 
@@ -239,112 +240,4 @@ figure.
 
 ## Multi-engine results
 
-These run on `windows-dev` against the first 1,000,000 rows of the NYC TLC Yellow Taxi file for
-January 2024. The file's SHA-256 is checked before use. Rows are keyed by row index. The raw
-output is in `bench/baseline/lake-heavyweights-windows-dev-v2.json`, and the script is
-`python/benchmarks/benchmark_lake_heavyweights.py`. Each engine and workload runs in its own
-process.
-
-- **NodusDB**: this module. Snappy is the default codec. `nodus-lake-uncompressed` is the same
-  table with `compression="none"`, and `nodus-lake-batch` is W2 with the columnar path.
-- **DuckDB**: an in-memory table, written with `COPY` to Parquet.
-- **PyArrow**: a Python dict of rows, written with `pq.write_table`.
-- **SQLite**: in memory, dumped with the backup API.
-
-### W1, ingest 1,000,000 rows
-
-| Engine | Rows/s | Seconds | Peak RSS (MB) |
-|---|---:|---:|---:|
-| NodusDB | 846,137 | 1.18 | 442 |
-| DuckDB | 164,793 | 6.07 | 448 |
-| PyArrow | 114,582 | 8.73 | 364 |
-| SQLite | 95,113 | 10.51 | 591 |
-
-### W2, 500,000 upserts and 100,000 deletes
-
-| Engine | Upserts/s | Deletes/s | Peak RSS (MB) |
-|---|---:|---:|---:|
-| NodusDB, one call per row | 39,335 | 467,542 | 684 |
-| NodusDB, columnar batch | 1,763,882 | 455,458 | 497 |
-| DuckDB | 960 | 930 | 512 |
-| PyArrow (Python dict) | 393,661 | 755,709 | 730 |
-| SQLite | 253,594 | 269,022 | 661 |
-
-The columnar batch builds its update rows with Arrow compute before the timed window. The other
-engines build theirs before their timed windows too. Its deletes still use one call per key, so
-the delete figures for both NodusDB rows measure the same path.
-
-### W3, flush 250,000 rows
-
-| Engine | Seconds | Rows/s | Files | Size (MB) |
-|---|---:|---:|---:|---:|
-| NodusDB, Snappy | 0.265 | 941,658 | 1 | 3.95 |
-| NodusDB, uncompressed | 0.187 | 1,339,509 | 1 | 5.40 |
-| DuckDB | 1.143 | 218,807 | 1 | 3.66 |
-| PyArrow | 0.187 | 1,335,888 | 1 | 3.96 |
-| SQLite | 0.123 | 2,026,186 | 1 | 11.85 (database file) |
-
-### W4, DuckDB aggregate over each source
-
-Every source gives the same totals: revenue 27,486,629.10 across 1,000,000 trips. The first
-five rows are DuckDB's grouped query over the files. The last two are an ungrouped sum and
-average over the same column, so they are not comparable to the grouped rows.
-
-| Source | Files | Size (MB) | Median (ms) | p99 (ms) |
-|---|---:|---:|---:|---:|
-| NodusDB, 250,000-row flushes | 3 | 15.71 | 12.8 | 35.9 |
-| NodusDB, 5,000-row flushes | 101 | 16.97 | 25.5 | 27.0 |
-| DuckDB `COPY` | 4 | 14.47 | 14.0 | 15.3 |
-| PyArrow | 4 | 15.51 | 17.7 | 21.0 |
-| NodusDB in memory, ungrouped sum and average (no files) | 0 | 0 | 4.0 | 6.6 |
-| DuckDB `COPY`, ungrouped sum and average | 4 | 14.47 | 7.7 | 8.4 |
-
-The clean NodusDB layout wrote three files, not four. Ingest is now faster than the flush, so the
-buffer grows past its freeze threshold before it freezes. The 5,000-row layout produced 101 files,
-not the 200 that setting implies.
-
-### Change from the previous run
-
-| Measure | Before | After |
-|---|---:|---:|
-| W1 ingest, rows/s | 47,210 | 846,137 |
-| W2 upserts/s, one call per row | 37,253 | 39,335 |
-| W2 upserts/s, columnar batch | not measured | 1,763,882 |
-| W2 deletes/s | 334,790 | 467,542 |
-| W3 flush, Snappy | 0.367 s | 0.265 s |
-| W3 flush, no compression | not measured | 0.187 s |
-| W4 grouped scan of NodusDB files, median | 42.3 ms | 12.8 ms |
-
-### What the numbers show
-
-- **Ingest is no longer Python-bound.** Arrow columns go to the native library by buffer address.
-  The C side reads them in place, and it allocates nothing per row.
-- **Flush is now encoding- and codec-bound.** The writer copies column arrays directly, without a
-  per-value method call. Snappy is pure Java, and it is most of the remaining flush time. With
-  compression off, the flush ties PyArrow at 0.187 s, and the files are 36% larger.
-- **Scans are now competitive.** NodusDB's files have dictionary-encoded low-cardinality columns,
-  Snappy pages, and 122,880-row row groups. DuckDB scans one row group per task. The earlier layout
-  wrote one row group per file, which gave DuckDB only four tasks for four files. The probes that
-  measured each property are not in the repository.
-- **Single-call upserts remain slow.** Each call crosses ctypes and rebuilds a row dict. I have not
-  profiled that path.
-- **Tails are worse than DuckDB's.** The clean layout's p99 is 35.9 ms, against 15.3 ms. The
-  scan-side cause is not isolated.
-
-### Caveats
-
-- W1 and the single-call W2 path pass each row from Python. The columnar batch does not.
-- PyArrow's W2 figures come from a Python dict with no storage behind it. They show a ceiling for
-  an in-memory map, not a storage engine.
-- The native aggregate covers only the rows in the active buffer. It does not read committed files.
-- Peak RSS includes the Python process and the loaded source table, so compare it as a relative
-  figure.
-- Each engine ran once, on one laptop.
-
-### Reproducing
-
-```
-python python/benchmarks/benchmark_lake_heavyweights.py run --out bench/baseline/lake-heavyweights-windows-dev-v2.json
-```
-
-The run takes about 20 minutes on `windows-dev`.
+The multi-engine suite (W1 to W4 on the NYC taxi file) lives in [benchmarks.md](benchmarks.md#lake). It holds the run on the 0.1.0 library (2026-10-20) and the earlier run (2026-10-04). The two differ a great deal on the write side, because the columns moved from Java arrays to native memory between them. The 2026-10-04 write-side figures do not describe this code. The open investigation is the first lake item in [TODOS.md](../TODOS.md).
