@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodusdb"
-version = "0.1.0rc2"
+version = "0.1.0"
 description = "Embedded high-churn dynamic graph kernel with a GraalVM native C-ABI"
 readme = "README.md"
 requires-python = ">=3.10"

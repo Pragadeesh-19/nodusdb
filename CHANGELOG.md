@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.0
+
+The same code as 0.1.0rc2 without the pre-release label. 0.1.0rc2 was published and installed from PyPI on Linux (x86_64 and arm64), macOS (Intel and Apple silicon) and Windows, on Python 3.10 and 3.14, before this release, so this section lists no further changes. The changes since 0.1.0rc1 are under 0.1.0rc2 below.
+
 ## 0.1.0rc2
 
 ### Added
