@@ -1,23 +1,25 @@
 name: native toolchain
 description: Install the GraalVM Community Edition that compiles libnodusdb and check its runtime license text
 
+inputs:
+  java-version:
+    description: GraalVM Community Edition version; empty means the version this repository ships with
+    required: false
+    default: ""
+
 runs:
   using: composite
   steps:
     - name: Set up GraalVM Community Edition
       uses: graalvm/setup-graalvm@v1
       with:
-        java-version: "25.0.2"
+        java-version: ${{ inputs.java-version || '25.0.2' }}
         distribution: graalvm-community
         github-token: ${{ github.token }}
 
     - name: Expose GRAALVM_HOME
       shell: bash
       run: echo "GRAALVM_HOME=$JAVA_HOME" >> "$GITHUB_ENV"
-
-    - name: Configure MSVC for native-image
-      if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
 
     - name: Check that the runtime license text matches the toolchain
       shell: bash

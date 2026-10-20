@@ -85,3 +85,28 @@ Every backend returned the same answers for 50 k-hop and 50 common-neighbor quer
 | kHopDepthThree | 21,174.4 ns (error 616.6) | 15,234.4 ns |
 
 Allocation: 0 B/op for commonNeighbors and 0.015 B/op for kHopDepthThree, which is JMH's own background allocation.
+
+## CE 25.0.1, measured on 2026-10-20 (D241)
+
+GraalVM CE 25.0.2 has no macOS Intel build, so the Intel wheel uses CE 25.0.1. Ten alternating rounds of
+native_ratio.py on the same laptop, native ns/op, medians (the machine was slower than on 2026-10-18):
+
+| Toolchain | add_edge | has_edge | against ce22 |
+|---|---|---|---|
+| ce22 (22.0.2) | 7,022 (min 6,631, max 7,386) | 720 (min 662, max 749) | |
+| ce25 (25.0.2), 7 rounds | 7,240 (min 6,990, max 8,198) | 752 (min 700, max 780) | +3.1% and +4.5% |
+| ce2501 (25.0.1) | 7,341 (min 6,775, max 8,398) | 794 (min 733, max 973) | +4.6% and +10.4% |
+
+CE 25.0.1 is 0.4 points over D224's 10% line on has_edge, inside the round-to-round spread of the baseline itself
+(ce22 has_edge ranges 662 to 749). compare.py with only the NodusDB backend, two rounds each:
+
+| Toolchain | flat inserts/s | 3-hop median |
+|---|---|---|
+| ce22 | 150,892 / 139,829 | 26.8 / 26.4 us |
+| ce2501 | 136,303 / 152,020 | 44.0 / 29.7 us |
+
+Library size of ce2501: 39,084,032 bytes. The full table for ce2501 (one run): flat 149,674 inserts/s, 119,129
+deletes/s, 36.3 us 3-hop; batch 125,816 and 109,051, 28.0 us; single 68,140 and 61,225, 27.6 us; networkx single
+136,678 and 260,822, 36.5 us; networkx batch 111,109 and 248,606, 34.7 us; sqlite3 single 89,964 and 100,349,
+115.2 us; sqlite3 batch 119,701 and 117,563, 139.2 us. Inserts on 2026-10-20 ran about 10% below 2026-10-18 for every
+toolchain, as the README warns for this laptop.
