@@ -24,7 +24,7 @@ public class NativeKeyIndexTest {
     @Test
     void emptyIndexFindsNothing() {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(64)) {
-            assertEquals(NativeKeyIndex.ABSENT, index.find(keys.segment(), 42L));
+            assertEquals(NativeKeyIndex.ABSENT, index.find(keys, 42L));
             assertEquals(0, index.size());
         }
     }
@@ -34,11 +34,11 @@ public class NativeKeyIndexTest {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(8L * ROW_LIMIT)) {
             for (int row = 0; row < 5; row++) {
                 keys.segment().setAtIndex(LONG, row, 100L + row);
-                index.insert(keys.segment(), 100L + row, row);
+                index.insert(keys, 100L + row, row);
             }
 
             for (int row = 0; row < 5; row++) {
-                assertEquals(row, index.find(keys.segment(), 100L + row));
+                assertEquals(row, index.find(keys, 100L + row));
             }
             assertEquals(5, index.size());
         }
@@ -49,24 +49,24 @@ public class NativeKeyIndexTest {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(8L * ROW_LIMIT)) {
             for (int row = 0; row < 4; row++) {
                 keys.segment().setAtIndex(LONG, row, 7L * (row + 1));
-                index.insert(keys.segment(), 7L * (row + 1), row);
+                index.insert(keys, 7L * (row + 1), row);
             }
-            index.remove(keys.segment(), 14L);
+            index.remove(keys, 14L);
             keys.segment().setAtIndex(LONG, 1, 28L);
-            index.relocate(keys.segment(), 28L, 1);
+            index.relocate(keys, 28L, 1);
 
-            assertEquals(NativeKeyIndex.ABSENT, index.find(keys.segment(), 14L));
-            assertEquals(1, index.find(keys.segment(), 28L));
-            assertEquals(0, index.find(keys.segment(), 7L));
-            assertEquals(2, index.find(keys.segment(), 21L));
+            assertEquals(NativeKeyIndex.ABSENT, index.find(keys, 14L));
+            assertEquals(1, index.find(keys, 28L));
+            assertEquals(0, index.find(keys, 7L));
+            assertEquals(2, index.find(keys, 21L));
         }
     }
 
     @Test
     void removingAbsentKeyIsRejected() {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(64)) {
-            assertThrows(IllegalStateException.class, () -> index.remove(keys.segment(), 9L));
-            assertThrows(IllegalStateException.class, () -> index.relocate(keys.segment(), 9L, 0));
+            assertThrows(IllegalStateException.class, () -> index.remove(keys, 9L));
+            assertThrows(IllegalStateException.class, () -> index.relocate(keys, 9L, 0));
         }
     }
 
@@ -74,11 +74,11 @@ public class NativeKeyIndexTest {
     void clearEmptiesTheIndex() {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(64)) {
             keys.segment().setAtIndex(LONG, 0, 5L);
-            index.insert(keys.segment(), 5L, 0);
+            index.insert(keys, 5L, 0);
             index.clear();
 
             assertEquals(0, index.size());
-            assertEquals(NativeKeyIndex.ABSENT, index.find(keys.segment(), 5L));
+            assertEquals(NativeKeyIndex.ABSENT, index.find(keys, 5L));
         }
     }
 
@@ -88,13 +88,13 @@ public class NativeKeyIndexTest {
         try (NativeKeyIndex index = new NativeKeyIndex(16); NativeColumn keys = new NativeColumn(8L * count)) {
             for (int row = 0; row < count; row++) {
                 keys.segment().setAtIndex(LONG, row, 1_000_003L * row + 17);
-                index.insert(keys.segment(), 1_000_003L * row + 17, row);
+                index.insert(keys, 1_000_003L * row + 17, row);
             }
 
             assertEquals(count, index.size());
             assertEquals(0, index.slotCount() % 2);
             for (int row = 0; row < count; row++) {
-                assertEquals(row, index.find(keys.segment(), 1_000_003L * row + 17));
+                assertEquals(row, index.find(keys, 1_000_003L * row + 17));
             }
         }
     }
@@ -120,18 +120,18 @@ public class NativeKeyIndexTest {
                 if (random.nextBoolean()) {
                     if (!model.containsKey(key) && rows < rowLimit) {
                         keys.segment().setAtIndex(LONG, rows, key);
-                        index.insert(keys.segment(), key, rows);
+                        index.insert(keys, key, rows);
                         model.put(key, rows);
                         rows++;
                     }
                 } else if (model.containsKey(key)) {
                     int row = model.remove(key);
-                    index.remove(keys.segment(), key);
+                    index.remove(keys, key);
                     int last = rows - 1;
                     if (row != last) {
                         long moved = keys.segment().getAtIndex(LONG, last);
                         keys.segment().setAtIndex(LONG, row, moved);
-                        index.relocate(keys.segment(), moved, row);
+                        index.relocate(keys, moved, row);
                         model.put(moved, row);
                     }
                     rows--;
@@ -142,7 +142,7 @@ public class NativeKeyIndexTest {
                 }
                 for (long candidate : pool) {
                     int expected = model.getOrDefault(candidate, NativeKeyIndex.ABSENT);
-                    assertEquals(expected, index.find(keys.segment(), candidate),
+                    assertEquals(expected, index.find(keys, candidate),
                             "key " + candidate + " at op " + op + " seed " + seed);
                 }
             }

@@ -1,5 +1,6 @@
 package io.nodusdb.kernel.symbols;
 
+import io.nodusdb.kernel.memory.NativeMemory;
 import io.nodusdb.kernel.NodeIds;
 import io.nodusdb.kernel.concurrency.WriteSequence;
 import io.nodusdb.kernel.memory.MemoryBudget;
@@ -216,8 +217,10 @@ public final class SymbolTable {
             return false;
         }
         MemorySegment segment = chunks[chunk];
+        long address = NativeMemory.readableAddress(segment);
+        long size = segment.byteSize();
         for (int i = 0; i < length; i++) {
-            if (segment.get(BYTE, start + i) != utf8[offset + i]) {
+            if (NativeMemory.getByte(segment, address, size, start + i) != utf8[offset + i]) {
                 return false;
             }
         }

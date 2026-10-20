@@ -20,7 +20,7 @@ extra_linker=""
 if [ "$(uname)" = "Darwin" ]; then
     extra_linker="-H:NativeLinkerOption=-mmacosx-version-min=11.0"
 fi
-"$GRAALVM_HOME/bin/native-image" --shared -O3 --no-fallback -H:+ForeignAPISupport --enable-native-access=ALL-UNNAMED -o libnodusdb -cp "$classes_dir" $extra_linker
+"$GRAALVM_HOME/bin/native-image" --shared -O3 --no-fallback -H:+ForeignAPISupport --enable-native-access=ALL-UNNAMED --initialize-at-build-time='io.nodusdb.kernel.memory.NativeMemory,io.nodusdb.kernel.memory.NativeMemory$Slow' -o libnodusdb -cp "$classes_dir" $extra_linker
 if [ "$(uname)" = "Darwin" ]; then
     minos=$(otool -l libnodusdb.dylib | awk '/minos/ {print $2}' | sort -u)
     if [ "$minos" != "11.0" ]; then

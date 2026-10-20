@@ -1,8 +1,9 @@
 package io.nodusdb.lake;
 
+import io.nodusdb.kernel.memory.NativeMemory;
+import io.nodusdb.lake.buffer.ColumnarCursor;
 import io.nodusdb.lake.buffer.ColumnarRows;
 import io.nodusdb.lake.buffer.DeltaMemTable;
-import io.nodusdb.lake.buffer.RowBuffer;
 import io.nodusdb.lake.buffer.RowSelection;
 import io.nodusdb.lake.codec.ParquetCodec;
 import io.nodusdb.lake.model.Aggregate;
@@ -14,7 +15,6 @@ import io.nodusdb.lake.parquet.ParquetWriter;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -135,11 +135,12 @@ public final class LakeTable implements AutoCloseable {
             return 0;
         }
         validateVarChars(rows);
-        try (RowBuffer staged = new RowBuffer(shape)) {
-            for (int row = 0; row < count; row++) {
-                staged.load(rows, row);
-                long key = rows.keys().get(ValueLayout.JAVA_LONG_UNALIGNED, row * (long) Long.BYTES);
-                upsert(key, staged.longs(), staged.ints(), staged.bytes(), staged.lengths());
+        ColumnarCursor batch = ColumnarCursor.of(rows);
+        for (int row = 0; row < count; row++) {
+            synchronized (lock) {
+                awaitCapacityLocked();
+                active.upsertRow(batch, row);
+                freezeIfFullLocked();
             }
         }
         return count;
@@ -324,12 +325,14 @@ public final class LakeTable implements AutoCloseable {
         for (int column = 0; column < rows.varCharColumnCount(); column++) {
             MemorySegment offsets = rows.varCharOffsets().get(column);
             long dataBytes = rows.varCharData().get(column).byteSize();
-            int previous = offsets.get(ValueLayout.JAVA_INT_UNALIGNED, 0);
+            long address = NativeMemory.readableAddress(offsets);
+            long size = offsets.byteSize();
+            int previous = NativeMemory.getIntUnaligned(offsets, address, size, 0);
             if (previous < 0) {
                 throw new IllegalArgumentException("negative var-char offset in column " + column);
             }
             for (int row = 1; row <= count; row++) {
-                int next = offsets.get(ValueLayout.JAVA_INT_UNALIGNED, row * (long) Integer.BYTES);
+                int next = NativeMemory.getIntUnaligned(offsets, address, size, row * (long) Integer.BYTES);
                 if (next < previous) {
                     throw new IllegalArgumentException(
                             "var-char offsets decrease in column " + column + " at row " + row);

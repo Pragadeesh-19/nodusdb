@@ -21,6 +21,10 @@ public final class Failures {
         return ErrorCode.FAILURE.value();
     }
 
+    public static void remember(String message) {
+        LAST_MESSAGE.set(message);
+    }
+
     public static byte[] lastMessage() {
         return LAST_MESSAGE.get().getBytes(StandardCharsets.UTF_8);
     }

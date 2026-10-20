@@ -4,11 +4,13 @@ import io.nodusdb.lake.memory.NativeColumn;
 
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
+import java.nio.ByteOrder;
 
 public final class NativeSink implements AutoCloseable {
 
-    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
     private static final long INITIAL_BYTES = 1 << 12;
+    private static final ValueLayout.OfInt INT_LITTLE_ENDIAN =
+            ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
     private NativeColumn buffer;
     private long length;
@@ -31,14 +33,37 @@ public final class NativeSink implements AutoCloseable {
 
     public void put(int value) {
         reserve(1);
-        buffer.segment().set(BYTE, length++, (byte) value);
+        buffer.setByte(length++, (byte) value);
     }
 
     public void putLittleEndian(long value, int count) {
         reserve(count);
-        for (int i = 0; i < count; i++) {
-            buffer.segment().set(BYTE, length++, (byte) (value >>> (Byte.SIZE * i)));
+        if (count == Integer.BYTES) {
+            buffer.setIntLittleEndian(length, (int) value);
+            length += Integer.BYTES;
+            return;
         }
+        if (count == Long.BYTES) {
+            buffer.setLongLittleEndian(length, value);
+            length += Long.BYTES;
+            return;
+        }
+        for (int i = 0; i < count; i++) {
+            buffer.setByte(length++, (byte) (value >>> (Byte.SIZE * i)));
+        }
+    }
+
+    public void putIntsLittleEndian(int[] values, int count) {
+        long bytes = (long) count * Integer.BYTES;
+        reserve(bytes);
+        MemorySegment.copy(values, 0, buffer.segment(), INT_LITTLE_ENDIAN, length, count);
+        length += bytes;
+    }
+
+    public void putBytes(byte[] values, int count) {
+        reserve(count);
+        MemorySegment.copy(values, 0, buffer.segment(), ValueLayout.JAVA_BYTE, length, count);
+        length += count;
     }
 
     public void putVarint(long value) {

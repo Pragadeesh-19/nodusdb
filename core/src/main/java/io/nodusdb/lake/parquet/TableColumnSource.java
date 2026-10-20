@@ -1,5 +1,6 @@
 package io.nodusdb.lake.parquet;
 
+import io.nodusdb.kernel.memory.NativeMemory;
 import io.nodusdb.lake.buffer.DeltaMemTable;
 import io.nodusdb.lake.buffer.RowSelection;
 import io.nodusdb.lake.memory.NativeColumn;
@@ -14,6 +15,7 @@ final class TableColumnSource implements ColumnSource, AutoCloseable {
 
     private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
     private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    private static final int CHUNK = 4096;
 
     private enum Origin {
         KEY, LONG, INT, VAR
@@ -29,6 +31,10 @@ final class TableColumnSource implements ColumnSource, AutoCloseable {
     private final NativeColumn longs = new NativeColumn(NativeColumn.ALIGNMENT);
     private final NativeColumn offsets = new NativeColumn(NativeColumn.ALIGNMENT);
     private final NativeColumn data = new NativeColumn(NativeColumn.ALIGNMENT);
+    private final int[] rowChunk = new int[CHUNK];
+    private final int[] intChunk = new int[CHUNK];
+    private final int[] lengthChunk = new int[CHUNK];
+    private final long[] longChunk = new long[CHUNK];
 
     TableColumnSource(LakeSchema schema, DeltaMemTable table, RowSelection rows) {
         this.table = table;
@@ -84,21 +90,41 @@ final class TableColumnSource implements ColumnSource, AutoCloseable {
         MemorySegment lengths = table.varCharLengthColumn(binding.slot());
         MemorySegment starts = table.varCharOffsetColumn(binding.slot());
         MemorySegment slab = table.varCharSlab();
-        offsets.segment().setAtIndex(INT, 0, 0);
-        for (int i = 0; i < count; i++) {
-            int row = rows.rowAt(from + i);
-            offsets.segment().setAtIndex(INT, i + 1, offsets.segment().getAtIndex(INT, i)
-                    + lengths.getAtIndex(INT, row));
+        long total = 0;
+        offsets.setIntAtIndex(0, 0);
+        for (int base = 0; base < count; base += CHUNK) {
+            int length = Math.min(CHUNK, count - base);
+            selectInts(lengths, from + base, length, lengthChunk);
+            for (int i = 0; i < length; i++) {
+                total += lengthChunk[i];
+                intChunk[i] = (int) total;
+            }
+            MemorySegment.copy(intChunk, 0, offsets.segment(), INT, (base + 1L) * Integer.BYTES, length);
         }
-        long total = offsets.segment().getAtIndex(INT, count);
         data.ensureCapacity(Math.max(1, total));
-        for (int i = 0; i < count; i++) {
-            int row = rows.rowAt(from + i);
-            MemorySegment.copy(slab, starts.getAtIndex(INT, row), data.segment(),
-                    offsets.segment().getAtIndex(INT, i), lengths.getAtIndex(INT, row));
+        MemorySegment target = data.segment();
+        long runSource = 0;
+        long runTarget = 0;
+        long runLength = 0;
+        long written = 0;
+        for (int base = 0; base < count; base += CHUNK) {
+            int length = Math.min(CHUNK, count - base);
+            selectInts(lengths, from + base, length, lengthChunk);
+            selectInts(starts, from + base, length, intChunk);
+            for (int i = 0; i < length; i++) {
+                long start = intChunk[i];
+                if (start != runSource + runLength) {
+                    MemorySegment.copy(slab, runSource, target, runTarget, runLength);
+                    runSource = start;
+                    runTarget = written;
+                    runLength = 0;
+                }
+                runLength += lengthChunk[i];
+                written += lengthChunk[i];
+            }
         }
-        return new Strings(data.segment().asSlice(0, total),
-                offsets.segment().asSlice(0, (count + 1L) * Integer.BYTES));
+        MemorySegment.copy(slab, runSource, target, runTarget, runLength);
+        return new Strings(target.asSlice(0, total), offsets.segment().asSlice(0, (count + 1L) * Integer.BYTES));
     }
 
     @Override
@@ -110,10 +136,20 @@ final class TableColumnSource implements ColumnSource, AutoCloseable {
 
     private MemorySegment gatherLongs(MemorySegment source, int from, int to) {
         int count = to - from;
+        if (rows.identity()) {
+            return source.asSlice((long) from * Long.BYTES, (long) count * Long.BYTES);
+        }
         longs.ensureCapacity(count * (long) Long.BYTES);
         MemorySegment out = longs.segment();
-        for (int i = 0; i < count; i++) {
-            out.setAtIndex(LONG, i, source.getAtIndex(LONG, rows.rowAt(from + i)));
+        long address = NativeMemory.readableAddress(source);
+        long size = source.byteSize();
+        for (int base = 0; base < count; base += CHUNK) {
+            int length = Math.min(CHUNK, count - base);
+            MemorySegment.copy(rows.rows(), INT, (long) (from + base) * Integer.BYTES, rowChunk, 0, length);
+            for (int i = 0; i < length; i++) {
+                longChunk[i] = NativeMemory.getLong(source, address, size, (long) rowChunk[i] << 3);
+            }
+            MemorySegment.copy(longChunk, 0, out, LONG, (long) base * Long.BYTES, length);
         }
         return out.asSlice(0, count * (long) Long.BYTES);
     }
@@ -122,9 +158,27 @@ final class TableColumnSource implements ColumnSource, AutoCloseable {
         int count = to - from;
         longs.ensureCapacity(count * (long) Long.BYTES);
         MemorySegment out = longs.segment();
-        for (int i = 0; i < count; i++) {
-            out.setAtIndex(LONG, i, source.getAtIndex(INT, rows.rowAt(from + i)));
+        for (int base = 0; base < count; base += CHUNK) {
+            int length = Math.min(CHUNK, count - base);
+            selectInts(source, from + base, length, intChunk);
+            for (int i = 0; i < length; i++) {
+                longChunk[i] = intChunk[i];
+            }
+            MemorySegment.copy(longChunk, 0, out, LONG, (long) base * Long.BYTES, length);
         }
         return out.asSlice(0, count * (long) Long.BYTES);
+    }
+
+    private void selectInts(MemorySegment source, int from, int length, int[] target) {
+        if (rows.identity()) {
+            MemorySegment.copy(source, INT, (long) from * Integer.BYTES, target, 0, length);
+            return;
+        }
+        long address = NativeMemory.readableAddress(source);
+        long size = source.byteSize();
+        MemorySegment.copy(rows.rows(), INT, (long) from * Integer.BYTES, rowChunk, 0, length);
+        for (int i = 0; i < length; i++) {
+            target[i] = NativeMemory.getInt(source, address, size, (long) rowChunk[i] << 2);
+        }
     }
 }

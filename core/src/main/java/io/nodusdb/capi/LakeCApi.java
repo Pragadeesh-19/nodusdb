@@ -1,5 +1,6 @@
 package io.nodusdb.capi;
 
+import io.nodusdb.kernel.memory.NativeMemory;
 import io.nodusdb.lake.LakeTable;
 import io.nodusdb.lake.buffer.ColumnarRows;
 import io.nodusdb.lake.buffer.DeltaMemTable;
@@ -38,8 +39,6 @@ public final class LakeCApi {
     private static final int CODEC_SNAPPY = 1;
     private static final long LONG_BYTES = Long.BYTES;
     private static final long INT_BYTES = Integer.BYTES;
-    private static final ValueLayout.OfLong LONG_UNALIGNED = ValueLayout.JAVA_LONG_UNALIGNED;
-    private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
     private static final HandleTable<LakeTable> TABLES = new HandleTable<>();
 
     private LakeCApi() {
@@ -113,7 +112,7 @@ public final class LakeCApi {
             for (int row = 0; row < rowCount; row++) {
                 long lengthOffset = row * lengthWidth;
                 int rowBytes = rowLength(lengthValues, lengthOffset, shape.varCharColumns());
-                table.upsert(keyValues.getAtIndex(LONG_UNALIGNED, row),
+                table.upsert(NativeMemory.getLongUnalignedAtIndex(keyValues, row),
                         longValues.asSlice(row * longWidth, longWidth),
                         intValues.asSlice(row * intWidth, intWidth),
                         allBytes.asSlice(cursor, rowBytes),
@@ -204,7 +203,7 @@ public final class LakeCApi {
             for (int c = 0; c < varCharCount; c++) {
                 MemorySegment columnOffsets = segment(offsetAddresses.read(c), (rows + 1) * INT_BYTES);
                 offsets.add(columnOffsets);
-                int end = columnOffsets.get(INT_UNALIGNED, rows * INT_BYTES);
+                int end = NativeMemory.getIntUnaligned(columnOffsets, rows * INT_BYTES);
                 data.add(segment(dataAddresses.read(c), end));
             }
             return table.upsertColumns(new ColumnarRows(rowCount, segment(keys.rawValue(), rows * LONG_BYTES),
@@ -248,8 +247,10 @@ public final class LakeCApi {
 
     private static void requireLengthsFit(MemorySegment lengths, int rows, int columns, long available) {
         long total = 0;
+        long address = NativeMemory.readableAddress(lengths);
+        long size = lengths.byteSize();
         for (long i = 0; i < (long) rows * columns; i++) {
-            int length = lengths.getAtIndex(INT_UNALIGNED, i);
+            int length = NativeMemory.getIntUnaligned(lengths, address, size, i * INT_BYTES);
             if (length < 0) {
                 throw new IllegalArgumentException("negative var-char length: " + length);
             }
@@ -262,8 +263,10 @@ public final class LakeCApi {
 
     private static int rowLength(MemorySegment lengths, long offset, int columns) {
         int total = 0;
+        long address = NativeMemory.readableAddress(lengths);
+        long size = lengths.byteSize();
         for (int c = 0; c < columns; c++) {
-            total += lengths.get(INT_UNALIGNED, offset + c * INT_BYTES);
+            total += NativeMemory.getIntUnaligned(lengths, address, size, offset + c * INT_BYTES);
         }
         return total;
     }

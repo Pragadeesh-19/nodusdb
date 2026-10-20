@@ -1,5 +1,6 @@
 package io.nodusdb.lake.buffer;
 
+import io.nodusdb.kernel.memory.NativeMemory;
 import io.nodusdb.lake.memory.NativeColumn;
 import io.nodusdb.lake.memory.NativeKeyIndex;
 
@@ -19,12 +20,7 @@ public final class DeltaMemTable implements AutoCloseable {
 
     static final int MAX_SLAB_BYTES = 1 << 30;
 
-    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
-    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
     private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
-    private static final ValueLayout.OfInt INT_UNALIGNED = ValueLayout.JAVA_INT_UNALIGNED;
-    private static final ValueLayout.OfLong UNALIGNED_LONG = ValueLayout.JAVA_LONG_UNALIGNED;
-    private static final ValueLayout.OfInt UNALIGNED_INT = ValueLayout.JAVA_INT_UNALIGNED;
 
     public record Schema(int longColumns, int intColumns, int varCharColumns) {
 
@@ -49,6 +45,7 @@ public final class DeltaMemTable implements AutoCloseable {
     private int slabUsed;
     private long liveVarCharBytes;
     private int rowCount;
+    private int tombstones;
 
     public DeltaMemTable(Schema schema, int initialCapacity, int initialSlabBytes) {
         this.schema = Objects.requireNonNull(schema, "schema");
@@ -91,25 +88,69 @@ public final class DeltaMemTable implements AutoCloseable {
         requireBytes(lengths, schema.varCharColumns() * (long) Integer.BYTES, "lengths");
         int totalBytes = totalLength(lengths, schema.varCharColumns(), varCharValues.byteSize());
 
-        int row = index.find(keyHashes.segment(), keyHash);
-        if (row != ABSENT) {
-            overwrite(row, longValues, intValues, varCharValues, lengths, totalBytes);
-            return false;
+        int row = index.find(keyHashes, keyHash);
+        boolean fresh = row == ABSENT;
+        if (fresh) {
+            row = beginInsert(keyHash, totalBytes);
+        } else {
+            beginOverwrite(row, totalBytes);
         }
-        insert(keyHash, longValues, intValues, varCharValues, lengths, totalBytes);
-        return true;
+        writeFixedWidth(row, longValues, intValues);
+        writeVarChars(row, varCharValues, lengths);
+        if (fresh) {
+            finishInsert(keyHash, row);
+        }
+        return fresh;
+    }
+
+    public boolean upsertRow(ColumnarCursor batch, int sourceRow) {
+        long keyHash = batch.keyAt(sourceRow);
+        long varBytes = 0;
+        for (int c = 0; c < varCharLengths.length; c++) {
+            varBytes += batch.offsetAt(c, sourceRow + 1) - batch.offsetAt(c, sourceRow);
+        }
+        int totalBytes = Math.toIntExact(varBytes);
+        int row = index.find(keyHashes, keyHash);
+        boolean fresh = row == ABSENT;
+        if (fresh) {
+            row = beginInsert(keyHash, totalBytes);
+        } else {
+            beginOverwrite(row, totalBytes);
+        }
+        for (int c = 0; c < longColumns.length; c++) {
+            longColumns[c].setLongAtIndex(row, batch.longAt(c, sourceRow));
+        }
+        for (int c = 0; c < intColumns.length; c++) {
+            intColumns[c].setIntAtIndex(row, batch.intAt(c, sourceRow));
+        }
+        for (int c = 0; c < varCharLengths.length; c++) {
+            int start = batch.offsetAt(c, sourceRow);
+            int length = batch.offsetAt(c, sourceRow + 1) - start;
+            NativeColumn.copyBytes(batch.dataColumns[c], start, slab.segment(), slabUsed, length);
+            varCharOffsets[c].setIntAtIndex(row, slabUsed);
+            varCharLengths[c].setIntAtIndex(row, length);
+            slabUsed += length;
+            liveVarCharBytes += length;
+        }
+        if (fresh) {
+            finishInsert(keyHash, row);
+        }
+        return fresh;
     }
 
     public boolean delete(long keyHash) {
-        int row = index.find(keyHashes.segment(), keyHash);
+        int row = index.find(keyHashes, keyHash);
         if (row == ABSENT) {
             return false;
         }
         int lastRow = rowCount - 1;
-        for (NativeColumn column : varCharLengths) {
-            liveVarCharBytes -= column.segment().getAtIndex(INT, row);
+        if (kindAt(row) == TOMBSTONE) {
+            tombstones--;
         }
-        index.remove(keyHashes.segment(), keyHash);
+        for (NativeColumn column : varCharLengths) {
+            liveVarCharBytes -= column.getIntAtIndex(row);
+        }
+        index.remove(keyHashes, keyHash);
         if (row != lastRow) {
             moveRow(lastRow, row);
         }
@@ -118,12 +159,14 @@ public final class DeltaMemTable implements AutoCloseable {
     }
 
     public void tombstone(long keyHash) {
-        int row = index.find(keyHashes.segment(), keyHash);
+        int row = index.find(keyHashes, keyHash);
         if (row == ABSENT) {
             appendTombstone(keyHash);
+            tombstones++;
         } else if (kindAt(row) == INSERT) {
             clearVarChars(row);
-            rowKinds.segment().set(BYTE, row, TOMBSTONE);
+            rowKinds.setByte(row, TOMBSTONE);
+            tombstones++;
         }
     }
 
@@ -132,14 +175,19 @@ public final class DeltaMemTable implements AutoCloseable {
         rowCount = 0;
         slabUsed = 0;
         liveVarCharBytes = 0;
+        tombstones = 0;
     }
 
     public int getRow(long keyHash) {
-        return index.find(keyHashes.segment(), keyHash);
+        return index.find(keyHashes, keyHash);
     }
 
     public int size() {
         return rowCount;
+    }
+
+    public int tombstoneCount() {
+        return tombstones;
     }
 
     public int slabBytesUsed() {
@@ -148,17 +196,17 @@ public final class DeltaMemTable implements AutoCloseable {
 
     public long keyHashAt(int row) {
         checkRow(row);
-        return keyHashes.segment().getAtIndex(LONG, row);
+        return keyHashes.getLongAtIndex(row);
     }
 
     public byte kindAt(int row) {
         checkRow(row);
-        return rowKinds.segment().get(BYTE, row);
+        return rowKinds.getByte(row);
     }
 
     public long longAt(int column, int row) {
         checkRow(row);
-        return longColumns[column].segment().getAtIndex(LONG, row);
+        return longColumns[column].getLongAtIndex(row);
     }
 
     public double doubleAt(int column, int row) {
@@ -167,18 +215,18 @@ public final class DeltaMemTable implements AutoCloseable {
 
     public int intAt(int column, int row) {
         checkRow(row);
-        return intColumns[column].segment().getAtIndex(INT, row);
+        return intColumns[column].getIntAtIndex(row);
     }
 
     public int varCharLength(int column, int row) {
         checkRow(row);
-        return varCharLengths[column].segment().getAtIndex(INT, row);
+        return varCharLengths[column].getIntAtIndex(row);
     }
 
     public int copyVarChar(int column, int row, byte[] destination, int destinationOffset) {
         checkRow(row);
-        int length = varCharLengths[column].segment().getAtIndex(INT, row);
-        MemorySegment.copy(slab.segment(), BYTE, varCharOffsets[column].segment().getAtIndex(INT, row),
+        int length = varCharLengths[column].getIntAtIndex(row);
+        MemorySegment.copy(slab.segment(), BYTE, varCharOffsets[column].getIntAtIndex(row),
                 destination, destinationOffset, length);
         return length;
     }
@@ -238,19 +286,23 @@ public final class DeltaMemTable implements AutoCloseable {
             throw new IllegalStateException("slabUsed " + slabUsed + " exceeds slab " + slab.capacity());
         }
         long liveBytes = 0;
+        int tombstoneRows = 0;
         for (int row = 0; row < rowCount; row++) {
             long key = keyHashAt(row);
-            if (index.find(keyHashes.segment(), key) != row) {
+            if (index.find(keyHashes, key) != row) {
                 throw new IllegalStateException(
-                        "keyHashes[" + row + "]=" + key + " is indexed at " + index.find(keyHashes.segment(), key));
+                        "keyHashes[" + row + "]=" + key + " is indexed at " + index.find(keyHashes, key));
             }
             byte kind = kindAt(row);
             if (kind != INSERT && kind != TOMBSTONE) {
                 throw new IllegalStateException("row " + row + " has unknown kind " + kind);
             }
+            if (kind == TOMBSTONE) {
+                tombstoneRows++;
+            }
             for (int c = 0; c < varCharLengths.length; c++) {
-                int offset = varCharOffsets[c].segment().getAtIndex(INT, row);
-                int length = varCharLengths[c].segment().getAtIndex(INT, row);
+                int offset = varCharOffsets[c].getIntAtIndex(row);
+                int length = varCharLengths[c].getIntAtIndex(row);
                 if (offset < 0 || length < 0 || (long) offset + length > slabUsed) {
                     throw new IllegalStateException(
                             "var column " + c + " row " + row + " spans [" + offset + ", +" + length
@@ -265,21 +317,26 @@ public final class DeltaMemTable implements AutoCloseable {
         if (liveBytes != liveVarCharBytes) {
             throw new IllegalStateException("live bytes " + liveVarCharBytes + " != summed lengths " + liveBytes);
         }
+        if (tombstoneRows != tombstones) {
+            throw new IllegalStateException(
+                    "tombstone count " + tombstones + " != " + tombstoneRows + " tombstone rows");
+        }
     }
 
-    private void insert(long keyHash, MemorySegment longValues, MemorySegment intValues,
-                        MemorySegment varCharValues, MemorySegment lengths, int totalBytes) {
+    private int beginInsert(long keyHash, int totalBytes) {
         checkRowCapacity();
         ensureSlabRoom(totalBytes);
         if (rowCount == rowCapacity) {
             growRows();
         }
         int row = rowCount;
-        keyHashes.segment().setAtIndex(LONG, row, keyHash);
-        rowKinds.segment().set(BYTE, row, INSERT);
-        writeFixedWidth(row, longValues, intValues);
-        writeVarChars(row, varCharValues, lengths);
-        index.insert(keyHashes.segment(), keyHash, row);
+        keyHashes.setLongAtIndex(row, keyHash);
+        rowKinds.setByte(row, INSERT);
+        return row;
+    }
+
+    private void finishInsert(long keyHash, int row) {
+        index.insert(keyHashes, keyHash, row);
         rowCount++;
     }
 
@@ -289,51 +346,59 @@ public final class DeltaMemTable implements AutoCloseable {
             growRows();
         }
         int row = rowCount;
-        keyHashes.segment().setAtIndex(LONG, row, keyHash);
-        rowKinds.segment().set(BYTE, row, TOMBSTONE);
+        keyHashes.setLongAtIndex(row, keyHash);
+        rowKinds.setByte(row, TOMBSTONE);
         for (NativeColumn column : varCharOffsets) {
-            column.segment().setAtIndex(INT, row, 0);
+            column.setIntAtIndex(row, 0);
         }
         for (NativeColumn column : varCharLengths) {
-            column.segment().setAtIndex(INT, row, 0);
+            column.setIntAtIndex(row, 0);
         }
-        index.insert(keyHashes.segment(), keyHash, row);
+        index.insert(keyHashes, keyHash, row);
         rowCount++;
     }
 
-    private void overwrite(int row, MemorySegment longValues, MemorySegment intValues,
-                           MemorySegment varCharValues, MemorySegment lengths, int totalBytes) {
+    private void beginOverwrite(int row, int totalBytes) {
         ensureSlabRoom(totalBytes);
         clearVarChars(row);
-        rowKinds.segment().set(BYTE, row, INSERT);
-        writeFixedWidth(row, longValues, intValues);
-        writeVarChars(row, varCharValues, lengths);
+        if (kindAt(row) == TOMBSTONE) {
+            tombstones--;
+        }
+        rowKinds.setByte(row, INSERT);
     }
 
     private void clearVarChars(int row) {
         for (int c = 0; c < varCharLengths.length; c++) {
-            liveVarCharBytes -= varCharLengths[c].segment().getAtIndex(INT, row);
-            varCharLengths[c].segment().setAtIndex(INT, row, 0);
-            varCharOffsets[c].segment().setAtIndex(INT, row, 0);
+            liveVarCharBytes -= varCharLengths[c].getIntAtIndex(row);
+            varCharLengths[c].setIntAtIndex(row, 0);
+            varCharOffsets[c].setIntAtIndex(row, 0);
         }
     }
 
     private void writeFixedWidth(int row, MemorySegment longValues, MemorySegment intValues) {
+        long longAddress = NativeMemory.readableAddress(longValues);
+        long longSize = longValues.byteSize();
         for (int c = 0; c < longColumns.length; c++) {
-            longColumns[c].segment().setAtIndex(LONG, row, longValues.getAtIndex(UNALIGNED_LONG, c));
+            long value = NativeMemory.getLongUnaligned(longValues, longAddress, longSize, (long) c << 3);
+            longColumns[c].setLongAtIndex(row, value);
         }
+        long intAddress = NativeMemory.readableAddress(intValues);
+        long intSize = intValues.byteSize();
         for (int c = 0; c < intColumns.length; c++) {
-            intColumns[c].segment().setAtIndex(INT, row, intValues.getAtIndex(UNALIGNED_INT, c));
+            int value = NativeMemory.getIntUnaligned(intValues, intAddress, intSize, (long) c << 2);
+            intColumns[c].setIntAtIndex(row, value);
         }
     }
 
     private void writeVarChars(int row, MemorySegment varCharValues, MemorySegment lengths) {
         long source = 0;
+        long lengthsAddress = NativeMemory.readableAddress(lengths);
+        long lengthsSize = lengths.byteSize();
         for (int c = 0; c < varCharLengths.length; c++) {
-            int length = lengths.get(INT_UNALIGNED, c * (long) Integer.BYTES);
+            int length = NativeMemory.getIntUnaligned(lengths, lengthsAddress, lengthsSize, c * (long) Integer.BYTES);
             NativeColumn.copyBytes(varCharValues, source, slab.segment(), slabUsed, length);
-            varCharOffsets[c].segment().setAtIndex(INT, row, slabUsed);
-            varCharLengths[c].segment().setAtIndex(INT, row, length);
+            varCharOffsets[c].setIntAtIndex(row, slabUsed);
+            varCharLengths[c].setIntAtIndex(row, length);
             slabUsed += length;
             liveVarCharBytes += length;
             source += length;
@@ -341,20 +406,20 @@ public final class DeltaMemTable implements AutoCloseable {
     }
 
     private void moveRow(int from, int to) {
-        long movedKey = keyHashes.segment().getAtIndex(LONG, from);
-        keyHashes.segment().setAtIndex(LONG, to, movedKey);
-        rowKinds.segment().set(BYTE, to, rowKinds.segment().get(BYTE, from));
+        long movedKey = keyHashes.getLongAtIndex(from);
+        keyHashes.setLongAtIndex(to, movedKey);
+        rowKinds.setByte(to, rowKinds.getByte(from));
         for (NativeColumn column : longColumns) {
-            column.segment().setAtIndex(LONG, to, column.segment().getAtIndex(LONG, from));
+            column.setLongAtIndex(to, column.getLongAtIndex(from));
         }
         for (NativeColumn column : intColumns) {
-            column.segment().setAtIndex(INT, to, column.segment().getAtIndex(INT, from));
+            column.setIntAtIndex(to, column.getIntAtIndex(from));
         }
         for (int c = 0; c < varCharLengths.length; c++) {
-            varCharOffsets[c].segment().setAtIndex(INT, to, varCharOffsets[c].segment().getAtIndex(INT, from));
-            varCharLengths[c].segment().setAtIndex(INT, to, varCharLengths[c].segment().getAtIndex(INT, from));
+            varCharOffsets[c].setIntAtIndex(to, varCharOffsets[c].getIntAtIndex(from));
+            varCharLengths[c].setIntAtIndex(to, varCharLengths[c].getIntAtIndex(from));
         }
-        index.relocate(keyHashes.segment(), movedKey, to);
+        index.relocate(keyHashes, movedKey, to);
     }
 
     private void ensureSlabRoom(int extra) {
@@ -384,10 +449,10 @@ public final class DeltaMemTable implements AutoCloseable {
         int cursor = 0;
         for (int row = 0; row < rowCount; row++) {
             for (int c = 0; c < varCharLengths.length; c++) {
-                int length = varCharLengths[c].segment().getAtIndex(INT, row);
-                MemorySegment.copy(source, varCharOffsets[c].segment().getAtIndex(INT, row),
+                int length = varCharLengths[c].getIntAtIndex(row);
+                MemorySegment.copy(source, varCharOffsets[c].getIntAtIndex(row),
                         copyTarget, cursor, length);
-                varCharOffsets[c].segment().setAtIndex(INT, row, cursor);
+                varCharOffsets[c].setIntAtIndex(row, cursor);
                 cursor += length;
             }
         }
@@ -439,8 +504,10 @@ public final class DeltaMemTable implements AutoCloseable {
 
     private static int totalLength(MemorySegment lengths, int columns, long available) {
         long total = 0;
+        long lengthsAddress = NativeMemory.readableAddress(lengths);
+        long lengthsSize = lengths.byteSize();
         for (int c = 0; c < columns; c++) {
-            int length = lengths.get(INT_UNALIGNED, c * (long) Integer.BYTES);
+            int length = NativeMemory.getIntUnaligned(lengths, lengthsAddress, lengthsSize, c * (long) Integer.BYTES);
             if (length < 0) {
                 throw new IllegalArgumentException("var-char length must be non-negative: " + length);
             }

@@ -1,12 +1,12 @@
 package io.nodusdb.kernel.adjacency;
 
+import io.nodusdb.kernel.memory.NativeMemory;
 import io.nodusdb.kernel.NodeIds;
 import io.nodusdb.kernel.memory.ChunkLayout;
 import io.nodusdb.kernel.memory.MemoryBudget;
 
 import java.lang.foreign.Arena;
 import java.lang.foreign.MemorySegment;
-import java.lang.foreign.ValueLayout;
 import java.util.Arrays;
 
 public final class LowDegreeSlab {
@@ -17,19 +17,49 @@ public final class LowDegreeSlab {
     private static final int BLOCK_BYTES = BLOCK_SIZE * Long.BYTES;
     private static final int ALIGNMENT = 64;
     private static final int MAX_BLOCKS = 1 << 26;
-    private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
-    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
 
     private final Arena arena;
     private final MemoryBudget budget;
     private final ChunkLayout layout;
-    private MemorySegment[] words = new MemorySegment[0];
-    private MemorySegment[] flags = new MemorySegment[0];
+    private Chunks words = Chunks.EMPTY;
+    private Chunks flags = Chunks.EMPTY;
     private int chunkCount;
     private int capacity;
     private int nextFresh;
     private int freeHead;
     private int freeCount;
+
+    private record Chunks(MemorySegment[] segments, long[] addresses, long[] sizes) {
+
+        static final Chunks EMPTY = new Chunks(new MemorySegment[0], new long[0], new long[0]);
+
+        Chunks with(MemorySegment segment) {
+            int count = segments.length;
+            MemorySegment[] nextSegments = Arrays.copyOf(segments, count + 1);
+            long[] nextAddresses = Arrays.copyOf(addresses, count + 1);
+            long[] nextSizes = Arrays.copyOf(sizes, count + 1);
+            nextSegments[count] = segment;
+            nextAddresses[count] = NativeMemory.address(segment);
+            nextSizes[count] = segment.byteSize();
+            return new Chunks(nextSegments, nextAddresses, nextSizes);
+        }
+
+        long getLong(int chunk, long index) {
+            return NativeMemory.getLong(segments[chunk], addresses[chunk], sizes[chunk], index << 3);
+        }
+
+        void setLong(int chunk, long index, long value) {
+            NativeMemory.setLong(segments[chunk], addresses[chunk], sizes[chunk], index << 3, value);
+        }
+
+        byte getByte(int chunk, long offset) {
+            return NativeMemory.getByte(segments[chunk], addresses[chunk], sizes[chunk], offset);
+        }
+
+        void setByte(int chunk, long offset, byte value) {
+            NativeMemory.setByte(segments[chunk], addresses[chunk], sizes[chunk], offset, value);
+        }
+    }
 
     public LowDegreeSlab(Arena arena, MemoryBudget budget, int initialBlocks) {
         this.arena = arena;
@@ -65,29 +95,28 @@ public final class LowDegreeSlab {
     public long get(int block, int offset) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
         int chunk = layout.chunkOf(block);
-        return words[chunk].getAtIndex(LONG, longIndex(block, chunk, offset));
+        return words.getLong(chunk, longIndex(block, chunk, offset));
     }
 
     public void set(int block, int offset, long value) {
         assert offset >= 0 && offset < BLOCK_SIZE : "offset out of block: " + offset;
         int chunk = layout.chunkOf(block);
-        words[chunk].setAtIndex(LONG, longIndex(block, chunk, offset), value);
+        words.setLong(chunk, longIndex(block, chunk, offset), value);
     }
 
     boolean containsValue(int block, int count, long value) {
         if (block < 0) {
             return false;
         }
-        MemorySegment[] segments = words;
+        Chunks current = words;
         int chunk = layout.chunkOf(block);
-        if (chunk >= segments.length) {
+        if (chunk >= current.segments.length) {
             return false;
         }
-        MemorySegment segment = segments[chunk];
         long base = longIndex(block, chunk, 0);
         int limit = Math.min(count, BLOCK_SIZE);
         for (int i = 0; i < limit; i++) {
-            if (segment.getAtIndex(LONG, base + i) == value) {
+            if (current.getLong(chunk, base + i) == value) {
                 return true;
             }
         }
@@ -98,16 +127,16 @@ public final class LowDegreeSlab {
         if (block < 0 || offset < 0 || offset >= BLOCK_SIZE) {
             return NodeIds.NONE;
         }
-        MemorySegment[] segments = words;
+        Chunks current = words;
         int chunk = layout.chunkOf(block);
-        return chunk < segments.length
-                ? segments[chunk].getAtIndex(LONG, longIndex(block, chunk, offset))
+        return chunk < current.segments.length
+                ? current.getLong(chunk, longIndex(block, chunk, offset))
                 : NodeIds.NONE;
     }
 
     long addressOf(int block) {
         int chunk = layout.chunkOf(block);
-        return words[chunk].address() + (long) layout.offsetOf(block, chunk) * BLOCK_BYTES;
+        return words.segments[chunk].address() + (long) layout.offsetOf(block, chunk) * BLOCK_BYTES;
     }
 
     void reserve(int blocks) {
@@ -176,10 +205,8 @@ public final class LowDegreeSlab {
     private void appendChunk() {
         checkBlockLimit(capacity);
         int blocks = layout.chunkSize(chunkCount);
-        words = Arrays.copyOf(words, chunkCount + 1);
-        flags = Arrays.copyOf(flags, chunkCount + 1);
-        words[chunkCount] = arena.allocate((long) blocks * BLOCK_BYTES, ALIGNMENT);
-        flags[chunkCount] = arena.allocate(blocks, 1);
+        flags = flags.with(arena.allocate(blocks, 1));
+        words = words.with(arena.allocate((long) blocks * BLOCK_BYTES, ALIGNMENT));
         capacity += blocks;
         chunkCount++;
     }
@@ -190,11 +217,11 @@ public final class LowDegreeSlab {
 
     private byte flag(int block) {
         int chunk = layout.chunkOf(block);
-        return flags[chunk].get(BYTE, layout.offsetOf(block, chunk));
+        return flags.getByte(chunk, layout.offsetOf(block, chunk));
     }
 
     private void setFlag(int block, byte value) {
         int chunk = layout.chunkOf(block);
-        flags[chunk].set(BYTE, layout.offsetOf(block, chunk), value);
+        flags.setByte(chunk, layout.offsetOf(block, chunk), value);
     }
 }

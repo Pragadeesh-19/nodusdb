@@ -9,7 +9,8 @@ import java.lang.foreign.ValueLayout;
 public final class DictionaryIndexCodec {
 
     private static final int MAX_BIT_WIDTH = 32;
-    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
+    private static final int CHUNK = 4096;
+    private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT_UNALIGNED;
 
     private DictionaryIndexCodec() {
     }
@@ -26,15 +27,25 @@ public final class DictionaryIndexCodec {
         long buffer = 0;
         int bits = 0;
         int slots = groups * 8;
-        for (int i = 0; i < slots; i++) {
-            int value = i < count ? indices.getAtIndex(INT, i) : 0;
-            buffer |= (long) value << bits;
-            bits += width;
-            while (bits >= Byte.SIZE) {
-                out.put((int) buffer);
-                buffer >>>= Byte.SIZE;
-                bits -= Byte.SIZE;
+        int[] values = new int[CHUNK];
+        byte[] packed = new byte[CHUNK * Integer.BYTES];
+        int pending = 0;
+        for (int base = 0; base < slots; base += CHUNK) {
+            int length = Math.min(CHUNK, slots - base);
+            int available = Math.max(0, Math.min(length, count - base));
+            MemorySegment.copy(indices, INT, (long) base * Integer.BYTES, values, 0, available);
+            for (int i = 0; i < length; i++) {
+                int value = i < available ? values[i] : 0;
+                buffer |= (long) value << bits;
+                bits += width;
+                while (bits >= Byte.SIZE) {
+                    packed[pending++] = (byte) buffer;
+                    buffer >>>= Byte.SIZE;
+                    bits -= Byte.SIZE;
+                }
             }
+            out.putBytes(packed, pending);
+            pending = 0;
         }
     }
 

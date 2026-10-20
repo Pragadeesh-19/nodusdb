@@ -1,10 +1,8 @@
 package io.nodusdb.lake.codec;
 
-import io.nodusdb.lake.memory.NativeColumn;
-
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
-import java.nio.ByteOrder;
+import java.util.Arrays;
 
 public final class SnappyCompressor implements AutoCloseable {
 
@@ -17,37 +15,35 @@ public final class SnappyCompressor implements AutoCloseable {
     private static final int TAG_COPY_FOUR_BYTE_OFFSET = 3;
     private static final int SKIP_SHIFT = 5;
     private static final int MAX_INPUT_BYTES = Integer.MAX_VALUE - 8;
-    private static final ValueLayout.OfByte BYTE = ValueLayout.JAVA_BYTE;
-    private static final ValueLayout.OfInt INT_SLOT = ValueLayout.JAVA_INT;
-    private static final ValueLayout.OfInt INT_LITTLE_ENDIAN =
-            ValueLayout.JAVA_INT_UNALIGNED.withOrder(ByteOrder.LITTLE_ENDIAN);
 
-    private final NativeColumn table;
-
-    public SnappyCompressor() {
-        this.table = new NativeColumn((1L << HASH_BITS) * Integer.BYTES);
-    }
+    private final int[] table = new int[1 << HASH_BITS];
+    private byte[] bytes = new byte[0];
 
     void compress(MemorySegment input, NativeSink out) {
         if (input.byteSize() > MAX_INPUT_BYTES) {
             throw new IllegalArgumentException("snappy input exceeds " + MAX_INPUT_BYTES + " bytes");
         }
         int size = (int) input.byteSize();
-        MemorySegment slots = table.segment();
-        slots.fill((byte) 0);
+        if (bytes.length < size) {
+            bytes = new byte[Math.max(size, (int) Math.min(MAX_INPUT_BYTES, 2L * bytes.length))];
+        }
+        byte[] data = bytes;
+        int[] slots = table;
+        MemorySegment.copy(input, ValueLayout.JAVA_BYTE, 0, data, 0, size);
+        Arrays.fill(slots, 0);
         out.putVarint(size);
         int literalStart = 0;
         int position = 0;
         int misses = 0;
         int lastCandidate = size - MIN_MATCH;
         while (position <= lastCandidate) {
-            int hash = hash(input.get(INT_LITTLE_ENDIAN, position));
-            int candidate = slots.getAtIndex(INT_SLOT, hash) - 1;
-            slots.setAtIndex(INT_SLOT, hash, position + 1);
-            if (candidate >= 0 && input.get(INT_LITTLE_ENDIAN, candidate) == input.get(INT_LITTLE_ENDIAN, position)) {
+            int current = intAt(data, position);
+            int hash = hash(current);
+            int candidate = slots[hash] - 1;
+            slots[hash] = position + 1;
+            if (candidate >= 0 && intAt(data, candidate) == current) {
                 int matched = MIN_MATCH;
-                while (position + matched < size
-                        && input.get(BYTE, candidate + matched) == input.get(BYTE, position + matched)) {
+                while (position + matched < size && data[candidate + matched] == data[position + matched]) {
                     matched++;
                 }
                 literal(out, input, literalStart, position);
@@ -64,7 +60,14 @@ public final class SnappyCompressor implements AutoCloseable {
 
     @Override
     public void close() {
-        table.close();
+        bytes = new byte[0];
+    }
+
+    private static int intAt(byte[] data, int position) {
+        return (data[position] & 0xFF)
+                | (data[position + 1] & 0xFF) << 8
+                | (data[position + 2] & 0xFF) << 16
+                | (data[position + 3] & 0xFF) << 24;
     }
 
     private static void literal(NativeSink out, MemorySegment input, int from, int to) {
