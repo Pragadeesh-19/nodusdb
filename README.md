@@ -103,7 +103,7 @@ From `python/benchmarks/compare.py`, run on 2026-10-20 against the code in this 
 
 Read it plainly. The flat buffer loads edges 3.9 times as fast as NetworkX's batch insert and 4.3 times as fast as SQLite's `executemany`, and deletes them twice as fast as NetworkX. A 3-hop query is 2.2 times faster than NetworkX and about 7 times faster than SQLite. NetworkX is still faster on common neighbors (5.0 µs against 8.3 µs). Single-edge calls are limited by the cost of a Python call into the library. These are single runs on a laptop CPU that boosts and throttles.
 
-**This is not what 0.1.0 on PyPI does yet.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time, and it loaded 162,689 edges per second on this benchmark with a 27.3 µs 3-hop median. The fix is in this repository and goes out in the next release. [docs/designs/engineering-review-native-memory.md](docs/designs/engineering-review-native-memory.md) tells the story.
+**Use 0.1.1 or later.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time, and it loaded 162,689 edges per second on this benchmark with a 27.3 µs 3-hop median. 0.1.1 fixes it. [docs/designs/engineering-review-native-memory.md](docs/designs/engineering-review-native-memory.md) tells the story.
 
 On the real SNAP soc-Pokec social network (30,622,564 edges), measured on 2026-10-04 and 2026-10-05:
 
@@ -186,7 +186,7 @@ On the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024, ea
 
 Ingest runs at 1.8 times PyArrow, 3.5 times SQLite and 6.8 times DuckDB. A columnar batch of upserts runs at 2 million rows a second, 6 times PyArrow's Python dict and 8 times SQLite. The files are as small as the others (3.95 MB for the flush against 3.66 for DuckDB and 3.96 for PyArrow), and DuckDB scans them faster than its own. PyArrow takes about 16% less time to flush with Snappy, and anything that crosses from Python once per row, such as a single `upsert` or `delete`, is limited by the cost of that call.
 
-**This is not what 0.1.0 on PyPI does yet.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed in 9.9 s and summed a million rows in 922.6 ms. The fix is in this repository and goes out in the next release. [docs/benchmarks.md](docs/benchmarks.md) has both runs.
+**Use 0.1.1 or later.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed in 9.9 s and summed a million rows in 922.6 ms. 0.1.1 fixes it. [docs/benchmarks.md](docs/benchmarks.md) has both runs.
 
 ## Beyond one process
 
@@ -230,7 +230,7 @@ This is what 0.1.x promises. A golden graph directory in the test suite pins the
 - **Failover is manual.** Nothing decides by itself that the writer is dead.
 - **Checkpoints pause writes** while they write the snapshot, about 9 seconds at 30.6 million edges.
 - **Recovery is not sub-second** at that size. It takes about 3 seconds in a fresh process.
-- **0.1.0 on PyPI is slower than this repository.** Its native library reads memory through an API that costs about 300 ns per access, so its lake ingest and flush are 40 to 50 times slower and its graph inserts about 5 times slower than the numbers above. The next release carries the fix.
+- **0.1.0 is slow.** Its native library reads memory through an API that costs about 300 ns per access, so its lake ingest and flush are 40 to 50 times slower and its graph inserts about 5 times slower than the numbers above. Install 0.1.1 or later.
 - **No compaction in the lake**, and reads that reach committed files decode whole files.
 - **The schema language has unions only.** Intersection and exclusion are not built.
 - **Each Python call costs a few microseconds.** Use the batch forms for bulk work.
@@ -260,4 +260,4 @@ mvn test                       # the Java suite; no GraalVM needed
 
 Licensed under the [Apache License, Version 2.0](LICENSE).
 
-Status: 0.1.0, Beta. These are built and tested in CI on Linux, macOS and Windows: the graph engine, durability, typed tuples and permission checks, the reachability index for nested groups, log shipping with followers, restore and takeover, erasure, change watching, time travel, the Iceberg projection and the lake write path. Still open: more than one writer, compaction and the Arrow export for the lake, and wheels for Alpine, older Linux and Windows on ARM.
+Status: 0.1.1, Beta. These are built and tested in CI on Linux, macOS and Windows: the graph engine, durability, typed tuples and permission checks, the reachability index for nested groups, log shipping with followers, restore and takeover, erasure, change watching, time travel, the Iceberg projection and the lake write path. Still open: more than one writer, compaction and the Arrow export for the lake, and wheels for Alpine, older Linux and Windows on ARM.

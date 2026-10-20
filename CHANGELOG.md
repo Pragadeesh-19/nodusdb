@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.1.1
+
+The native library is 5 times faster on graph inserts and 40 to 50 times faster on lake writes than 0.1.0. The graph directory format, the Parquet files and the Python API are unchanged.
+
 ### Fixed
 
 - The native library is much faster. In 0.1.0 every read and write of native memory went through `MemorySegment` accessors, which native image compiles to a call of about 300 ns. They now go through `NativeMemory`, which uses GraalVM pointers in the native library and keeps the JDK accessors on the JVM. The native path still checks bounds and liveness, so a bad access raises an error and never reads arbitrary memory. Measured on the development laptop against 0.1.0:

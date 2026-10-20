@@ -7,7 +7,7 @@ Every number in this project's documentation comes from a measurement that is re
 - **Everything ran on one laptop.** An AMD Ryzen 7 5700U with 8 cores and 16 threads, 7.3 GB of memory, Windows 11, with the clock boost left on. The machine and the commands are in [`bench/baseline/MACHINE.md`](../bench/baseline/MACHINE.md). Numbers from other hardware are not comparable. CI builds and tests the code on Ubuntu, macOS and Windows but does not measure speed, except for a ratio gate (see below).
 - **Most results are single runs.** Where several runs exist, the text says how far they agreed.
 - **Different suites ran at different times with different builds of the library.** Each table says when it was taken. The newest, the 1-million-edge comparison and the lake suite, use the code in this repository built with the toolchain of the release wheels (GraalVM Community Edition 25.0.2). The Pokec graph suite and the durability run used an earlier build (GraalVM CE 22.0.2) and were not re-run.
-- **0.1.0 on PyPI is slower than this repository.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time. The fix is described in [the native memory review](designs/engineering-review-native-memory.md) and goes out in the next release. Both sets of numbers are below.
+- **0.1.0 was slower.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time. 0.1.1 fixes it, as [the native memory review](designs/engineering-review-native-memory.md) describes. Both sets of numbers are below.
 - **We list where we lose.** Each comparison says which engine is faster and by how much.
 
 ## Graph: 1,000,000 edges against NetworkX and SQLite

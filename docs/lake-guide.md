@@ -189,7 +189,7 @@ On the first 1,000,000 rows of the NYC taxi file, on 2026-10-20. NodusDB runs th
 
 Ingest and batch upserts are the fastest of the four, the files are as small as the others (3.95 MB for the flush, against 3.66 MB for DuckDB and 3.96 MB for PyArrow), and DuckDB scans them faster than its own. PyArrow flushes with Snappy in about 16% less time, and single upserts and deletes from Python are slower than PyArrow's dict and SQLite, because each one is a separate call into the library.
 
-**0.1.0 on PyPI is slower than this.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed 250,000 rows in 9.9 s and summed a million rows in 922.6 ms. The fix goes out in the next release. [Benchmarks](benchmarks.md#lake) has both runs.
+**0.1.0 was slower.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed 250,000 rows in 9.9 s and summed a million rows in 922.6 ms. 0.1.1 fixes it. [Benchmarks](benchmarks.md#lake) has both runs.
 
 The table is one run per cell on a laptop CPU with a Windows disk.
 
