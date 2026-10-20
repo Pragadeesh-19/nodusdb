@@ -168,25 +168,28 @@ WHERE NOT EXISTS (SELECT 1 FROM removed r WHERE r.key_hash = n.key_hash AND r.en
 
 ## Getting the speed
 
-1. **Use Arrow batches for volume.** A single `upsert` crosses the Python-to-native boundary and builds a row dict for every call. `upsert_table` and `upsert_columns` skip both. In the 2026-10-20 run an Arrow batch was 1.5 times faster than single calls (25,092 against 16,632 rows/s), a much smaller gap than the 45 times measured on 2026-10-04 (1,763,882 against 39,335), because the native write path itself is now the bottleneck.
-2. **Pick the flush size for your readers.** Larger buffers mean fewer, larger files, which scan faster. A layout of 250,000-row flushes scanned in about half the time of a layout of 5,000-row flushes in the benchmark (13.4 ms against 25.6 ms), because each file is a separate scan task for the reader.
-3. **Compression is a trade.** Snappy is the default and matches DuckDB. `compression="none"` takes about 38% less time to flush (6.1 s against 9.9 s in the 2026-10-20 run) and makes files about 36% larger (5.40 MB against 3.95 MB).
+1. **Use Arrow batches for volume.** A single `upsert` crosses the Python-to-native boundary and builds a row dict for every call. `upsert_table` and `upsert_columns` skip both. In the 2026-10-20 run an Arrow batch upserted 2,002,694 rows a second against 36,051 for single calls, 56 times faster.
+2. **Pick the flush size for your readers.** Larger buffers mean fewer, larger files, which scan faster. A layout of 250,000-row flushes scanned in about half the time of a layout of 5,000-row flushes in the benchmark (12.8 ms against 26.1 ms), because each file is a separate scan task for the reader.
+3. **Compression is a trade.** Snappy is the default and matches DuckDB. `compression="none"` takes about 40% less time to flush (0.138 s against 0.231 s for 250,000 rows) and makes files about 36% larger (5.40 MB against 3.95 MB).
 4. **Keep an eye on `flush()` latency.** If writers stall, the flush is the bottleneck, and the fix is a faster disk or a larger `flush_rows`, not more writer threads. Writes and reads on one table share one lock.
 
 ## Numbers
 
-**Read this before you choose it for a write-heavy job: the write path in 0.1.0 is slow.** On 2026-10-20, against the library the 0.1.0 wheel carries, on the first 1,000,000 rows of the NYC taxi file:
+On the first 1,000,000 rows of the NYC taxi file, on 2026-10-20. NodusDB runs the code in this repository; the other engines ran the same day on the same laptop:
 
 | Measure | NodusDB | DuckDB | PyArrow | SQLite |
 |---|---:|---:|---:|---:|
-| Ingest, rows/s | 21,017 | 147,314 | 547,340 | 285,608 |
-| Upserts/s, one call per row | 16,632 | did not finish | 329,166 | 243,167 |
-| Upserts/s, one Arrow batch | 25,092 | | | |
-| Deletes/s | 97,090 | did not finish | 710,651 | 259,898 |
-| Flush of 250,000 rows | 9.9 s | 1.1 s | 0.19 s | 0.09 s |
-| Grouped scan by DuckDB of the files each wrote, median | 13.4 ms | 15.0 ms | 17.8 ms | |
+| Ingest, rows/s | 994,900 | 147,314 | 547,340 | 285,608 |
+| Upserts/s, one Arrow batch | 2,002,694 | | | |
+| Upserts/s, one call per row | 36,051 | did not finish | 329,166 | 243,167 |
+| Deletes/s, one call per key | 265,834 | did not finish | 710,651 | 259,898 |
+| Flush of 250,000 rows | 0.231 s | 1.124 s | 0.194 s | 0.092 s (database file) |
+| Sum and average of 1,000,000 rows | 2.6 ms in memory | 7.9 ms over its files | | |
+| Grouped scan by DuckDB of the files each wrote, median | 12.8 ms | 15.0 ms | 17.8 ms | |
 
-What holds up: the files are small (3.95 MB for the flush, against 3.66 MB for DuckDB and 3.96 MB for PyArrow), and DuckDB scans them as fast as its own. What does not: the write side is the slowest of the four by a wide margin, and the native `sum` over 1,000,000 rows takes 923 ms. An earlier run on 2026-10-04 measured 846,137 rows per second for ingest and a 0.265 s flush, but that was an earlier implementation with columns in Java arrays. The columns moved to native memory the next day, and the loss is somewhere in that move. [Benchmarks](benchmarks.md#lake) has both runs and what is known so far. The fix is the first lake item in [TODOS.md](../TODOS.md).
+Ingest and batch upserts are the fastest of the four, the files are as small as the others (3.95 MB for the flush, against 3.66 MB for DuckDB and 3.96 MB for PyArrow), and DuckDB scans them faster than its own. PyArrow flushes with Snappy in about 16% less time, and single upserts and deletes from Python are slower than PyArrow's dict and SQLite, because each one is a separate call into the library.
+
+**0.1.0 on PyPI is slower than this.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed 250,000 rows in 9.9 s and summed a million rows in 922.6 ms. The fix goes out in the next release. [Benchmarks](benchmarks.md#lake) has both runs.
 
 The table is one run per cell on a laptop CPU with a Windows disk.
 

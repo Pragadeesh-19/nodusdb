@@ -13,7 +13,7 @@ Good places to begin:
 - **Wheels for more platforms.** Alpine (musl), older Linux and Windows on ARM are missing. The workflow is in `.github/workflows/wheels.yml`.
 - **Cloud role credentials** for the S3 client (instance profiles, web identity). The credential seam exists and the providers are open.
 - **A Prometheus or OpenTelemetry adapter** over `stats()`.
-- **Performance.** The in-memory write path through Python is slower than it was in an earlier build, and the cause is not found. That is an open investigation with a benchmark and a git history to bisect. See "The in-memory write path is slower" in TODOS.md.
+- **Performance.** Graph inserts recovered five of the six to eight times they lost when the graph moved to native memory, but are still below the build at commit `0b05475` (810,031 against 1.06 to 1.30 million flat inserts a second). Where the rest goes is not measured yet. See "The in-memory write path is slower" in TODOS.md.
 - **Docs and examples.** If you got stuck on something, someone else will.
 
 ## Set up
@@ -65,6 +65,8 @@ The Java packages are listed in [docs/architecture.md](docs/architecture.md), wi
 These rules are the reason the engine is fast and the reason it is readable. A change that breaks one should say why.
 
 **On the hot path, allocate nothing.** Queries, edge inserts and deletes, and lake upserts must not call `new`, box a number, use a `java.util` collection, use a stream or build a string. Allocation belongs in constructors and in growth methods, and those are marked. A test reads the thread's allocated-bytes counter across a primed window and requires zero, and JMH runs with `-prof gc`.
+
+**Touch native memory only through `NativeMemory`.** In the native library a `MemorySegment` accessor such as `getAtIndex` costs about 300 ns, against under 2 ns on the JVM, so a direct call is fast in every Java test and slow for every user. `AccessorGuardTest` fails the build on one. Pass the address and size the owner caches (see `NativeColumn`), and in a loop over many values copy a chunk into a heap array with `MemorySegment.copy` first. [architecture.md](docs/architecture.md#reading-and-writing-native-memory) explains why.
 
 **Primitives and arrays.** Use `int` for degrees, positions and offsets, and `long` for node ids. Keep data in parallel primitive arrays or native segments, in place of arrays of objects. Use power-of-two sizes with masks, and never `/` or `%` on a hot path.
 

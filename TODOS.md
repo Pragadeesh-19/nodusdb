@@ -318,6 +318,30 @@
 **Priority:** P3
 **Depends on:** none
 
+### Unchecked native reads for loops that validate their range once
+
+**What:** A second `NativeMemory` accessor without the per-access bounds check, used only by loops that check their whole range before they start (sums, statistics, gathers).
+
+**Why:** In the native library a checked read through `NativeMemory` costs about 5.7 ns per call, because GraalVM Community Edition inlines only trivial methods (at most 20 nodes and one call) and the checked accessor is not one. A probe that hoisted the address and checked bounds in the loop itself measured 1.1 to 1.8 ns.
+
+**Context:** The engineering review of the native-memory fix (2026-10-20) chose checked access everywhere so that a bug throws instead of crashing the host process. The hot sequential loops were moved to chunked bulk copies instead, which run at about 2 ns per element with every bound checked by the JDK. Add an unchecked variant only where a profile of the fixed build shows the checked call dominating, and keep a test that exercises the range check of every loop that uses it.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** the native-memory fix on `perf/native-memory`
+
+### Zero-copy Arrow export from the active lake buffer
+
+**What:** Export the active buffer's columns through the Arrow C Data Interface, so PyArrow, DuckDB and Polars read rows that are not flushed yet without a copy (L14).
+
+**Why:** D26 deferred this only because the columns lived on the Java heap, where the collector can move them under native code. Since 2026-10-05 the columns live in native memory, so the blocker is gone.
+
+**Context:** Columns are 64-byte aligned native buffers. Fixed-width columns map to Arrow buffers directly. Strings are stored as per-row offsets and lengths into a shared slab, so an export builds an int32 offsets buffer, or copies the slab, per column. The hard part is lifetime: a reader may hold the export while writers continue, so the export needs either a frozen-buffer contract or a release callback that keeps the buffer alive until the consumer releases it. Design it in its own review before writing code.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** the native-memory fix on `perf/native-memory`; a design review for the release and freeze contract
+
 ## Release and packaging
 
 ### Wheels for more platforms
@@ -370,29 +394,21 @@
 
 ### The in-memory write path is slower than it was at Ring 3
 
-**What:** Find out why 1,000,000 flat inserts take about 6 seconds in the release library where commit `0b05475` took under 1 second, and why 3-hop is 2.6 times slower.
+**What:** Find where the rest of the insert time goes. After the native-memory fix, 1,000,000 flat inserts run at 810,031 a second where commit `0b05475` ran 1.06 to 1.30 million; the 3-hop median is back at 11.5 µs.
 
-**Why:** The README used to claim 1.25 million inserts per second. The release library measures about 165 thousand on the same laptop (D238). The design target is millions of edge writes per second.
+**Why:** The design target is millions of edge writes per second. The fix recovered five of the six to eight times the inserts lost (162,689 a second in 0.1.0), so about a third remains.
 
-**Context:** `python/benchmarks/native_ratio.py` shows the library running the insert path 11 to 13 times slower than the same code on a JVM, so native-image code for off-heap access is a large part of it. Oracle GraalVM 25 takes about a third less time per call than the Community Edition. Between 0b05475 and now the engine gained typed log records, native-memory storage, the memory budget, a seqlock on every write and the change feed. `bench/baseline/release-windows-dev.txt` holds the comparison.
-
-**Effort:** L
-**Priority:** P2
-**Depends on:** none
-
-### The lake write path is about 40 times slower in the native library than on 2026-10-04
-
-**What:** Find why `LakeTable` ingest fell from 846,137 to 21,017 rows per second, a 250,000-row Snappy flush from 0.265 s to 9.9 s, and the native sum over 1,000,000 rows from 4.0 ms to 922.6 ms, and restore the old speed.
-
-**Why:** The lake engine is half of what this project offers, and the README and `docs/lake.md` carried the 2026-10-04 figures as if they described 0.1.0. They do not. The output files are unchanged (same sizes, same query times in DuckDB), so the loss is on the write side.
-
-**Context:** `bench/baseline/lake-release-windows-dev.txt` has the run and what it narrows down. A library built on 2026-10-07 with GraalVM CE 22 is as slow, so it is not the toolchain in the wheels. The same Java code on a plain JVM is fast (`DeltaMemTableBench` 299 ns per upsert). `python/benchmarks/lake_native_probe.py` times upsert, sum, single upsert and flush through the wheel; the native sum spends about 485 ns per element. The pattern matches memory-segment access that native-image does not optimize, in loops that touch native columns element by element. Start by profiling `NativeColumn` reads and writes in the native library and checking whether `Arena.ofAuto` segments take a slow path there. The lake moved its columns to native memory on 2026-10-05 (commits `c099214` to `d823261`), the day after `lake-heavyweights-windows-dev-v2.json` was measured at `3fdf779`, and `67061ff` switched to GC-managed arenas the same day. Build the native library at `3fdf779` and at those commits and time `python/benchmarks/lake_native_probe.py` on each.
+**Context:** The main cause was found and fixed: in the native library every `MemorySegment` access cost about 300 ns (D247). `native_ratio.py` now measures 2.5 to 2.7 for `add_edge` against the JVM, down from about 9. What is left is not measured. Candidates are the work added since `0b05475` (typed log records, the memory budget reservation, a seqlock section per write, the change ring) and the 5.7 ns of a checked `NativeMemory` call, which Community Edition does not inline (D248). Start with a JMH run of `KernelWriteBench` at `0b05475` and at the fixed commit on the JVM, which separates the added work from the native cost.
 
 **Effort:** M
-**Priority:** P1
-**Depends on:** none
+**Priority:** P2
+**Depends on:** the native-memory fix on `perf/native-memory`
 
 ## Completed
+
+### The lake write path in the native library
+
+Fixed on `perf/native-memory`. Every `MemorySegment` accessor in the native library cost about 300 ns, because native image does not compile the `VarHandle` path behind it. `NativeMemory` reads and writes through GraalVM pointers there, owners cache addresses, sequential loops copy chunks into heap arrays and Snappy runs over a heap copy of each page. On the lake suite: ingest 21,017 to 994,900 rows a second, a Snappy flush of 250,000 rows 9.924 to 0.231 s, the in-memory sum of a million rows 922.6 to 2.6 ms, with byte-identical Parquet. Decisions D246 to D252 and `docs/designs/engineering-review-native-memory.md`.
 
 ### Native performance gate against a recorded toolchain baseline
 

@@ -89,19 +89,21 @@ Give it a directory and it is durable: every change goes to a checksummed write-
 
 ### What it measures
 
-From `python/benchmarks/compare.py`, run on 2026-10-18 against the native library the release wheels carry. It loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000, and runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
+From `python/benchmarks/compare.py`, run on 2026-10-20 against the code in this repository, built with the toolchain of the release wheels. It loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000, and runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
 
 | Configuration | Insert edges/s | Delete edges/s | 3-hop median | Common neighbors median |
 |---|---:|---:|---:|---:|
-| NodusDB, flat `array('q')` | 162,689 | 137,975 | 27.3 µs | 15.6 µs |
-| NodusDB, batch of tuples | 132,281 | 119,379 | 27.3 µs | 15.7 µs |
-| NodusDB, single-edge calls | 71,962 | 66,951 | 27.3 µs | 19.0 µs |
-| NetworkX, single | 149,164 | 324,683 | 35.4 µs | 6.1 µs |
-| NetworkX, batch | 136,750 | 307,860 | 41.2 µs | 9.1 µs |
-| SQLite, `executemany` | 133,632 | 132,545 | 113.6 µs | 23.3 µs |
-| SQLite, one statement per row | 101,553 | 100,175 | 114.1 µs | 23.3 µs |
+| NodusDB, flat `array('q')` | 810,031 | 807,466 | 11.5 µs | 8.3 µs |
+| NodusDB, batch of tuples | 477,112 | 469,098 | 11.3 µs | 8.3 µs |
+| NodusDB, single-edge calls | 163,443 | 168,178 | 11.7 µs | 8.3 µs |
+| NetworkX, single | 176,695 | 405,820 | 25.3 µs | 5.0 µs |
+| NetworkX, batch | 207,937 | 393,485 | 26.2 µs | 5.1 µs |
+| SQLite, `executemany` | 187,884 | 175,200 | 80.9 µs | 16.5 µs |
+| SQLite, one statement per row | 147,211 | 141,748 | 78.5 µs | 15.9 µs |
 
-Read it plainly. Inserts are in the same range as NetworkX and SQLite. A 3-hop query is 1.3 to 1.5 times faster than NetworkX and about 4 times faster than SQLite. NetworkX deletes edges 2.2 to 2.4 times as fast and is faster on common neighbors. These are single runs on a laptop CPU that boosts and throttles; three runs of the NodusDB insert rate agreed within 5%.
+Read it plainly. The flat buffer loads edges 3.9 times as fast as NetworkX's batch insert and 4.3 times as fast as SQLite's `executemany`, and deletes them twice as fast as NetworkX. A 3-hop query is 2.2 times faster than NetworkX and about 7 times faster than SQLite. NetworkX is still faster on common neighbors (5.0 µs against 8.3 µs). Single-edge calls are limited by the cost of a Python call into the library. These are single runs on a laptop CPU that boosts and throttles.
+
+**This is not what 0.1.0 on PyPI does yet.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time, and it loaded 162,689 edges per second on this benchmark with a 27.3 µs 3-hop median. The fix is in this repository and goes out in the next release. [docs/designs/engineering-review-native-memory.md](docs/designs/engineering-review-native-memory.md) tells the story.
 
 On the real SNAP soc-Pokec social network (30,622,564 edges), measured on 2026-10-04 and 2026-10-05:
 
@@ -114,8 +116,6 @@ On the real SNAP soc-Pokec social network (30,622,564 edges), measured on 2026-1
 | Recovery of 30.6M edges plus 500,000 log frames | 2.8 s | |
 
 Those suites ran with an earlier build of the library and have not been re-run since. [docs/benchmarks.md](docs/benchmarks.md) has every table, the methods, and where each other engine wins.
-
-**One thing to know before you rely on the insert numbers.** The code in this release is slower per call than the build measured on 2026-10-03. That build loaded 1.06 to 1.30 million edges per second and answered a 3-hop query in about 10.5 µs on the same laptop, and this one loads about 165 thousand and answers in about 27 µs. The cause is not found yet. It is an open item in [TODOS.md](TODOS.md) with a benchmark and a git history to bisect, and fixing it is one of the most useful things a contributor could do.
 
 ## Permissions
 
@@ -173,19 +173,20 @@ The files are standard Parquet v1 with Snappy compression, dictionary encoding f
 
 ### What it measures
 
-On the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024, each engine in its own process, measured on 2026-10-20 against the native library the 0.1.0 wheel carries:
+On the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024, each engine in its own process, measured on 2026-10-20. NodusDB runs the code in this repository; the other engines ran the same day on the same laptop:
 
 | Measure | NodusDB | DuckDB | PyArrow | SQLite |
 |---|---:|---:|---:|---:|
-| Ingest of 1,000,000 rows, rows/s | 21,017 | 147,314 | 547,340 | 285,608 |
-| 500,000 upserts, one call per row, rows/s | 16,632 | did not finish | 329,166 | 243,167 |
-| 500,000 upserts, one Arrow batch, rows/s | 25,092 | | | |
-| Flush of a 250,000-row buffer to Parquet | 9.9 s | 1.1 s | 0.19 s | 0.09 s |
-| DuckDB grouped scan of the files each wrote, median | 13.4 ms | 15.0 ms | 17.8 ms | |
+| Ingest of 1,000,000 rows, rows/s | 994,900 | 147,314 | 547,340 | 285,608 |
+| 500,000 upserts, one Arrow batch, rows/s | 2,002,694 | | | |
+| 500,000 upserts, one call per row, rows/s | 36,051 | did not finish | 329,166 | 243,167 |
+| Flush of a 250,000-row buffer | 0.231 s | 1.124 s | 0.194 s | 0.092 s (database file) |
+| Sum and average of 1,000,000 rows | 2.6 ms in memory | 7.9 ms over its files | | |
+| DuckDB grouped scan of the files each wrote, median | 12.8 ms | 15.0 ms | 17.8 ms | |
 
-The last row is the good news. The files NodusDB writes are as small as the others (3.95 MB for the flush against 3.66 for DuckDB and 3.96 for PyArrow) and DuckDB scans them as fast as its own. The other rows are the bad news: **the write path of the lake engine in 0.1.0 is far slower than the other engines, and slower than it used to be.** An earlier measurement on 2026-10-04 showed 846,137 rows per second for ingest and a 0.265 s flush. It described an implementation that kept columns in Java arrays. The columns moved to native memory the next day, and the same suite on today's library is about 40 times slower on ingest and on the flush. The same Java code on a plain JVM is fast (299 ns per upsert), so the loss is in the native build. The cause is not found. It is the first lake item in [TODOS.md](TODOS.md), and [docs/benchmarks.md](docs/benchmarks.md) has the run and what it narrows down.
+Ingest runs at 1.8 times PyArrow, 3.5 times SQLite and 6.8 times DuckDB. A columnar batch of upserts runs at 2 million rows a second, 6 times PyArrow's Python dict and 8 times SQLite. The files are as small as the others (3.95 MB for the flush against 3.66 for DuckDB and 3.96 for PyArrow), and DuckDB scans them faster than its own. PyArrow takes about 16% less time to flush with Snappy, and anything that crosses from Python once per row, such as a single `upsert` or `delete`, is limited by the cost of that call.
 
-If you need to write Parquet quickly today, use PyArrow or DuckDB. If you are here to help fix this, you have a benchmark, a probe script and a list of suspect commits to start from.
+**This is not what 0.1.0 on PyPI does yet.** The 0.1.0 library read native memory through an API that costs about 300 ns per access when compiled ahead of time: it ingested 21,017 rows a second, flushed in 9.9 s and summed a million rows in 922.6 ms. The fix is in this repository and goes out in the next release. [docs/benchmarks.md](docs/benchmarks.md) has both runs.
 
 ## Beyond one process
 
@@ -229,7 +230,7 @@ This is what 0.1.x promises. A golden graph directory in the test suite pins the
 - **Failover is manual.** Nothing decides by itself that the writer is dead.
 - **Checkpoints pause writes** while they write the snapshot, about 9 seconds at 30.6 million edges.
 - **Recovery is not sub-second** at that size. It takes about 3 seconds in a fresh process.
-- **The lake write path is slow in 0.1.0**, about 40 times slower than an earlier build on ingest and on the flush. The files it writes are fine. See [the lake numbers](#the-lake-engine).
+- **0.1.0 on PyPI is slower than this repository.** Its native library reads memory through an API that costs about 300 ns per access, so its lake ingest and flush are 40 to 50 times slower and its graph inserts about 5 times slower than the numbers above. The next release carries the fix.
 - **No compaction in the lake**, and reads that reach committed files decode whole files.
 - **The schema language has unions only.** Intersection and exclusion are not built.
 - **Each Python call costs a few microseconds.** Use the batch forms for bulk work.

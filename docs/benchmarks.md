@@ -6,37 +6,42 @@ Every number in this project's documentation comes from a measurement that is re
 
 - **Everything ran on one laptop.** An AMD Ryzen 7 5700U with 8 cores and 16 threads, 7.3 GB of memory, Windows 11, with the clock boost left on. The machine and the commands are in [`bench/baseline/MACHINE.md`](../bench/baseline/MACHINE.md). Numbers from other hardware are not comparable. CI builds and tests the code on Ubuntu, macOS and Windows but does not measure speed, except for a ratio gate (see below).
 - **Most results are single runs.** Where several runs exist, the text says how far they agreed.
-- **Different suites ran at different times with different builds of the library.** Each table says when it was taken. The newest, the 1-million-edge comparison and the lake suite, use the library the release wheels carry (GraalVM Community Edition 25.0.2). The Pokec graph suite and the durability run used an earlier build (GraalVM CE 22.0.2) and were not re-run for 0.1.0.
-- **The code got slower per call between 2026-10-03 and 0.1.0.** This is measured, not guessed, and it is the first open item under "Release and packaging" in [TODOS.md](../TODOS.md). See [The write path got slower](#the-write-path-got-slower).
+- **Different suites ran at different times with different builds of the library.** Each table says when it was taken. The newest, the 1-million-edge comparison and the lake suite, use the code in this repository built with the toolchain of the release wheels (GraalVM Community Edition 25.0.2). The Pokec graph suite and the durability run used an earlier build (GraalVM CE 22.0.2) and were not re-run.
+- **0.1.0 on PyPI is slower than this repository.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time. The fix is described in [the native memory review](designs/engineering-review-native-memory.md) and goes out in the next release. Both sets of numbers are below.
 - **We list where we lose.** Each comparison says which engine is faster and by how much.
 
 ## Graph: 1,000,000 edges against NetworkX and SQLite
 
-`python/benchmarks/compare.py`, run on 2026-10-18 with the native library from the release wheels. It loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000 of them, and runs 200 queries of each kind. Every backend is checked for identical answers before timing starts.
+`python/benchmarks/compare.py`, run on 2026-10-20 with the code in this repository. It loads 1,000,000 directed edges over 200,000 nodes, deletes 500,000 of them, and runs 200 queries of each kind. Every backend is checked for identical answers before timing starts. Raw output: [`bench/baseline/native-memory-windows-dev.txt`](../bench/baseline/native-memory-windows-dev.txt).
 
 | Configuration | Insert edges/s | Delete edges/s | 3-hop median | Common neighbors median |
 |---|---:|---:|---:|---:|
-| NodusDB, flat `array('q')` | 162,689 | 137,975 | 27.3 µs | 15.6 µs |
-| NodusDB, batch of tuples | 132,281 | 119,379 | 27.3 µs | 15.7 µs |
-| NodusDB, single-edge calls | 71,962 | 66,951 | 27.3 µs | 19.0 µs |
-| NetworkX, single | 149,164 | 324,683 | 35.4 µs | 6.1 µs |
-| NetworkX, batch | 136,750 | 307,860 | 41.2 µs | 9.1 µs |
-| SQLite, `executemany` | 133,632 | 132,545 | 113.6 µs | 23.3 µs |
-| SQLite, one statement per row | 101,553 | 100,175 | 114.1 µs | 23.3 µs |
+| NodusDB, flat `array('q')` | 810,031 | 807,466 | 11.5 µs | 8.3 µs |
+| NodusDB, batch of tuples | 477,112 | 469,098 | 11.3 µs | 8.3 µs |
+| NodusDB, single-edge calls | 163,443 | 168,178 | 11.7 µs | 8.3 µs |
+| NetworkX, single | 176,695 | 405,820 | 25.3 µs | 5.0 µs |
+| NetworkX, batch | 207,937 | 393,485 | 26.2 µs | 5.1 µs |
+| SQLite, `executemany` | 187,884 | 175,200 | 80.9 µs | 16.5 µs |
+| SQLite, one statement per row | 147,211 | 141,748 | 78.5 µs | 15.9 µs |
 
-- Inserts are close to NetworkX and SQLite. The flat buffer loads 1.2 times as fast as NetworkX's batch insert and as SQLite's `executemany`.
-- NetworkX removes edges 2.2 to 2.4 times as fast as NodusDB's flat buffer does.
-- The 3-hop median is 1.3 to 1.5 times faster than NetworkX and about 4 times faster than SQLite.
-- NetworkX is faster on common neighbors (6.1 and 9.1 µs against 15.6 µs).
+- The flat buffer loads 3.9 times as fast as NetworkX's batch insert and 4.3 times as fast as SQLite's `executemany`.
+- It removes edges twice as fast as NetworkX.
+- The 3-hop median is 2.2 times faster than NetworkX and about 7 times faster than SQLite.
+- NetworkX is faster on common neighbors (5.0 µs against 8.3 µs).
+- Single-edge calls are limited by the cost of one Python call into the library.
 
-Three runs of the NodusDB insert rate agreed within 5%.
+### How this changed
 
-### The write path got slower
+| Measure | 2026-10-03, commit `0b05475` | 0.1.0, 2026-10-18 | This repository, 2026-10-20 |
+|---|---:|---:|---:|
+| Flat inserts per second | 1.06 to 1.30 million | 162,689 | 810,031 |
+| Flat deletes per second | | 137,975 | 807,466 |
+| 3-hop median | 10.3 to 10.7 µs | 27.3 µs | 11.5 µs |
+| Common neighbors median | | 15.6 µs | 8.3 µs |
 
-An earlier version of this table, measured on 2026-10-03 at commit `0b05475` (before typed log records, native-memory storage, the memory budget and the change feed), reported 1.25 million inserts per second and a 10.5 µs 3-hop median. That commit, rebuilt with GraalVM CE 22.0.2 and run on the same laptop on 2026-10-18, measured 1.06 to 1.30 million inserts per second and 10.3 to 10.7 µs. The code in 0.1.0 is slower on this benchmark: 6.5 to 8 times on inserts and about 2.6 times on the 3-hop median.
+Commit `0b05475` kept the graph in Java arrays. When it moved to native memory, every read and write went through `MemorySegment` accessors, which native image compiles to a call of about 300 ns. 0.1.0 shipped that way. The fix routes every access through `NativeMemory`, which uses GraalVM pointers in the native library. The 3-hop median is back, and inserts recovered five of the six to eight times they lost. The remaining gap is not measured yet. The likely parts are the work the engine added since (typed log records, the memory budget, the change feed) and the cost of a checked access in Community Edition, which inlines only trivial methods.
 
-A native-image build runs the insert path 11 to 13 times slower than the same code on a JVM on this laptop (`python/benchmarks/native_ratio.py`). In CI the ratio is 5.8 to 7.7 for `add_edge` and 12.5 to 14.2 for `has_edge`, and the gate fails above 30. The cause of the slowdown since 2026-10-03 is not found, and finding it is open work.
-
+`python/benchmarks/native_ratio.py` compares the same Java code on the JVM and in the native library. The 0.1.0 library measured about 9 for `add_edge` and 16 for `has_edge` on this laptop and 5.8 to 7.7 and 12.5 to 14.2 in CI. The fixed library measures 2.5 to 2.7 and 1.8 to 2.2 on this laptop, and the gate now fails above 10.
 ### Which toolchain builds the library
 
 The same sources built by three GraalVM toolchains (`bench/baseline/release-windows-dev.txt`):
@@ -59,7 +64,7 @@ JMH, `-prof gc`, recorded in `bench/baseline/windows-dev.json`.
 | `GraphTraversalBench` common neighbors | 499 ns (0.30 µs on 2026-10-03) |
 | `GraphTraversalBench` 3-hop | 21.2 µs (15.2 µs on 2026-10-03) |
 | `ChurnBench`, alternating add and remove | 0 B/op allocation in steady state |
-| Native speed ratio, `add_edge` and `has_edge` | 5.8 to 7.7 and 12.5 to 14.2 across CI (gate 30) |
+| Native speed ratio, `add_edge` and `has_edge` | 2.5 to 2.7 and 1.8 to 2.2 on this laptop after the native-memory fix (gate 10) |
 
 Reading `gc.alloc.rate.norm`: a true per-operation allocation scales with throughput. JMH's background allocation shows as a constant `gc.alloc.rate` of about 0.006 MB/s across benchmarks, so a per-operation value that rises as throughput falls is harness noise, not kernel allocation. Check `gc.count` too.
 
@@ -171,30 +176,54 @@ Adding and removing a direct member costs the same either way. The index trades 
 - **W3, flush.** Write a 250,000-row buffer to Parquet.
 - **W4, read.** A DuckDB query totals revenue and trips over the files each engine wrote. Every source gives the same revenue total, 27,486,629.10.
 
-### The current run: 2026-10-20, the 0.1.0 library
+### This repository: 2026-10-20
 
-The native library from the 0.1.0 wheel, Python 3.12.7, pyarrow 26.0.0, DuckDB 1.5.6. Raw output: [`lake-heavyweights-release-windows-dev.json`](../bench/baseline/lake-heavyweights-release-windows-dev.json), with the tables and the analysis in [`lake-release-windows-dev.txt`](../bench/baseline/lake-release-windows-dev.txt).
+NodusDB runs the code in this repository; the other engines ran on the same day, laptop and package versions (Python 3.12.7, pyarrow 26.0.0, DuckDB 1.5.6). Raw output: [`lake-heavyweights-native-memory-windows-dev.json`](../bench/baseline/lake-heavyweights-native-memory-windows-dev.json) for NodusDB and [`lake-heavyweights-release-windows-dev.json`](../bench/baseline/lake-heavyweights-release-windows-dev.json) for the others, with the analysis in [`native-memory-windows-dev.txt`](../bench/baseline/native-memory-windows-dev.txt).
 
 | Measure | NodusDB | DuckDB | PyArrow | SQLite |
 |---|---:|---:|---:|---:|
-| W1 ingest, rows/s | 21,017 | 147,314 | 547,340 | 285,608 |
-| W2 upserts/s, one call per row | 16,632 | did not finish | 329,166 | 243,167 |
-| W2 upserts/s, one Arrow batch | 25,092 | | | |
-| W2 deletes/s | 97,090 | did not finish | 710,651 | 259,898 |
-| W3 flush of 250,000 rows, Snappy | 9.924 s | 1.124 s | 0.194 s | 0.092 s (database file) |
-| W3 flush of 250,000 rows, no compression | 6.136 s | | | |
-| W4 grouped scan of the files, median | 13.4 ms | 15.0 ms | 17.8 ms | n/a |
-| W4 grouped scan, p99 | 40.4 ms | 16.2 ms | 22.0 ms | n/a |
-| W4 NodusDB in-memory sum and average, 1M rows | 922.6 ms | 7.9 ms (over files) | | |
+| W1 ingest, rows/s | 994,900 | 147,314 | 547,340 | 285,608 |
+| W2 upserts/s, one Arrow batch | 2,002,694 | | | |
+| W2 upserts/s, one call per row | 36,051 | did not finish | 329,166 | 243,167 |
+| W2 deletes/s, one call per key | 265,834 | did not finish | 710,651 | 259,898 |
+| W3 flush of 250,000 rows, Snappy | 0.231 s | 1.124 s | 0.194 s | 0.092 s (database file) |
+| W3 flush of 250,000 rows, no compression | 0.138 s | | | |
+| W4 grouped scan of the files, median | 12.8 ms | 15.0 ms | 17.8 ms | n/a |
+| W4 grouped scan, p99 | 18.9 ms | 16.2 ms | 22.0 ms | n/a |
+| W4 sum and average of 1M rows | 2.6 ms in memory | 7.9 ms over its files | | |
 
 DuckDB's update loop did not finish: its worker had used about 35 minutes of CPU when it was stopped by hand, where the same step took about 9 minutes in the 2026-10-04 run. File sizes: NodusDB 3.95 MB (Snappy) or 5.40 MB (none), DuckDB 3.66, PyArrow 3.96, SQLite 11.85.
 
-What this shows:
+Where NodusDB wins:
 
-- **The files are fine.** NodusDB's output is the same size as before, DuckDB reads it in 13.4 ms against 15.0 ms for DuckDB's own files, and every source returns the same revenue total. The 5,000-row streaming layout produced 101 files and scanned in 25.6 ms, about twice the clean layout, because each file is a separate scan task.
-- **The write path is not.** NodusDB is slower than PyArrow and SQLite on every write measure and slower than DuckDB on ingest and flush: 7 to 26 times slower on ingest and 9 to 108 times slower on the flush. Against its own 2026-10-04 run, ingest is 40 times slower, the flush 37 times slower, the Arrow batch upsert 70 times slower and the native sum 230 times slower.
-- **The native aggregate is 117 times slower than DuckDB over files**, where on 2026-10-04 it was twice as fast.
-- **The tail is worse than DuckDB's.** The clean layout's p99 is 40.4 ms against 16.2 ms.
+- **Ingest:** 1.8 times PyArrow, 3.5 times SQLite and 6.8 times DuckDB.
+- **Batch upserts:** 2 million rows a second, 6 times PyArrow's Python dict and 8 times SQLite.
+- **Flush against DuckDB:** 0.231 s against 1.124 s for the same 250,000 rows.
+- **Scans of its own files:** a 12.8 ms median against 15.0 ms for DuckDB's own files and 17.8 ms for PyArrow's.
+- **In-memory aggregates:** 2.6 ms for a sum and average over a million rows still in the write buffer, against 7.9 ms for DuckDB's ungrouped query over its files. The two are not the same workload, because the native call reads no files.
+
+Where the others win:
+
+- **Snappy flush:** PyArrow takes about 16% less time (0.194 s against 0.231 s). With compression off NodusDB flushes in 0.138 s, and its files are 36% larger.
+- **One call per row or key:** PyArrow's dict and SQLite run single upserts and deletes faster, because each NodusDB call crosses from Python into the native library.
+- **Scan tail:** DuckDB's p99 over its own files is 16.2 ms against 18.9 ms.
+
+### The 0.1.0 library: 2026-10-20
+
+The library the 0.1.0 wheel carries, on the same day. Raw output: [`lake-heavyweights-release-windows-dev.json`](../bench/baseline/lake-heavyweights-release-windows-dev.json), with the analysis in [`lake-release-windows-dev.txt`](../bench/baseline/lake-release-windows-dev.txt).
+
+| Measure | 0.1.0 | This repository |
+|---|---:|---:|
+| W1 ingest, rows/s | 21,017 | 994,900 |
+| W2 upserts/s, one Arrow batch | 25,092 | 2,002,694 |
+| W2 upserts/s, one call per row | 16,632 | 36,051 |
+| W2 deletes/s | 97,090 | 265,834 |
+| W3 flush of 250,000 rows, Snappy | 9.924 s | 0.231 s |
+| W3 flush of 250,000 rows, no compression | 6.136 s | 0.138 s |
+| W4 grouped scan, median and p99 | 13.4 and 40.4 ms | 12.8 and 18.9 ms |
+| W4 in-memory sum and average, 1M rows | 922.6 ms | 2.6 ms |
+
+The files were the same in both: same sizes, same scan medians, same revenue total, and a golden test shows the new writer's files are byte-identical to the old writer's.
 
 ### The previous run: 2026-10-04, a different implementation
 
@@ -211,15 +240,15 @@ The table below is what the project reported before. It measured the lake when i
 | W4 grouped scan, median | 12.8 ms | 14.0 ms | 17.7 ms | n/a |
 | W4 native sum and average in memory, 1M rows | 4.0 ms | 7.7 ms (over files) | | |
 
-The design target those numbers showed is still the target. Other engines ran at different speeds across the two runs (PyArrow ingest 114,582 against 547,340, for example), because the environments differ.
+This repository now beats those figures on ingest, batch upserts, both flushes and the in-memory aggregate; single-call upserts and deletes are still below them. Other engines ran at different speeds across the two runs (PyArrow ingest 114,582 against 547,340, for example), because the environments differ.
 
 ### Microbenchmarks
 
 `DeltaMemTable` on a pre-sized table, in-place upserts (`DeltaMemTableBench`, JMH, `windows-dev`, JVM): 227 ns per upsert in the recorded baseline, about 4.4 million per second. A smoke run on 2026-10-20 (one fork) gave 299 ns. `LakeTableBench.upsertWhileFlushing` with 65,536-row buffers measured 998 ns per upsert on 2026-10-05 (`lake-flush-windows-dev.json`). Both ran on a JVM and say nothing about the native library.
 
-### Where the time goes
+### Where the time went
 
-A library built on 2026-10-07 with GraalVM CE 22 is as slow as the wheel's, so the toolchain is not the cause. The same Java code on a plain JVM is fast. `python/benchmarks/lake_native_probe.py` times the pieces through the wheel on 200,000 rows: an Arrow batch in 2.6 s (78,000 rows/s), a native sum in 97 ms (about 485 ns per element), a single upsert in 25.6 µs, a flush in 6.6 s. The pattern points at memory-segment access that the native-image compiler does not optimize in loops over native columns. It is the first lake item in [TODOS.md](../TODOS.md).
+Every `MemorySegment` read or write in the 0.1.0 native library cost about 300 ns, because native image does not compile the `VarHandle` path behind the accessors; the same call costs under 2 ns on a JVM. A loop over native columns paid that on every element: the sum over 200,000 rows spent about 485 ns per element. The fix reads and writes through `NativeMemory`, which uses GraalVM pointers in the native library, caches addresses next to each column, and copies sequential data into heap arrays in chunks. [The native memory review](designs/engineering-review-native-memory.md) has the probes and the decisions, and decisions D247 to D252 record the build.
 
 ### Caveats
 

@@ -215,8 +215,6 @@ are rejected, and so is any column whose length differs from the key's.
 - Once two buffers are full and a flush is still pending, writers block. Sustained overload
   therefore shows up as latency.
 - No compaction. Tombstones and superseded rows accumulate.
-- The native write path is far slower than it was before the columns moved to native memory (about 40 times on ingest
-  and on the flush). See the first lake item in TODOS.md.
 - Single-call upserts from Python are slow. Each call crosses ctypes and builds a row dictionary,
   which the columnar path avoids. The W2 results show the difference.
 - Snappy is pure Java. Turning it off cut the 2026-10-20 flush from 9.9 s to 6.1 s,
@@ -240,4 +238,4 @@ figure.
 
 ## Multi-engine results
 
-The multi-engine suite (W1 to W4 on the NYC taxi file) lives in [benchmarks.md](benchmarks.md#lake). It holds the run on the 0.1.0 library (2026-10-20) and the earlier run (2026-10-04). The two differ a great deal on the write side, because the columns moved from Java arrays to native memory between them. The 2026-10-04 write-side figures do not describe this code. The open investigation is the first lake item in [TODOS.md](../TODOS.md).
+The multi-engine suite (W1 to W4 on the NYC taxi file) lives in [benchmarks.md](benchmarks.md#lake). It holds three runs: this repository, the 0.1.0 library (both 2026-10-20) and the Java-array implementation (2026-10-04). The 0.1.0 library wrote 40 to 50 times slower than the other two, because every native memory access went through an accessor that native image compiles to a call of about 300 ns. [The native memory review](designs/engineering-review-native-memory.md) explains the fix.

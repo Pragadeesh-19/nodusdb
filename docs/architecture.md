@@ -47,6 +47,32 @@ then `lake`. `io.nodusdb.storage` depends on `kernel` and `log`, `io.nodusdb.aut
 `ship`, then `avro` and `iceberg`, then `projection`. `io.nodusdb.storage` is the composition root that wires
 them to a graph directory, so none of them depends on it.
 
+## Reading and writing native memory
+
+Every read and write of native memory goes through `io.nodusdb.kernel.memory.NativeMemory`, and
+`AccessorGuardTest` fails the build on a direct `MemorySegment` accessor anywhere else. In the native library a
+segment accessor costs about 300 ns, because native image does not compile the `VarHandle` path behind it, while
+the same call costs under 2 ns on the JVM. `NativeMemory` has two backends behind one set of methods:
+
+```
+NativeMemory.getLong(segment, address, size, offset)
+  JVM            segment.get(JAVA_LONG, offset)                 checked by the JDK
+  native image   check offset against size, then Pointer.readLong(address + offset)
+                 Reference.reachabilityFence(segment) keeps auto-arena memory alive for the read
+```
+
+The native backend still throws on a bad offset, a closed arena, a heap segment or a read-only view, so a bug
+becomes an error code and never a read of arbitrary memory. The mode is decided at image build time: the native
+build initializes `NativeMemory` then, and the flag it reads is set in both phases. `nodus_selftest_memory` runs
+the accessor contract inside the native library.
+
+Community Edition inlines only trivial methods, so the cost of a call depends on what the caller passes. A call
+with the address and size cached by the owner of the memory costs about 5.7 ns; a call that only passes the
+segment costs 20 to 25 ns, because the segment is asked for its address, size and liveness each time. Owners
+therefore cache them: `NativeColumn` next to its segment, and the kernel's chunked arrays in an immutable record of
+segments, addresses and sizes. Sequential loops copy 4,096 values at a time into a heap array with
+`MemorySegment.copy`, which costs about 2 ns per value, and loop over the array.
+
 ## Chunked off-heap storage
 
 Growth never moves existing memory, so a reader holding a segment stays valid while its arena is
@@ -382,8 +408,14 @@ swap-and-pop across every column.
 memory is an empty table. Deletion uses backward shift and the load factor stays at or below one half.
 
 `NativeColumn` is a growable byte buffer with power-of-two capacity whose first byte sits on a 64-byte
-line. Growth copies into a new buffer, so a segment read before a growth must not be used after it. Memory
-comes from GC-managed arenas, because GraalVM native image does not support closing shared arenas.
+line. It keeps its address and size next to its segment and refreshes them when it grows or closes. Growth
+copies into a new buffer, so a segment read before a growth must not be used after it. Memory comes from
+GC-managed arenas, because GraalVM native image does not support closing shared arenas.
+
+`DeltaMemTable` keeps a count of its tombstone rows, so a sum over a buffer without tombstones reads each value
+once. A `RowSelection` that holds every row in order is the identity, and the flush then hands the Parquet writer a
+slice of each fixed-width column instead of a copy. `ColumnarCursor` caches the addresses of a columnar batch once,
+and `upsertRow` writes each row straight from the caller's Arrow buffers.
 
 `ColumnChunkEncoder` writes one column chunk: an optional dictionary page, then one data page, each
 compressed with the table's codec. A column is dictionary-encoded only when the dictionary and its indices
@@ -393,5 +425,6 @@ are smaller than the plain values and it has at most `MAX_DICTIONARY_VALUES` dis
 layout: value i spans bytes `[offsets[i], offsets[i + 1])` of its data segment, and offsets are absolute
 positions in that data so a slice of a larger buffer needs no copy.
 
-`SnappyCompressor` compresses a native segment into a `NativeSink`. Its match table lives in native memory
-and is reused across calls, with entries holding `position + 1` so a zeroed table means no candidate.
+`SnappyCompressor` compresses a native segment into a `NativeSink`. It copies the page into a reused `byte[]`
+once and finds matches over heap arrays, which native image compiles to plain loads. Its match table is a reused
+`int[]` with entries holding `position + 1`, so a zeroed table means no candidate.

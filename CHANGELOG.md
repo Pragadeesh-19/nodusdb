@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- The native library is much faster. In 0.1.0 every read and write of native memory went through `MemorySegment` accessors, which native image compiles to a call of about 300 ns. They now go through `NativeMemory`, which uses GraalVM pointers in the native library and keeps the JDK accessors on the JVM. The native path still checks bounds and liveness, so a bad access raises an error and never reads arbitrary memory. Measured on the development laptop against 0.1.0:
+  - Graph, 1,000,000 edges: flat inserts 162,689 to 810,031 a second, deletes 137,975 to 807,466, the 3-hop median 27.3 to 11.5 µs, common neighbors 15.6 to 8.3 µs.
+  - Lake, NYC taxi suite: ingest 21,017 to 994,900 rows a second, columnar upserts 25,092 to 2,002,694 a second, a Snappy flush of 250,000 rows 9.924 to 0.231 s, an uncompressed flush 6.136 to 0.138 s, the in-memory sum and average of a million rows 922.6 to 2.6 ms.
+- The Parquet files are byte-identical to those of 0.1.0. A test compares them with hashes recorded from the old writer.
+- A lock-free graph reader could see a grown chunk array before its new chunk was set. Chunks are now published as one immutable record.
+
+### Added
+
+- `python/benchmarks/native_ratio.py` also gates lake ingest, sum and flush against the JVM, and both limits drop from 30 to 10.
+- `nodus_selftest_memory` and `nodus_lake_probe` in the C interface, for the test suite and the speed gate. They are not part of the API promise.
+
 ### Documentation
 
 - The README is rewritten as a front door, and its long sections moved into guides under `docs/`: the graph engine, permissions, the lake engine, operations (durability, shipping, followers, erasure, change feeds, time travel), benchmarks, building and testing, and a first-principles page, `docs/how-it-works.md`.
@@ -10,7 +23,7 @@
 
 ### Known limits found while measuring
 
-- The lake write path in the native library is far slower than the figures reported on 2026-10-04: about 40 times slower on ingest and on a 250,000-row flush, measured on 2026-10-20 against the 0.1.0 wheel. The columns moved from Java arrays to native memory on 2026-10-05 and those figures describe the earlier implementation. The Parquet files themselves are unchanged and DuckDB scans them as fast as before. `bench/baseline/lake-release-windows-dev.txt` has the run, and `python/benchmarks/lake_native_probe.py` times the pieces. The README and `docs/lake.md` no longer quote the earlier figures as current.
+- The lake write path in the native library is far slower than the figures reported on 2026-10-04: about 40 times slower on ingest and on a 250,000-row flush, measured on 2026-10-20 against the 0.1.0 wheel. The columns moved from Java arrays to native memory on 2026-10-05 and those figures describe the earlier implementation. The Parquet files themselves are unchanged and DuckDB scans them as fast as before. `bench/baseline/lake-release-windows-dev.txt` has the run, and `python/benchmarks/lake_native_probe.py` times the pieces. The README and `docs/lake.md` no longer quote the earlier figures as current. Fixed above.
 - The README's status paragraph listed readers that run in parallel on one handle as open. They run in parallel since the engineering review of 2026-10-06 (D75); only writes, checkpoint and close serialize.
 - The README gave 3.7 to 5.6 seconds for a checkpoint at 30.6 million edges. That was the figure before the two-section snapshot. It is about 9 seconds since commit `974ba2d`.
 

@@ -141,7 +141,7 @@ The permission, shipping and history features add more, and each is described wh
 
 The numbers in the README come from these habits:
 
-1. **Batch.** Each Python call into the native library costs a few microseconds. `add_edges_from` with a flat `array('q')` is the fastest input form, then a list of tuples, then single calls. On the 1-million-edge benchmark the three run at 162,689, 132,281 and 71,962 inserts per second.
+1. **Batch.** Each Python call into the native library costs a few microseconds. `add_edges_from` with a flat `array('q')` is the fastest input form, then a list of tuples, then single calls. On the 1-million-edge benchmark the three run at 810,031, 477,112 and 163,443 inserts per second.
 2. **Close what you open.** A `Graph` owns native memory. Use `with`, or call `close()`, which is safe to call twice. A graph that is garbage collected while open is released by a finalizer, and a `ResourceWarning` names the leak. A durable graph holds a directory lock until it is closed.
 3. **Read from many threads, write from one.** Reads scale across threads on one handle. Writes do not.
 4. **Size the result buffer.** `khop` writes into a buffer of 65,536 entries per thread and grows it when a result is larger. If you routinely return millions of nodes, pass `result_capacity=` to `Graph`.
