@@ -1,0 +1,79 @@
+# The native-memory fix: windows-dev, 2026-10-20
+
+Machine: see bench/baseline/MACHINE.md. Native library built from branch perf/native-memory with GraalVM Community
+Edition 25.0.2 (the toolchain of the release wheels). Python 3.12.7, pyarrow 26.0.0, DuckDB 1.5.6, NetworkX from
+PyPI on the same day. The design is in docs/designs/engineering-review-native-memory.md and decisions D247 to D252.
+
+## Graph: python/benchmarks/compare.py, 1,000,000 edges over 200,000 nodes, 500,000 deletes, 200 queries
+
+    NODUSDB_LIBRARY=target/native/libnodusdb.dll python python/benchmarks/compare.py
+
+The cross-check passed first: 50 k-hop and 50 common-neighbor queries agree across 7 configurations.
+
+| Configuration | Insert/s | Delete/s | 2-hop median | 3-hop median | Common neighbors median |
+|---|---:|---:|---:|---:|---:|
+| NodusDB, single-edge calls | 163,443 | 168,178 | 9.6 us | 11.7 us | 8.3 us |
+| NodusDB, batch of tuples | 477,112 | 469,098 | 9.5 us | 11.3 us | 8.3 us |
+| NodusDB, flat array('q') | 810,031 | 807,466 | 9.4 us | 11.5 us | 8.3 us |
+| NetworkX, single | 176,695 | 405,820 | 11.9 us | 25.3 us | 5.0 us |
+| NetworkX, batch | 207,937 | 393,485 | 12.4 us | 26.2 us | 5.1 us |
+| SQLite, single | 147,211 | 141,748 | 39.6 us | 78.5 us | 15.9 us |
+| SQLite, batch | 187,884 | 175,200 | 43.7 us | 80.9 us | 16.5 us |
+
+Against the 0.1.0 library (release-windows-dev.txt): flat inserts 162,689 -> 810,031, flat deletes 137,975 ->
+807,466, 3-hop median 27.3 -> 11.5 us, common neighbors 15.6 -> 8.3 us. The build at commit 0b05475 (before
+native memory) measured 1.06 to 1.30 million inserts a second and a 10.3 to 10.7 us 3-hop median, so the 3-hop
+median is back and inserts recovered five of the six to eight times they lost.
+
+## Native against JVM: python/benchmarks/native_ratio.py, two runs
+
+| Probe | Native | JVM | Ratio |
+|---|---:|---:|---:|
+| add_edge | 1,004 to 1,008 ns/op | 375 to 410 ns/op | 2.46 to 2.68 |
+| has_edge | 68 to 71 ns/op | 33 to 39 ns/op | 1.75 to 2.15 |
+| lake ingest, 250,000 rows | 424 to 440 ns/row | 182 to 199 ns/row | 2.22 to 2.33 |
+| lake sum | 1.6 to 1.7 ns/row | 1.4 ns/row | 1.15 to 1.18 |
+| lake flush, Snappy | 869 to 904 ns/row | 374 to 378 ns/row | 2.30 to 2.42 |
+
+The 0.1.0 library measured about 9 for add_edge and 16 for has_edge on this laptop, and 5.8 to 7.7 and 12.5 to
+14.2 in CI.
+
+## Lake probe: python/benchmarks/lake_native_probe.py --rows 250000, two runs per codec
+
+| Measure | Snappy runs | Uncompressed runs |
+|---|---|---|
+| upsert_table, rows/s | 1,939,104 and 2,200,714 | 2,213,273 and 2,179,721 |
+| sum over 250,000 rows | 1.4 and 0.6 ms | 0.5 and 0.5 ms |
+| one upsert() call | 26.7 and 18.9 us | 18.1 and 18.2 us |
+| flush of 250,000 rows | 0.249 and 0.224 s | 0.100 and 0.101 s |
+
+## Lake suite: benchmark_lake_heavyweights.py, NodusDB engines only
+
+    python python/benchmarks/benchmark_lake_heavyweights.py run \
+        --engines nodus-lake,nodus-lake-batch,nodus-lake-uncompressed \
+        --out bench/baseline/lake-heavyweights-native-memory-windows-dev.json
+
+The other engines were not re-run; their figures for the same day, machine and package versions are in
+lake-release-windows-dev.txt. The "did not complete" lines in the output are engine and workload pairs the suite
+does not define.
+
+| Measure | 0.1.0 (2026-10-20) | This change | 2026-10-04 (Java arrays) |
+|---|---:|---:|---:|
+| W1 ingest, rows/s | 21,017 | 994,900 | 846,137 |
+| W2 upserts/s, one call per row | 16,632 | 36,051 | 39,335 |
+| W2 upserts/s, columnar batch | 25,092 | 2,002,694 | 1,763,882 |
+| W2 deletes/s, one call per key | 97,090 | 265,834 | 467,542 |
+| W3 flush of 250,000 rows, Snappy | 9.924 s | 0.231 s | 0.265 s |
+| W3 flush of 250,000 rows, none | 6.136 s | 0.138 s | 0.187 s |
+| W4 grouped scan of its files, median | 13.4 ms | 12.8 ms | 12.8 ms |
+| W4 grouped scan of its files, p99 | 40.4 ms | 18.9 ms | 35.9 ms |
+| W4 in-memory sum and average, 1,000,000 rows | 922.6 ms | 2.6 ms | 4.0 ms |
+
+File sizes are unchanged (3.95 MB for the Snappy flush, 5.40 MB uncompressed) and every source returns the revenue
+total 27,486,629.10.
+
+Against the other engines on the same day: ingest 994,900 rows/s against PyArrow 547,340, SQLite 285,608 and
+DuckDB 147,314; columnar upserts 2,002,694/s against PyArrow's dict 329,166 and SQLite 243,167; the in-memory sum
+2.6 ms against DuckDB's 7.9 ms over its own files. PyArrow still flushes 250,000 rows with Snappy faster (0.194 s
+against 0.231 s), and deletes and single-call upserts through Python stay slower than PyArrow and SQLite because
+each one is a separate foreign call.

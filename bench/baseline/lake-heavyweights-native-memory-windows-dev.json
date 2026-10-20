@@ -1,0 +1,245 @@
+{
+  "dataset": "NYC TLC Yellow Taxi, January 2024, first 1,000,000 rows",
+  "runs": [
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "ingest_seconds": 1.0051265000365674,
+        "peak_rss_mb": 436.99609375,
+        "rows": 1000000,
+        "rows_per_second": 994899.6469236648
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.7271736001130193,
+      "workload": "W1"
+    },
+    {
+      "engine": "nodus-lake-batch",
+      "reason": "UnboundLocalError: cannot access local variable 'timer' where it is not associated with a value",
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "error",
+      "wall_seconds": 0.5410962000023574,
+      "workload": "W1"
+    },
+    {
+      "engine": "nodus-lake-uncompressed",
+      "reason": "UnboundLocalError: cannot access local variable 'timer' where it is not associated with a value",
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "error",
+      "wall_seconds": 0.542377500096336,
+      "workload": "W1"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "delete_seconds": 0.3761752999853343,
+        "deletes": 100000,
+        "deletes_per_second": 265833.5090153411,
+        "peak_rss_mb": 723.30859375,
+        "rss_mb_max": 705.921875,
+        "rss_mb_min": 336.73828125,
+        "rss_mb_samples": [
+          336.7,
+          672.1,
+          705.9,
+          631.0,
+          631.0,
+          636.0,
+          636.0,
+          646.6,
+          635.7,
+          635.7,
+          636.7
+        ],
+        "update_seconds": 13.869328700006008,
+        "updates": 500000,
+        "upserts_per_second": 36050.77151281182
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 16.776676800101995,
+      "workload": "W2"
+    },
+    {
+      "engine": "nodus-lake-batch",
+      "metrics": {
+        "delete_seconds": 0.475931900087744,
+        "deletes": 100000,
+        "deletes_per_second": 210114.09401547522,
+        "peak_rss_mb": 475.8671875,
+        "rss_mb_max": 319.1875,
+        "rss_mb_min": 319.1875,
+        "rss_mb_samples": [
+          319.2
+        ],
+        "update_seconds": 0.24966369988396764,
+        "updates": 500000,
+        "upserts_per_second": 2002694.0249318476
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 3.1367548999842256,
+      "workload": "W2"
+    },
+    {
+      "engine": "nodus-lake-uncompressed",
+      "reason": "UnboundLocalError: cannot access local variable 'updating' where it is not associated with a value",
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "error",
+      "wall_seconds": 1.353187199914828,
+      "workload": "W2"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 1080058.2367812174,
+        "flush_seconds": 0.2314689999911934,
+        "output_bytes": 3949322,
+        "output_files": 1,
+        "peak_rss_mb": 331.953125
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.0335214000660926,
+      "workload": "W3"
+    },
+    {
+      "engine": "nodus-lake-batch",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 1116306.1522735462,
+        "flush_seconds": 0.2239528999198228,
+        "output_bytes": 3949322,
+        "output_files": 1,
+        "peak_rss_mb": 332.56640625
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 1.0198047999292612,
+      "workload": "W3"
+    },
+    {
+      "engine": "nodus-lake-uncompressed",
+      "metrics": {
+        "buffer_rows": 250000,
+        "flush_rows_per_second": 1805708.6399395997,
+        "flush_seconds": 0.13844979996792972,
+        "output_bytes": 5398189,
+        "output_files": 1,
+        "peak_rss_mb": 322.25
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 0.9042988999281079,
+      "workload": "W3"
+    },
+    {
+      "engine": "nodus-lake",
+      "metrics": {
+        "peak_rss_mb": 520.15234375,
+        "sources": {
+          "nodus clean (250k-row files)": {
+            "bytes": 15704270,
+            "files": 3,
+            "median_ms": 12.835899833589792,
+            "p99_ms": 18.890499835833907,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          },
+          "nodus in-memory native, ungrouped (no files)": {
+            "bytes": 0,
+            "files": 0,
+            "median_ms": 2.567499876022339,
+            "p99_ms": 2.874600002542138,
+            "revenue_total": 27486629.1,
+            "trips_total": null
+          },
+          "nodus streaming (5k-row files)": {
+            "bytes": 16968000,
+            "files": 101,
+            "median_ms": 26.053100125864148,
+            "p99_ms": 26.660799980163574,
+            "revenue_total": 27486629.1,
+            "trips_total": 1000000
+          }
+        }
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 5.243824099889025,
+      "workload": "W4"
+    },
+    {
+      "engine": "nodus-lake-batch",
+      "metrics": {
+        "peak_rss_mb": 279.453125,
+        "sources": {}
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 0.6236493000760674,
+      "workload": "W4"
+    },
+    {
+      "engine": "nodus-lake-uncompressed",
+      "metrics": {
+        "peak_rss_mb": 294.19921875,
+        "sources": {}
+      },
+      "source": {
+        "path": "C:\\Users\\anony\\AppData\\Local\\Temp\\nodusdb-bench\\taxi\\yellow_tripdata_2024-01.parquet",
+        "rows": 1000000,
+        "sha256": "c4d59da7bbc8abaeeeb1727947ee93d9891a71acb42854bd80db1571b2030510"
+      },
+      "status": "ok",
+      "wall_seconds": 0.6253571000415832,
+      "workload": "W4"
+    }
+  ]
+}

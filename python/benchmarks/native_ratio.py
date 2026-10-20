@@ -1,15 +1,15 @@
 """Fail when the native library is much slower than the same code on the JVM.
 
-The probe adds and looks up a chain of edges through a graph session. It runs once inside the JVM and once
-inside the native library, so both sides execute the same Java code and no foreign-call overhead is timed.
+Two probes run the same Java code once inside the JVM and once inside the native library, so no foreign-call
+overhead is timed. The graph probe adds and looks up a chain of edges through a graph session. The lake probe
+loads 250,000 rows through the columnar path, sums a column in memory and flushes the buffer to Parquet.
 
-Ahead-of-time code is slower than JIT-compiled code for off-heap memory access. On a laptop with GraalVM CE
-22.0.2 the ratio measured 9.5 for add_edge and 16.9 for has_edge, and the CE 23 library, which does not
-optimize memory-segment access, ran add_edge about 130 times slower than that build. CI builds the library
-with GraalVM CE 25 and measured 5.8 to 7.7 for add_edge and 12.5 to 14.2 for has_edge on Ubuntu, Windows and
-macOS (bench/baseline/release-windows-dev.txt). The default limit of 30 is about twice the worst of those: it
-passes the CE 22.0.2 and CE 25 builds and fails the CE 23 library and any change that makes the native code
-several times slower."""
+Before the native-memory fix, every MemorySegment read or write in the native library cost about 300 ns
+against under 2 ns on the JVM. The graph ratio was 5.8 to 7.7 for add_edge and 12.5 to 14.2 for has_edge in
+CI, and the lake sum ran about 350 times slower than on the JVM. With NativeMemory the laptop measured 2.5 to 2.7
+for add_edge, 1.8 to 2.2 for has_edge, 2.2 to 2.3 for lake ingest, 1.2 for the lake sum and 2.3 to 2.4 for
+the lake flush. The limit of 10 leaves about 3.7 times headroom over the worst of those and fails any change
+that brings back per-element segment access, which costs ten times or more."""
 
 import argparse
 import ctypes
@@ -27,8 +27,12 @@ from nodusdb import _native  # noqa: E402
 DEFAULT_OPERATIONS = 200_000
 DEFAULT_RUNS = 5
 DEFAULT_WARMUPS = 2
-DEFAULT_LIMIT = 30.0
+DEFAULT_LIMIT = 10.0
+DEFAULT_LAKE_ROWS = 250_000
+DEFAULT_LAKE_LIMIT = 10.0
 PROBE_CLASS = "io.nodusdb.capi.PerformanceProbe"
+LAKE_PROBE_CLASS = "io.nodusdb.capi.LakeProbe"
+LAKE_METRICS = ("lake_ingest", "lake_sum", "lake_flush")
 
 
 def native_nanoseconds_per_operation(operations, runs, warmups, library_path):
@@ -49,6 +53,34 @@ def native_nanoseconds_per_operation(operations, runs, warmups, library_path):
     return statistics.median(adds), statistics.median(lookups)
 
 
+def native_lake_nanoseconds_per_row(rows, runs, warmups, library_path):
+    library, isolate = _native.load(library_path)
+    probe = getattr(library, "nodus_lake_probe", None)
+    if probe is None:
+        raise SystemExit("this libnodusdb has no nodus_lake_probe; rebuild the native library")
+    probe.restype = ctypes.c_int
+    probe.argtypes = [_native.THREAD, ctypes.c_int, ctypes.POINTER(ctypes.c_int64)]
+    thread = _native.current_thread(library, isolate)
+    samples = [[], [], []]
+    for run in range(warmups + runs):
+        out = (ctypes.c_int64 * 3)()
+        code = probe(thread, rows, out)
+        if code != 0:
+            raise SystemExit(f"nodus_lake_probe failed with code {code}: {_native.last_error_message(library, thread)}")
+        if run >= warmups:
+            for index in range(3):
+                samples[index].append(out[index] / rows)
+    return tuple(statistics.median(values) for values in samples)
+
+
+def jvm_lake_nanoseconds_per_row(rows, runs, warmups, classes):
+    java = shutil.which("java") or str(Path(os.environ["JAVA_HOME"]) / "bin" / "java")
+    command = [java, "-cp", str(classes), LAKE_PROBE_CLASS, str(rows), str(runs), str(warmups)]
+    output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
+    values = dict(line.split() for line in output.strip().splitlines())
+    return tuple(float(values[f"{name}_ns_per_row"]) for name in LAKE_METRICS)
+
+
 def jvm_nanoseconds_per_operation(operations, runs, warmups, classes):
     java = shutil.which("java") or str(Path(os.environ["JAVA_HOME"]) / "bin" / "java")
     command = [java, "-cp", str(classes), PROBE_CLASS, str(operations), str(runs), str(warmups)]
@@ -65,6 +97,8 @@ def main():
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS)
     parser.add_argument("--warmups", type=int, default=DEFAULT_WARMUPS)
     parser.add_argument("--limit", type=float, default=DEFAULT_LIMIT)
+    parser.add_argument("--lake-rows", type=int, default=DEFAULT_LAKE_ROWS)
+    parser.add_argument("--lake-limit", type=float, default=DEFAULT_LAKE_LIMIT)
     arguments = parser.parse_args()
 
     native = native_nanoseconds_per_operation(arguments.operations, arguments.runs, arguments.warmups,
@@ -78,6 +112,15 @@ def main():
         failed |= ratio > arguments.limit
         print(f"{name}: native {native_ns:,.0f} ns/op, jvm {jvm_ns:,.0f} ns/op, ratio {ratio:.2f} "
               f"(limit {arguments.limit:g}) {verdict}")
+    lake_native = native_lake_nanoseconds_per_row(arguments.lake_rows, arguments.runs, arguments.warmups,
+                                                  arguments.library)
+    lake_jvm = jvm_lake_nanoseconds_per_row(arguments.lake_rows, arguments.runs, arguments.warmups, arguments.classes)
+    for name, native_ns, jvm_ns in zip(LAKE_METRICS, lake_native, lake_jvm):
+        ratio = native_ns / jvm_ns if jvm_ns else float("inf")
+        verdict = "ok" if ratio <= arguments.lake_limit else "FAIL"
+        failed |= ratio > arguments.lake_limit
+        print(f"{name}: native {native_ns:,.1f} ns/row, jvm {jvm_ns:,.1f} ns/row, ratio {ratio:.2f} "
+              f"(limit {arguments.lake_limit:g}) {verdict}")
     if failed:
         raise SystemExit("the native library is too slow compared with the JVM; check the GraalVM version")
 
