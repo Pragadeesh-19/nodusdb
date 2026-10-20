@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0rc2
+
 ### Added
 
 - Log shipping. `Graph(path=..., shipping=Shipping.s3(...))` or `Shipping.directory(...)` copies the log to an object store as a signed, hash-linked chain, with snapshot references, epoch claims, retention and a backlog cap. The open refuses a directory that is behind the chain or lost unshipped records (`NodusWriterFencedError`) and a store that ignores conditional writes (`NodusUnsupportedError`).
@@ -44,6 +46,7 @@
 - Calls on one handle run one at a time. Readers do not run in parallel within a handle yet.
 - Failover is manual: nothing decides by itself that the writer is dead. A follower that fell behind retention stops and needs a restart. Salvage loads the old directory's snapshot into memory. The Iceberg manifest list grows by one entry per commit.
 - A `lake` write waits 30 seconds at most through the C interface.
+- The in-memory write path is slower than the figures the README gave on 2026-10-03: a flat insert of one million edges runs at about 165 thousand edges per second where the old code reached 1.0 to 1.3 million, and the 3-hop median is about 27 µs where it was 10.5 µs. The README table now holds the figures for this release.
 
 ## 0.1.0rc1
 
