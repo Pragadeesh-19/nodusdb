@@ -19,6 +19,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class CrashExplorationTest {
 
     private static final int OPERATIONS = 30;
+    private static final long MOVING_MARK_PAUSE_MILLIS = 4;
+    private static final int MIN_MARK_FORCES = 5;
     private static final long[] MASKS = {SimulatedDisk.NO_PENDING, SimulatedDisk.ALL_PENDING, 0x5555_5555L, 0xAAAA_AAAAL};
 
     private record Acknowledged(int event, int units) {
@@ -39,21 +41,67 @@ class CrashExplorationTest {
 
     @Test
     void everyCrashPointOfASynchronousWorkloadRecoversAnAcknowledgedPrefix() throws IOException {
-        Workload workload = runSynchronousWorkload();
+        Workload workload = runSynchronousWorkload(config(SyncMode.SYNC), 0);
 
         explore(workload, true);
     }
 
     @Test
     void everyCrashPointOfAnAsynchronousWorkloadRecoversAPrefixAndKeepsForcedUnits() throws IOException {
-        Workload workload = runAsynchronousWorkload();
+        Workload workload = runAsynchronousWorkload(config(SyncMode.ASYNC), 0);
 
         explore(workload, false);
     }
 
-    private Workload runSynchronousWorkload() throws IOException {
+    @Test
+    void everyCrashPointOfASynchronousWorkloadWithAMovingMarkRecoversAnAcknowledgedPrefix() throws IOException {
+        Workload workload = runSynchronousWorkload(movingMarkConfig(SyncMode.SYNC), MOVING_MARK_PAUSE_MILLIS);
+        int forces = markForces(workload.disk());
+
+        assertTrue(forces > MIN_MARK_FORCES, "the forced mark moved only " + forces + " times, so this run does not exercise it");
+        explore(workload, true);
+    }
+
+    @Test
+    void everyCrashPointOfAnAsynchronousWorkloadWithAMovingMarkRecoversAPrefixAndKeepsForcedUnits() throws IOException {
+        Workload workload = runAsynchronousWorkload(movingMarkConfig(SyncMode.ASYNC), MOVING_MARK_PAUSE_MILLIS);
+
+        explore(workload, false);
+    }
+
+    private static LogConfig config(SyncMode mode) {
+        return LogConfig.withSyncMode(mode).withSegmentBytes(2048);
+    }
+
+    private static LogConfig movingMarkConfig(SyncMode mode) {
+        LogConfig base = config(mode);
+        return new LogConfig(mode, 1L, base.bufferBytes(), base.segmentBytes(), 1L);
+    }
+
+    private static int markForces(SimulatedDisk disk) {
+        int forces = 0;
+        for (SimulatedDisk.Event event : disk.events()) {
+            if (event.kind() == SimulatedDisk.Kind.FORCE && event.file().equals(SegmentNames.FORCED_MARK)) {
+                forces++;
+            }
+        }
+        return forces;
+    }
+
+    private static void pause(long millis) {
+        if (millis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while pausing the workload", e);
+        }
+    }
+
+    private Workload runSynchronousWorkload(LogConfig config, long pauseMillis) throws IOException {
         SimulatedDisk disk = new SimulatedDisk();
-        LogConfig config = LogConfig.withSyncMode(SyncMode.SYNC).withSegmentBytes(2048);
         Opened opened = LogHarness.open(disk, config, 0);
         List<Unit> expected = new ArrayList<>();
         List<Acknowledged> acknowledged = new ArrayList<>();
@@ -66,14 +114,14 @@ class CrashExplorationTest {
             opened.log().awaitDurable(commitLsn);
             expected.add(new Unit(commitLsn, 0, records));
             acknowledged.add(new Acknowledged(disk.eventCount(), expected.size()));
+            pause(pauseMillis);
         }
         opened.log().close();
         return new Workload(disk, expected, acknowledged);
     }
 
-    private Workload runAsynchronousWorkload() throws IOException {
+    private Workload runAsynchronousWorkload(LogConfig config, long pauseMillis) throws IOException {
         SimulatedDisk disk = new SimulatedDisk();
-        LogConfig config = LogConfig.withSyncMode(SyncMode.ASYNC).withSegmentBytes(2048);
         Opened opened = LogHarness.open(disk, config, 0);
         List<Unit> expected = new ArrayList<>();
         List<Acknowledged> acknowledged = new ArrayList<>();
@@ -88,6 +136,7 @@ class CrashExplorationTest {
                 opened.log().force();
                 acknowledged.add(new Acknowledged(disk.eventCount(), expected.size()));
             }
+            pause(pauseMillis);
         }
         opened.log().close();
         acknowledged.add(new Acknowledged(disk.eventCount(), expected.size()));
