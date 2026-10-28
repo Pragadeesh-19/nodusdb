@@ -29,7 +29,7 @@ A durable graph lives in one directory:
 
 **Recovery.** On open, the process deletes half-written temporary files, loads the snapshot, and replays the log from the first record after it. Where the log goes bad decides what happens. Damage in the part of the log known to have reached the disk means corruption, and the directory refuses to open with `NodusCorruptLogError`. Damage after that point is a torn tail from a crash: the log is cut back to its last commit and the cut bytes are reported. Every open then starts a new writer tenure, which is what lets a token name a write that was lost. If forcing the log fails, the write that waited gets `NodusIndeterminateError` and the log refuses further writes until the graph is reopened, because retrying a failed fsync is not safe on Linux.
 
-The crash tests replay every prefix of the writes and forces of a run through a simulated disk, with torn writes at every byte, and require recovery to return a prefix of what was acknowledged.
+The crash tests replay every prefix of the writes and forces of a run through a simulated disk, with torn writes (every byte for writes up to 64 bytes in the synchronous run, every 13th byte otherwise), and require recovery to return a prefix of what was acknowledged.
 
 ### What survives what
 

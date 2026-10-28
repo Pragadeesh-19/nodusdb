@@ -80,7 +80,7 @@ An in-memory graph is gone when the process ends. A durable graph keeps a direct
 - A **write-ahead log**: typed, checksummed records appended before the change reaches memory. In `sync` mode the call returns only after the record is on disk, so a reader never sees a write that a crash could undo.
 - A **snapshot**: a full image of the graph at some log position. A checkpoint writes one to a temporary file, forces it, renames it into place and deletes the log segments it covers.
 
-Recovery loads the snapshot and replays the log after it. Damage in the part of the log known to have reached the disk means corruption, and the directory refuses to open. Damage past that point is a torn tail from a crash, and the log is cut back to its last whole transaction. The crash tests replay every prefix of a run's writes and forces through a simulated disk, with a torn write at every byte, and require recovery to return a prefix of what was acknowledged.
+Recovery loads the snapshot and replays the log after it. Damage in the part of the log known to have reached the disk means corruption, and the directory refuses to open. Damage past that point is a torn tail from a crash, and the log is cut back to its last whole transaction. The crash tests replay every prefix of a run's writes and forces through a simulated disk, with torn writes (every byte for writes up to 64 bytes in the synchronous run, every 13th byte otherwise), and require recovery to return a prefix of what was acknowledged.
 
 Every write returns a token, an epoch and a log position. A reader can pass it as `at_least` to a check, to say "do not answer from state older than this write". This is what keeps a read-after-write honest across a follower or a restart.
 

@@ -268,7 +268,8 @@ waiting write raises `IndeterminateOutcomeException`.
 `SegmentedLog` runs a flusher thread. Appends copy into a buffer and group-commit: in SYNC mode a caller
 waits until the flusher has forced its records, and one force covers every caller that arrived meanwhile.
 `CrashExplorationTest` replays every prefix of the writes and forces through `SimulatedDisk`, including torn
-writes at every byte, and requires recovery to return a prefix of what was acknowledged.
+writes (every byte for writes up to 64 bytes in the synchronous run, every 13th byte otherwise), and requires
+recovery to return a prefix of what was acknowledged.
 
 ## Snapshot (version 3)
 

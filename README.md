@@ -194,7 +194,7 @@ Everything above works in one process. A durable graph can go further, and each 
 
 | You want | NodusDB does |
 |---|---|
-| Survive a crash | A checksummed write-ahead log and snapshots. Recovery is checked against a simulated disk with a torn write at every byte |
+| Survive a crash | A checksummed write-ahead log and snapshots. Recovery is checked against a simulated disk with torn writes cut at many byte offsets |
 | A copy outside the machine | Ships the log to S3 or any S3-compatible store as a signed, hash-linked chain, and can project it into an Iceberg table |
 | Read replicas and a spare writer | Followers rebuild the graph from the bucket and verify every object against your public key. Restore and takeover continue the chain |
 | Forget a person | `erase` scrubs memory, the directory, the bucket and the Iceberg table, and `wait_erased` tells you when it is done |

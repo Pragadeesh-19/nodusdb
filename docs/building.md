@@ -61,7 +61,7 @@ powershell -File scripts\contention.ps1 "python -m pytest python/tests -q" -Core
 
 On the development laptop (Windows, JDK 22, a native library built by GraalVM CE 22.0.2) the Java suite ran 630 tests and the Python suite 120, with `pyarrow` installed so that none skipped. CI runs both on Ubuntu, macOS (arm64) and Windows for every push.
 
-- **The log.** A crash simulator replays every prefix of the writes and forces of a run, with torn writes at every byte, and requires recovery to return a prefix of what was acknowledged. Corruption below the forced mark and a failed fsync have their own tests.
+- **The log.** A crash simulator replays every prefix of the writes and forces of a run, with torn writes (every byte for writes up to 64 bytes in the synchronous run, every 13th byte otherwise), and requires recovery to return a prefix of what was acknowledged. Two more runs set the flush and mark intervals to 1 ms so that the forced mark moves while the workload runs; with the default 100 ms it would stay at the start of the log. Corruption below the forced mark and a failed fsync have their own tests.
 - **Durability on the graph.** Clean restarts, crashes in both sync modes, torn log tails, snapshot rolls, a crash between the snapshot rename and the deletion of the covered segments, corrupted and truncated snapshots, the directory lock and the memory limit.
 - **Upgrade.** The version 1 corpus (integer, string and snapshot-only directories) upgrades with equal edge fingerprints, and the upgrade is crashed after every step and finished by running it again.
 - **Compatibility.** A golden version 2 graph directory in the test suite is opened with the current code on every build.
