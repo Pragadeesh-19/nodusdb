@@ -24,7 +24,7 @@ jobs:
           - runner: macos-15-intel
             tag: macos-x86_64
             graalvm: "25.0.1"
-          - runner: macos-14
+          - runner: macos-15
             tag: macos-arm64
           - runner: windows-2022
             tag: windows-x86_64
@@ -82,7 +82,7 @@ jobs:
             archs: x86_64
             wheel_platform: macosx_11_0_x86_64
             test_skip: ""
-          - runner: macos-14
+          - runner: macos-15
             tag: macos-arm64
             archs: arm64
             wheel_platform: macosx_11_0_arm64
@@ -144,7 +144,7 @@ jobs:
           - { runner: ubuntu-22.04, tag: linux-x86_64 }
           - { runner: ubuntu-22.04-arm, tag: linux-arm64 }
           - { runner: macos-15-intel, tag: macos-x86_64 }
-          - { runner: macos-14, tag: macos-arm64 }
+          - { runner: macos-15, tag: macos-arm64 }
           - { runner: windows-2022, tag: windows-x86_64 }
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:

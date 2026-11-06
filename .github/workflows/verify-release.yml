@@ -34,7 +34,7 @@ jobs:
           - { runner: ubuntu-22.04, tag: linux-x86_64 }
           - { runner: ubuntu-22.04-arm, tag: linux-arm64 }
           - { runner: macos-15-intel, tag: macos-x86_64 }
-          - { runner: macos-14, tag: macos-arm64 }
+          - { runner: macos-15, tag: macos-arm64 }
           - { runner: windows-2022, tag: windows-x86_64 }
         python: ["3.10", "3.14"]
     steps:
