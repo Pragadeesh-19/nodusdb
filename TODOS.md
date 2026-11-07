@@ -56,7 +56,7 @@
 
 **Why:** `AccessWatch` re-checks triples the application registers (D188). An application that needs every document a user lost access to cannot register every triple in advance.
 
-**Context:** Reverse evaluation through usersets and tuple-to-userset arrows, with pagination, and dependency tracking through nesting for the incremental part. The reachability closure in `kernel/closure` already answers member-to-group sets, so `LookupResources` can start from `MEMBER2GROUP` plus the INDIRECT scan. SpiceDB and OpenFGA (ListObjects) offer the plain lookups.
+**Context:** Reverse evaluation through usersets and tuple-to-userset arrows, with pagination, and dependency tracking through nesting for the incremental part. The reachability closure in `kernel/closure` already answers member-to-group sets, so `LookupResources` can start from `MEMBER2GROUP` plus the INDIRECT scan. SpiceDB and OpenFGA (ListObjects) offer the plain lookups. The launch benchmark prints "not supported" for Nodus on its lookup rows until this lands (CEO review of 2026-11-06, E4).
 
 **Effort:** XL
 **Priority:** P2
@@ -68,7 +68,7 @@
 
 **Why:** It is the second market the CEO plan names, and no build step schedules it, so it would drop after Build Step 6.
 
-**Context:** Needs a short product review of the API shape and a typed memory schema before code. It uses tuples for memories, the change feed for updates and `as_of` for provenance. See `docs/designs/relationship-lakehouse.md`.
+**Context:** Needs a short product review of the API shape and a typed memory schema before code. It uses tuples for memories, the change feed for updates and `as_of` for provenance. See `docs/designs/relationship-lakehouse.md`. The CEO review of 2026-11-06 (E6) kept it out of the authorization launch: it gets its own product review and its own launch, with a comparison designed for memory tools whose retrieval includes embeddings and LLM calls.
 
 **Effort:** M
 **Priority:** P2
@@ -82,7 +82,7 @@
 
 **Why:** S3 replication gives about 200 to 500 ms visibility (D66); some customers will need near-instant follower reads.
 
-**Context:** Tokens and dense LSNs already support it. It adds a network surface on the writer (auth, backpressure), which is why it waits for demand. S3 stays the durable and trusted path.
+**Context:** Tokens and dense LSNs already support it. It adds a network surface on the writer (auth, backpressure), which is why it waits for demand. S3 stays the durable and trusted path. The launch benchmark (CEO review of 2026-11-06, E3) prints the S3 path's follower freshness as a measured loss, so a design partner who needs faster follower reads is the trigger to build this.
 
 **Effort:** M
 **Priority:** P3
@@ -343,6 +343,18 @@
 **Depends on:** the native-memory fix on `perf/native-memory`; a design review for the release and freeze contract
 
 ## Release and packaging
+
+### Go binding over the C interface
+
+**What:** A Go package over the native library's C exports for the graph, tuples, checks and followers.
+
+**Why:** Python is the only binding, and SpiceDB and OpenFGA, which the launch benchmark compares against, are written in Go. Go teams are the likely first to ask whether they can use Nodus.
+
+**Context:** Deferred from the launch benchmark in the CEO review of 2026-11-06 (E2). Two problems need their own review first. The library attaches one GraalVM isolate thread per OS thread (`python/nodusdb/_native.py` `current_thread`), and Go moves goroutines between OS threads, so the binding needs `runtime.LockOSThread` or an attach per call. Go also has no wheel-like way to ship a 38 MB native library per platform.
+
+**Effort:** L
+**Priority:** P2
+**Depends on:** the C interface's 58 exports
 
 ### Wheels for more platforms
 
