@@ -447,7 +447,7 @@ finding above. Run with Claude Code or Codex; checkbox as you ship.
   - Surfaced by: Scope Challenge finding 1 (R1, eng D2)
   - Files: to be determined (authzbench python/, go/)
   - Verify: the periodic-stall fake shows its stall in p99 under the open loop in both drivers
-- [ ] **T3 (P1, human: ~2 days / CC: ~3h)** — topology — Put every writer on machine 1 with the Nodus adapter's write endpoint, and the driver and Nodus follower on machine 2, timing on one clock
+- [x] **T3 (P1, human: ~2 days / CC: ~3h)** — topology — Put every writer on machine 1 with the Nodus adapter's write endpoint, and the driver and Nodus follower on machine 2, timing on one clock
   - Surfaced by: Scope Challenge finding 2 (R2, eng D3); Architecture endpoint note
   - Files: to be determined (authzbench python/ Nodus adapter)
   - Verify: the 500 ms stale fake measures within resolution across the two machines; the endpoint refuses connections from outside the run's network
@@ -1140,7 +1140,7 @@ one run and the CI job needs them all.
 Synthesized from this review's findings. Each task derives from a specific
 finding above. Run with Claude Code or Codex; checkbox as you ship.
 
-- [ ] **T3 (P1, human: ~2 days / CC: ~3h)** — topology — Put every writer on machine 1 with the Nodus adapter's write endpoint, and the driver and Nodus follower on machine 2, timing on one clock (carried from the 2026-11-06 review; not yet built)
+- [x] **T3 (P1, human: ~2 days / CC: ~3h)** — topology — Put every writer on machine 1 with the Nodus adapter's write endpoint, and the driver and Nodus follower on machine 2, timing on one clock (carried from the 2026-11-06 review; not yet built)
   - Surfaced by: Scope Challenge finding 2 of the 2026-11-06 review (R2, eng D3)
   - Files: AuthzBench `src/authzbench/engines/`, `go/`
   - Verify: the 500 ms stale fake measures within resolution across two machines
