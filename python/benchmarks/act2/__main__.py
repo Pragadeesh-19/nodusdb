@@ -185,6 +185,8 @@ def _duckdb(settings):
     secret = {"KEY_ID": os.environ["AWS_ACCESS_KEY_ID"], "SECRET": os.environ["AWS_SECRET_ACCESS_KEY"],
               "REGION": settings.region, "ENDPOINT": endpoint.netloc,
               "URL_STYLE": "path" if settings.path_style else "vhost"}
+    if os.environ.get("AWS_SESSION_TOKEN"):
+        secret["SESSION_TOKEN"] = os.environ["AWS_SESSION_TOKEN"]
     options = ", ".join(f"{key} {_sql_text(value)}" for key, value in secret.items())
     connection.execute(f"CREATE SECRET act2 (TYPE s3, {options}, USE_SSL {str(endpoint.scheme == 'https').lower()})")
     return connection
