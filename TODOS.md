@@ -342,6 +342,18 @@
 **Priority:** P2
 **Depends on:** the native-memory fix on `perf/native-memory`; a design review for the release and freeze contract
 
+### Erasure tests that decode what they scan
+
+**What:** Make the erasure tests read Parquet, Avro and JSON as their readers do, and require the erased name in each layer before the erase, instead of matching raw bytes.
+
+**Why:** `docs/operations.md` says the tests check byte for byte that no file in the graph directory, the bucket or the Iceberg table holds an erased name. `files_holding` in `python/tests/test_erasure.py` matches raw bytes, the Iceberg data pages are Snappy-compressed, and the positive control covers the bucket as a whole, so a name inside a compressed page could pass unseen. No miss is known; the guarantee is stronger than its proof.
+
+**Context:** Found in the Act 2 engineering review of 2026-11-07 (`docs/designs/authz-race-launch.md`, R4 and R7). Act 2's scanner (`python/benchmarks/act2/scan.py`) does the decoding with a per-layer control; the tests can reuse it once Act 2 has proven it on a real bucket. Manifests and metadata hold a name only when it is a column bound, so the per-layer control covers the graph directory, chain objects, bucket snapshots and Iceberg data files.
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** Act 2's scanner
+
 ## Release and packaging
 
 ### Go binding over the C interface
