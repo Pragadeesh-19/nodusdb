@@ -26,25 +26,10 @@ jobs:
           java-version: "22"
           cache: maven
 
-      - name: Start SeaweedFS with an authenticated S3 gateway
-        run: |
-          set -eu
-          docker run -d --name seaweedfs -p 8333:8333 \
-            -v "$PWD/.github/s3/identities.json:/etc/seaweedfs/s3.json:ro" \
-            chrislusf/seaweedfs@sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d \
-            server -s3 -s3.config=/etc/seaweedfs/s3.json -dir=/data
-          for attempt in $(seq 1 60); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8333/ || true)
-            if [ "$code" = "200" ] || [ "$code" = "403" ]; then
-              exit 0
-            fi
-            sleep 2
-          done
-          docker logs seaweedfs
-          exit 1
-
-      - name: Create the test bucket
-        run: aws --endpoint-url "$NODUS_S3_ENDPOINT" s3 mb "s3://$NODUS_S3_BUCKET"
+      - name: Start SeaweedFS and create the test bucket
+        uses: ./.github/actions/seaweedfs
+        with:
+          bucket: ${{ env.NODUS_S3_BUCKET }}
 
       - name: Run the object store contract and the chaos scenarios against the real server
         run: mvn -B -ntp -pl core test -Dtest="RealS3ContractTest,S3ChaosTest"
@@ -108,7 +93,7 @@ jobs:
         run: python -m pip install -e python/
 
       - name: Install Python test dependencies
-        run: python -m pip install pytest pyarrow
+        run: python -m pip install pytest pyarrow -r python/benchmarks/act2/requirements.txt
 
       - name: Python tests
         env:
@@ -127,3 +112,51 @@ jobs:
         with:
           name: nodusdb-native-${{ matrix.os }}
           path: python/nodusdb/bin/
+
+  act2:
+    name: Act 2 on SeaweedFS
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      NODUS_S3_ENDPOINT: http://127.0.0.1:8333
+      NODUS_S3_BUCKET: nodus-act2
+      AWS_ACCESS_KEY_ID: nodus
+      AWS_SECRET_ACCESS_KEY: nodus-secret-key
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start SeaweedFS and create the bucket
+        uses: ./.github/actions/seaweedfs
+        with:
+          bucket: ${{ env.NODUS_S3_BUCKET }}
+
+      - name: Take the native library the build job made
+        uses: actions/download-artifact@v4
+        with:
+          name: nodusdb-native-ubuntu-latest
+          path: python/nodusdb/bin/
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the readers Act 2 judges the lake with
+        run: python -m pip install -r python/benchmarks/act2/requirements.txt
+
+      - name: Run Act 2 at the default commit interval
+        working-directory: python/benchmarks
+        run: python -m act2 --endpoint "$NODUS_S3_ENDPOINT" --path-style --bucket "$NODUS_S3_BUCKET" --out "$RUNNER_TEMP/act2.json"
+
+      - name: Keep the results document
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: act2-results
+          path: ${{ runner.temp }}/act2.json
+          if-no-files-found: ignore
+
+      - name: Show the server log when the run fails
+        if: failure()
+        run: docker logs seaweedfs
