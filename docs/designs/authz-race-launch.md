@@ -1144,35 +1144,35 @@ finding above. Run with Claude Code or Codex; checkbox as you ship.
   - Surfaced by: Scope Challenge finding 2 of the 2026-11-06 review (R2, eng D3)
   - Files: AuthzBench `src/authzbench/engines/`, `go/`
   - Verify: the 500 ms stale fake measures within resolution across two machines
-- [ ] **T7 (P1, human: ~0.5 day / CC: ~30min)** — act2 fixture — Commit AuthzBench's S, seed-1 dataset with `model.nodus` and read it with format, count and schema-digest checks
+- [x] **T7 (P1, human: ~0.5 day / CC: ~30min)** — act2 fixture — Commit AuthzBench's S, seed-1 dataset with `model.nodus` and read it with format, count and schema-digest checks
   - Surfaced by: R1 (eng D3); Architecture finding 1
   - Files: `python/benchmarks/act2/fixture/`, `python/benchmarks/act2/fixture.py`, `python/tests/test_act2_fixture.py`
   - Verify: `python -m pytest python/tests/test_act2_fixture.py`
-- [ ] **T8 (P1, human: ~1 day / CC: ~1h)** — act2 freshness — Write each relationship at 10/s and time it to the first newest-metadata snapshot whose projected LSN covers it, confirmed by DuckDB
+- [x] **T8 (P1, human: ~1 day / CC: ~1h)** — act2 freshness — Write each relationship at 10/s and time it to the first newest-metadata snapshot whose projected LSN covers it, confirmed by DuckDB
   - Surfaced by: R2 (eng D4); Scope Challenge finding 6
   - Files: `python/benchmarks/act2/lake.py`, `freshness.py`, `python/tests/test_act2_lake.py`, `test_act2_freshness.py`
   - Verify: unit tests, then the CI job's freshness section
-- [ ] **T9 (P1, human: ~2 days / CC: ~2h)** — act2 audit — Answer "who could view document:revocation-target" before and after the revoke through as_of and through DuckDB SQL, failing unless both agree and the revoked user flips
+- [x] **T9 (P1, human: ~2 days / CC: ~2h)** — act2 audit — Answer "who could view document:revocation-target" before and after the revoke through as_of and through DuckDB SQL, failing unless both agree and the revoked user flips
   - Surfaced by: R3 (eng D5); Architecture finding 1
   - Files: `python/benchmarks/act2/audit.py`, `audit.sql`, `python/tests/test_act2_audit.py`
   - Verify: `python -m pytest python/tests/test_act2_audit.py`
-- [ ] **T10 (P1, human: ~2 days / CC: ~2h)** — act2 erasure — Checkpoint, prove the name in four layers, erase, time each layer, and decode every file to prove it gone
+- [x] **T10 (P1, human: ~2 days / CC: ~2h)** — act2 erasure — Checkpoint, prove the name in four layers, erase, time each layer, and decode every file to prove it gone
   - Surfaced by: R4 (eng D6)
   - Files: `python/benchmarks/act2/erasure.py`, `scan.py`, `python/tests/test_act2_scan.py`
   - Verify: the Snappy-hidden-name test, then the CI job's erasure section
-- [ ] **T11 (P1, human: ~2h / CC: ~20min)** — act2 bucket — Refuse a versioned or non-empty bucket prefix and prove no versions or delete markers remain after the erase
+- [x] **T11 (P1, human: ~2h / CC: ~20min)** — act2 bucket — Refuse a versioned or non-empty bucket prefix and prove no versions or delete markers remain after the erase
   - Surfaced by: R5 (eng D7); Architecture finding 3
   - Files: `python/benchmarks/act2/bucket.py`, `python/tests/test_act2_bucket.py`
   - Verify: `python -m pytest python/tests/test_act2_bucket.py`
-- [ ] **T12 (P1, human: ~0.5 day / CC: ~30min)** — act2 results — Write one results document with every number, its resolution, the library's path, SHA-256 and version, and DuckDB's and its extension's versions
+- [x] **T12 (P1, human: ~0.5 day / CC: ~30min)** — act2 results — Write one results document with every number, its resolution, the library's path, SHA-256 and version, and DuckDB's and its extension's versions
   - Surfaced by: Scope Challenge findings 7 and 8
   - Files: `python/benchmarks/act2/results.py`, `__main__.py`
   - Verify: the CI job keeps the document and it names the library hash
-- [ ] **T13 (P1, human: ~0.5 day / CC: ~30min)** — ci — Run Act 2 on SeaweedFS at the pinned digest in its own job
+- [x] **T13 (P1, human: ~0.5 day / CC: ~30min)** — ci — Run Act 2 on SeaweedFS at the pinned digest in its own job
   - Surfaced by: Section 3, end-to-end row; plan line 364
   - Files: `.github/workflows/ci.yml`, `python/benchmarks/act2/requirements.txt`
   - Verify: the job passes on `main` and fails when a gate is broken
-- [ ] **T14 (P2, human: ~1h / CC: ~10min)** — docs — Record Act 2's build decisions as decision rows
+- [x] **T14 (P2, human: ~1h / CC: ~10min)** — docs — Record Act 2's build decisions as decision rows
   - Surfaced by: R1-R7 (eng D3-D9)
   - Files: `docs/decisions.md`
   - Verify: one row per decision, numbered after D255
