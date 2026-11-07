@@ -116,7 +116,8 @@ def _parquet(name, content):
         found.append("parquet row")
     if any(isinstance(value, str) and name.text in value for values in columns.values() for value in values):
         found.append("parquet value")
-    if any(_names_row_group(name, parquet.metadata.row_group(group)) for group in range(parquet.metadata.num_row_groups)):
+    groups = range(parquet.metadata.num_row_groups)
+    if any(_names_row_group(name, parquet.metadata.row_group(group)) for group in groups):
         found.append("parquet statistics")
     metadata = parquet.metadata.metadata or {}
     if any(name.text.encode("utf-8") in value for value in metadata.values()):
