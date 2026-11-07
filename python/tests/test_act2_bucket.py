@@ -8,6 +8,8 @@ PYTHON_DIRECTORY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PYTHON_DIRECTORY))
 sys.path.insert(0, str(PYTHON_DIRECTORY / "benchmarks"))
 
+from botocore.exceptions import ClientError  # noqa: E402
+
 from act2 import bucket, lake  # noqa: E402
 
 
@@ -33,7 +35,24 @@ class Client:
         return Paginator(self._pages)
 
 
+class Missing:
+    def get_object(self, Bucket, Key):
+        raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "gone"}}, "GetObject")
+
+
+class Refused:
+    def get_object(self, Bucket, Key):
+        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
+
+
 class BucketTest(unittest.TestCase):
+    def test_an_object_deleted_after_it_was_listed_reads_as_gone(self):
+        self.assertIsNone(bucket.S3Objects(Missing(), "b", "p").read("_nodus/chain/1.obj"))
+
+    def test_any_other_read_failure_is_raised(self):
+        with self.assertRaises(ClientError):
+            bucket.S3Objects(Refused(), "b", "p").read("_nodus/chain/1.obj")
+
     def test_a_bucket_that_never_kept_versions_is_accepted(self):
         self.assertIsNone(bucket.require_never_versioned(Client(), "b"))
 

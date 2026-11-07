@@ -14,7 +14,7 @@ _VERSION = re.compile(r"v(\d+)\.metadata\.json")
 class Objects(Protocol):
     def keys(self, prefix: str) -> list[str]: ...
 
-    def read(self, key: str) -> bytes: ...
+    def read(self, key: str) -> bytes | None: ...
 
     def location(self, key: str) -> str: ...
 
@@ -37,7 +37,10 @@ class DirectoryObjects:
         return [path.relative_to(self._root).as_posix() for path in base.rglob("*") if path.is_file()]
 
     def read(self, key):
-        return (self._root / key).read_bytes()
+        try:
+            return (self._root / key).read_bytes()
+        except FileNotFoundError:
+            return None
 
     def location(self, key):
         return (self._root / key).as_posix()
@@ -53,7 +56,10 @@ def newest_version(objects):
     if newest is None:
         return None
     number, key = newest
-    return TableVersion(number, key, projected_lsn(json.loads(objects.read(key))))
+    content = objects.read(key)
+    if content is None:
+        return None
+    return TableVersion(number, key, projected_lsn(json.loads(content)))
 
 
 def projected_lsn(metadata):

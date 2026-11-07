@@ -144,6 +144,18 @@ class ScanFormatsTest(unittest.TestCase):
         self.assertEqual({("graph directory", "raw bytes"), ("chain objects", "raw bytes")},
                          {(hit.layer, hit.how) for hit in self.scan()})
 
+    def test_an_object_that_vanishes_between_listing_and_reading_is_no_longer_a_copy(self):
+        class Vanishing(lake.DirectoryObjects):
+            def read(self, key):
+                return None if key.startswith("_nodus/chain/") else super().read(key)
+
+        self.put("_nodus/chain/00000000000000000001.obj", NAME.encode())
+        self.put("_nodus/snapshots/00000000000000000002.nsnap", NAME.encode())
+
+        hits = scan.scan(NAME, self.graph_directory, Vanishing(self.bucket))
+
+        self.assertEqual([scan.SNAPSHOTS], [hit.layer for hit in hits])
+
     def test_a_layer_the_scan_never_sees_the_name_in_fails_the_control(self):
         hits = [scan.Hit(layer, "x", "raw bytes") for layer in (scan.GRAPH_DIRECTORY, scan.CHAIN, scan.SNAPSHOTS)]
         with self.assertRaisesRegex(scan.ScanError, "nowhere in: Iceberg data files"):

@@ -59,9 +59,10 @@ def scan(name, graph_directory, objects):
         if content is not None:
             hits.extend(Hit(GRAPH_DIRECTORY, path.as_posix(), how) for how in _raw(name, content))
     for key in sorted(objects.keys("")):
-        layer = layer_of(key)
-        hits.extend(Hit(layer, objects.location(key), how)
-                    for how in _find(name, objects.read(key), layer, field_ids))
+        content = objects.read(key)
+        if content is not None:
+            layer = layer_of(key)
+            hits.extend(Hit(layer, objects.location(key), how) for how in _find(name, content, layer, field_ids))
     return hits
 
 
@@ -186,7 +187,10 @@ def _name_field_ids(objects):
     version = lake.newest_version_key(objects.keys(lake.METADATA_PREFIX))
     if version is None:
         return {}
-    metadata = json.loads(objects.read(version[1]))
+    content = objects.read(version[1])
+    if content is None:
+        return {}
+    metadata = json.loads(content)
     schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == metadata["current-schema-id"])
     wanted = {column for pair in NAME_COLUMNS for column in pair}
     return {field["name"]: field["id"] for field in schema["fields"] if field["name"] in wanted}

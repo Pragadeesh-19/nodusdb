@@ -43,6 +43,9 @@ class LakeTest(unittest.TestCase):
 
         self.assertEqual(40, lake.newest_version(lake.DirectoryObjects(self.root)).projected_lsn)
 
+    def test_a_file_deleted_after_it_was_listed_reads_as_gone(self):
+        self.assertIsNone(lake.DirectoryObjects(self.root).read("iceberg/metadata/v1.metadata.json"))
+
     def test_a_table_with_no_committed_version_has_no_newest(self):
         self.assertIsNone(lake.newest_version(lake.DirectoryObjects(self.root)))
         self.assertIsNone(lake.newest_version(lake.DirectoryObjects(self.root / "absent")))

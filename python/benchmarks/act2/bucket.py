@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 
+from botocore.exceptions import ClientError
+
+MISSING = ("NoSuchKey", "404")
+
 
 class BucketError(RuntimeError):
     pass
@@ -30,7 +34,12 @@ class S3Objects:
         return keys
 
     def read(self, key):
-        return self._client.get_object(Bucket=self._bucket, Key=self._root + key)["Body"].read()
+        try:
+            return self._client.get_object(Bucket=self._bucket, Key=self._root + key)["Body"].read()
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") in MISSING:
+                return None
+            raise
 
     def location(self, key):
         return f"s3://{self._bucket}/{self._root}{key}"
