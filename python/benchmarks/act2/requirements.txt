@@ -1,0 +1,4 @@
+boto3==1.40.61
+duckdb==1.4.1
+fastavro==1.13.1
+pyarrow==26.0.1
