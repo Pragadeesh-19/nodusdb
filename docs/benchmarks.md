@@ -167,6 +167,29 @@ Adding and removing a direct member costs the same either way. The index trades 
 | Opening a past view of 10,000 grants | 95.6 ms from a snapshot, 99.8 ms by replay | `AsOfBench` |
 | Opening a past view of 100,000 grants | 260 ms from a snapshot, 373 ms by replay | `AsOfBench` |
 
+### Act 2: the log is the lake
+
+`python/benchmarks/act2` runs the launch benchmark's second act on the writes of the first: AuthzBench's S dataset (seed 1),
+written one transaction at a time to a graph that ships to S3 with the Iceberg projection on. It measures three things and
+stops at the first gate that fails.
+
+- **Lake freshness.** Each write is timed from its acknowledgement until a reader polling the bucket every 50 ms sees a
+  table version that holds it; DuckDB then confirms the rows. The spread follows the commit interval (60 s by default).
+- **The audit.** Who could view the revoked document, just before and just after the revoke, through `as_of` with one
+  check per user and through one SQL query in DuckDB over the table. The two answers must be equal.
+- **Erasure.** After a checkpoint, the erased user must be found in the graph directory, the chain, the bucket snapshots
+  and the Iceberg data; after `wait_erased`, in no file. The scanner decodes Parquet and Avro, and the bucket must never
+  have kept versions.
+
+```sh
+pip install -r python/benchmarks/act2/requirements.txt
+cd python/benchmarks
+AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... python -m act2 --endpoint https://s3.eu-west-1.amazonaws.com     --region eu-west-1 --bucket my-bucket --out act2.json
+```
+
+CI runs it on SeaweedFS in the `act2` job. Published numbers wait for the cloud run of the launch plan; the results
+document names the library's SHA-256 and the DuckDB versions that produced it. Decisions D256 to D261.
+
 ## Lake
 
 `python/benchmarks/benchmark_lake_heavyweights.py` runs `LakeTable` against DuckDB, PyArrow and SQLite on the first 1,000,000 rows of the NYC TLC Yellow Taxi file for January 2024 (the file's SHA-256 is checked before use). Rows are keyed by row index. Each engine and workload runs in its own process. DuckDB's in-memory table is written with `COPY`, PyArrow's is a Python dict of rows written with `pq.write_table`, and SQLite is in memory and dumped with the backup API.
