@@ -26,7 +26,7 @@ import boto3  # noqa: E402
 import duckdb  # noqa: E402
 from botocore.config import Config  # noqa: E402
 
-from act2 import audit, bucket, erasure, fixture, freshness, results, scan  # noqa: E402
+from act2 import audit, bucket, erasure, fixture, freshness, lake, results, scan  # noqa: E402
 from nodusdb import Graph, Shipping, environment_credentials, generate_signing_key  # noqa: E402
 
 NANOS_PER_MILLI = 1_000_000
@@ -35,6 +35,8 @@ KEY_ID = 1
 ERASURE_POLL_MS = 10
 CONFIRM_SQL = ("SELECT DISTINCT txn_lsn FROM iceberg_scan($metadata) "
                "WHERE event = 'add' AND txn_lsn > $low AND txn_lsn <= $high")
+UNLINKED_SQL = ("SELECT count(*) FROM iceberg_scan($metadata) "
+                "WHERE event = 'remove' AND txn_lsn > $after AND (subject_type = 'erased' OR object_type = 'erased')")
 
 
 class RunError(RuntimeError):
@@ -70,7 +72,8 @@ def run(settings, fixture_directory, work, out):
             graph, data, objects, connection, settings)
         sections["audit"] = _audit(graph, data, connection, objects.location(covering.version.key), checkpoint,
                                    before, revoke)
-        sections["erasure"] = _erase(graph, data, objects, client, settings, work / "graph", versioning)
+        sections["erasure"] = _erase(graph, data, objects, connection, client, settings, work / "graph",
+                                     versioning)
     return results.write_document(out, sections)
 
 
@@ -101,13 +104,14 @@ def _audit(graph, data, connection, location, checkpoint, before, revoke):
     return results.audit_section(data.probe.object, instants, users, checkpoint)
 
 
-def _erase(graph, data, objects, client, settings, graph_directory, versioning):
-    name = data.probe.subject
+def _erase(graph, data, objects, connection, client, settings, graph_directory, versioning):
+    name, grants = data.busiest_user_after_the_revoke()
     _checkpoint(graph, settings.timeout_s)
     found_before = scan.scan(name, graph_directory, objects)
     scan.require_every_layer(found_before, name)
-    _, times = erasure.erase(graph, name, _tuples_naming(name, data), settings.timeout_s,
-                             ERASURE_POLL_MS * NANOS_PER_MILLI)
+    erased_after = graph.token.lsn
+    _, times = erasure.erase(graph, name, grants, settings.timeout_s, ERASURE_POLL_MS * NANOS_PER_MILLI)
+    _confirm_unlinked(connection, objects, erased_after, grants)
     found_after = scan.scan(name, graph_directory, objects)
     scan.require_nowhere(found_after, name)
     leftover = bucket.require_no_leftovers(client, settings.bucket, settings.prefix)
@@ -124,9 +128,11 @@ def _checkpoint(graph, timeout_s, clock=time.perf_counter_ns):
             "until_referenced_ms": (clock() - started) / NANOS_PER_MILLI}
 
 
-def _tuples_naming(name, data):
-    remaining = set(data.relationships) - {data.revoke}
-    return sum(1 for relationship in remaining if name in relationship.names())
+def _confirm_unlinked(connection, objects, after_lsn, expected):
+    location = objects.location(lake.newest_version(objects).key)
+    unlinked = connection.execute(UNLINKED_SQL, {"metadata": location, "after": after_lsn}).fetchone()[0]
+    if unlinked != expected:
+        raise RunError(f"the erasure should remove {expected} grants, but the lake shows {unlinked} removed")
 
 
 def _write_at_rate(graph, relationships, rate_per_second, clock=time.perf_counter_ns):

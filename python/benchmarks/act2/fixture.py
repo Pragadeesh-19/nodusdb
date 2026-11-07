@@ -69,6 +69,14 @@ class Fixture:
         return sorted({relationship.subject for relationship in self.relationships
                        if relationship.subject.startswith("user:")})
 
+    def busiest_user_after_the_revoke(self):
+        grants = {}
+        for relationship in set(self.relationships) - {self.revoke}:
+            for name in relationship.names():
+                if name.startswith("user:"):
+                    grants[name] = grants.get(name, 0) + 1
+        return min(grants.items(), key=lambda item: (-item[1], item[0]))
+
 
 def read_fixture(directory=DIRECTORY):
     directory = Path(directory)

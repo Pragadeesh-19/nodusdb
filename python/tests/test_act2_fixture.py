@@ -37,6 +37,22 @@ class FixtureTest(unittest.TestCase):
         self.assertIn(data.probe.subject, data.users())
         self.assertTrue(all(user.startswith("user:") for user in data.users()))
 
+    def test_the_user_erased_is_the_one_with_the_most_grants_left_after_the_revoke(self):
+        data = fixture.read_fixture()
+
+        self.assertEqual(("user:u662", 10), data.busiest_user_after_the_revoke())
+
+    def test_a_tie_goes_to_the_first_name_and_the_revoked_grant_does_not_count(self):
+        data = fixture.read_fixture(self.directory)
+        revoke = data.revoke
+        tied = fixture.Fixture(data.scale, data.seed, data.schema, (
+            fixture.Relationship("document:a", "viewer", "user:b"),
+            fixture.Relationship("document:b", "viewer", "user:a"),
+            revoke,
+            fixture.Relationship("document:c", "viewer", revoke.subject)), revoke, data.probe)
+
+        self.assertEqual(("user:a", 1), tied.busiest_user_after_the_revoke())
+
     def test_another_format_is_refused(self):
         self.edit_manifest(format="authzbench.dataset/2")
         with self.assertRaisesRegex(fixture.FixtureError, "authzbench.dataset/2"):
