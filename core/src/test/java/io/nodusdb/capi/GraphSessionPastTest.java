@@ -187,6 +187,7 @@ class GraphSessionPastTest {
         Token afterErase = grant(live, "document:b", "user:alice");
         live.checkpoint();
         Token later = grant(live, "document:c", "user:alice");
+        awaitReferenced(live, afterErase.lsn());
 
         assertThrows(HistoryExpiredException.class, () -> at(live, early));
         GraphSession view = at(live, later);
