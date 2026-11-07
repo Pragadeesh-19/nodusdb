@@ -176,9 +176,11 @@ stops at the first gate that fails.
 - **Lake freshness.** Each write is timed from its acknowledgement until a reader polling the bucket every 50 ms sees a
   table version that holds it; DuckDB then confirms the rows. The spread follows the commit interval (60 s by default).
 - **The audit.** Who could view the revoked document, just before and just after the revoke, through `as_of` with one
-  check per user and through one SQL query in DuckDB over the table. The two answers must be equal.
-- **Erasure.** After a checkpoint, the erased user must be found in the graph directory, the chain, the bucket snapshots
-  and the Iceberg data; after `wait_erased`, in no file. The scanner decodes Parquet and Avro, and the bucket must never
+  check per user and through one SQL query in DuckDB over the table. The two answers must be equal. A checkpoint after
+  the load comes first, as the [time travel guide](operations.md#time-travel) advises, so each view starts from it.
+- **Erasure.** The user with the most grants is erased, and the lake must show every one of those grants removed.
+  After a checkpoint, the user must be found in the graph directory, the chain, the bucket snapshots and the Iceberg
+  data; after `wait_erased`, in no file. The scanner decodes Parquet and Avro, and the bucket must never
   have kept versions.
 
 ```sh
@@ -188,7 +190,7 @@ AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... python -m act2 --endpoint https:
 ```
 
 CI runs it on SeaweedFS in the `act2` job. Published numbers wait for the cloud run of the launch plan; the results
-document names the library's SHA-256 and the DuckDB versions that produced it. Decisions D256 to D261.
+document names the library's SHA-256 and the DuckDB versions that produced it. Decisions D256 to D263.
 
 ## Lake
 
