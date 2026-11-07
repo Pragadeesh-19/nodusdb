@@ -44,10 +44,11 @@ def freshness_section(spread, settings, observations, reads):
     }
 
 
-def audit_section(object, instants, users):
+def audit_section(object, instants, users, checkpoint):
     return {
         "object": object,
         "candidates": len(users),
+        "checkpoint_after_load": checkpoint,
         "instants": [{
             "label": instant.label,
             "lsn": instant.lsn,

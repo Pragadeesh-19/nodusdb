@@ -66,8 +66,10 @@ def run(settings, fixture_directory, work, out):
                 "bucket": {"endpoint": settings.endpoint, "bucket": settings.bucket, "prefix": settings.prefix}}
     with Graph(path=work / "graph", sync_mode="sync", shipping=_shipping(settings, work)) as graph:
         graph.apply_schema(data.schema)
-        sections["freshness"], before, revoke, covering = _land_in_the_lake(graph, data, objects, connection, settings)
-        sections["audit"] = _audit(graph, data, connection, objects.location(covering.version.key), before, revoke)
+        sections["freshness"], checkpoint, before, revoke, covering = _land_in_the_lake(
+            graph, data, objects, connection, settings)
+        sections["audit"] = _audit(graph, data, connection, objects.location(covering.version.key), checkpoint,
+                                   before, revoke)
         sections["erasure"] = _erase(graph, data, objects, client, settings, work / "graph", versioning)
     return results.write_document(out, sections)
 
@@ -77,6 +79,7 @@ def _land_in_the_lake(graph, data, objects, connection, settings):
     try:
         acknowledged = _write_at_rate(graph, data.relationships, settings.rate_per_second)
         watcher.await_lsn(max(lsn for lsn, _ in acknowledged), settings.timeout_s)
+        checkpoint = _checkpoint(graph, settings.timeout_s)
         before = graph.token
         revoke = graph.remove_tuple(data.revoke.object, data.revoke.relation, data.revoke.subject,
                                     data.revoke.subject_relation)
@@ -86,21 +89,21 @@ def _land_in_the_lake(graph, data, objects, connection, settings):
     observations = watcher.observations()
     spread = freshness.Spread.of(freshness.freshness_ns(acknowledged, observations))
     _confirm_rows(connection, objects, observations, acknowledged)
-    return results.freshness_section(spread, settings, observations, watcher.reads()), before, revoke, covering
+    return (results.freshness_section(spread, settings, observations, watcher.reads()), checkpoint, before, revoke,
+            covering)
 
 
-def _audit(graph, data, connection, location, before, revoke):
+def _audit(graph, data, connection, location, checkpoint, before, revoke):
     users = data.users()
     instants = [audit.audit(graph, connection, location, "before the revoke", before, data.probe.object, users),
                 audit.audit(graph, connection, location, "after the revoke", revoke, data.probe.object, users)]
     audit.require_flip(*instants, data.probe.subject)
-    return results.audit_section(data.probe.object, instants, users)
+    return results.audit_section(data.probe.object, instants, users, checkpoint)
 
 
 def _erase(graph, data, objects, client, settings, graph_directory, versioning):
     name = data.probe.subject
-    graph.checkpoint()
-    _await_snapshot_reference(graph, graph.token.lsn, settings.timeout_s)
+    _checkpoint(graph, settings.timeout_s)
     found_before = scan.scan(name, graph_directory, objects)
     scan.require_every_layer(found_before, name)
     _, times = erasure.erase(graph, name, _tuples_naming(name, data), settings.timeout_s,
@@ -109,6 +112,21 @@ def _erase(graph, data, objects, client, settings, graph_directory, versioning):
     scan.require_nowhere(found_after, name)
     leftover = bucket.require_no_leftovers(client, settings.bucket, settings.prefix)
     return results.erasure_section(times, found_before, found_after, versioning, leftover)
+
+
+def _checkpoint(graph, timeout_s, clock=time.perf_counter_ns):
+    started = clock()
+    graph.checkpoint()
+    checkpointed = clock()
+    lsn = graph.token.lsn
+    _await_snapshot_reference(graph, lsn, timeout_s)
+    return {"lsn": lsn, "checkpoint_ms": (checkpointed - started) / NANOS_PER_MILLI,
+            "until_referenced_ms": (clock() - started) / NANOS_PER_MILLI}
+
+
+def _tuples_naming(name, data):
+    remaining = set(data.relationships) - {data.revoke}
+    return sum(1 for relationship in remaining if name in relationship.names())
 
 
 def _write_at_rate(graph, relationships, rate_per_second, clock=time.perf_counter_ns):
@@ -150,11 +168,6 @@ def _await_snapshot_reference(graph, lsn, timeout_s):
         if time.monotonic() > deadline:
             raise RunError(f"after {timeout_s} s the bucket references no snapshot at or after LSN {lsn}")
         time.sleep(0.05)
-
-
-def _tuples_naming(name, data):
-    remaining = set(data.relationships) - {data.revoke}
-    return sum(1 for relationship in remaining if name in relationship.names())
 
 
 def _duckdb(settings):
@@ -224,11 +237,13 @@ def main(argv=None):
     print(f"freshness at {settings.commit_interval_s} s: p50 {writes['p50_ms']:.0f} ms, p99 {writes['p99_ms']:.0f} ms, "
           f"max {writes['max_ms']:.0f} ms over {writes['count']} writes")
     for instant in document["audit"]["instants"]:
-        print(f"audit {instant['label']}: {instant['viewers']} viewers; as_of {instant['as_of_build_ms']:.1f} ms build "
-              f"+ {instant['as_of_check_ms']:.1f} ms for {instant['as_of_checks']} checks; SQL {instant['sql_ms']:.1f} ms")
+        print(f"audit {instant['label']}: {instant['viewers']} viewers; as_of {instant['as_of_build_ms']:.1f} ms "
+              f"build + {instant['as_of_check_ms']:.1f} ms for {instant['as_of_checks']} checks; "
+              f"SQL {instant['sql_ms']:.1f} ms")
     erased = document["erasure"]
-    print(f"erase {erased['erase_ms']:.1f} ms, wait_erased {erased['wait_erased_ms']:.0f} ms, layers {erased['layers_ms']}; "
-          f"found before {erased['found_before']}, after {erased['found_after']}")
+    print(f"erase {erased['name']} ({erased['tuples']} grants) {erased['erase_ms']:.1f} ms, wait_erased "
+          f"{erased['wait_erased_ms']:.0f} ms, layers {erased['layers_ms']}; found before {erased['found_before']}, "
+          f"after {erased['found_after']}")
 
 
 if __name__ == "__main__":
