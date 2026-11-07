@@ -1,0 +1,15 @@
+schema 1
+type user
+type group {
+  relation member: user | group#member
+}
+type folder {
+  relation parent: folder
+  relation viewer: user | group#member
+  permission view = viewer + parent->view
+}
+type document {
+  relation parent: folder
+  relation viewer: user | group#member
+  permission view = viewer + parent->view
+}

@@ -1,0 +1,13 @@
+{
+  "format": "authzbench.dataset/1",
+  "model": "document-sharing",
+  "scale": "S",
+  "seed": 1,
+  "relationships": 5487,
+  "checks": 2000,
+  "revocation": {
+    "revoke": "group:revocation-team#member@user:revocation-target",
+    "probe": "document:revocation-target#view@user:revocation-target"
+  },
+  "nesting": "document:nesting-target#view@user:nesting-leaf allow"
+}
