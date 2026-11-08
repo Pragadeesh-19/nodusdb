@@ -3,8 +3,8 @@
 Zanzibar-style permissions that run inside your Python process, on a log that is also your lake.
 
 NodusDB keeps the relationship graph in your process's memory, so a permission check that must reflect every write so
-far is a function call: 9 microseconds at the median over 560,497 relationships, where SpiceDB and OpenFGA take 4.5 ms
-and 3.6 ms over the network ([the benchmark](https://github.com/Pragadeesh-19/nodusdb#the-numbers)). Every write also
+far is a function call: 14 microseconds at the median over 560,497 relationships at 100 checks a second, where SpiceDB
+and OpenFGA take 4.6 ms and 3.7 ms over the network ([the benchmark](https://github.com/Pragadeesh-19/nodusdb#the-numbers)). Every write also
 goes into one signed log in your own bucket, which followers replicate from, which projects into an Iceberg table you
 can query with SQL, and which `as_of` and `erase` read.
 

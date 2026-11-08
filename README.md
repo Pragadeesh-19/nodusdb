@@ -8,9 +8,9 @@
 **Zanzibar-style permissions that run inside your Python process, on a log that is also your lake.**
 
 Most authorization systems are a service you call. NodusDB is a library you import. It keeps the relationship graph
-in your process's memory, so a permission check that must reflect every write so far is a function call: 9
-microseconds at the median over 560,497 relationships. SpiceDB and OpenFGA answer the same check in 4.5 ms and 3.6 ms,
-over the network, with Postgres behind them.
+in your process's memory, so a permission check that must reflect every write so far is a function call: 14
+microseconds at the median over 560,497 relationships, at 100 checks a second. SpiceDB and OpenFGA answer the same
+check in 4.6 ms and 3.7 ms, over the network, with Postgres behind them.
 
 Every write also goes into one signed, hash-linked log in your own bucket. That log is the database's durability, the
 stream its replicas follow, an Iceberg table you can query with SQL, and a record of the past you can open at any
@@ -25,25 +25,25 @@ We measured NodusDB against SpiceDB 1.57.0 and OpenFGA 1.22.1 with
 c5.2xlarge machines in AWS eu-north-1. Every engine had to give the same answers as a reference evaluator on 50,001
 checks before anything was timed. These rows are the largest dataset, 560,497 relationships:
 
-| Engine and consistency mode | Check, p50 | Check, p99 | At 1,000 checks/s, p50 | A revoked permission still granted for |
-|---|---:|---:|---:|---|
-| NodusDB, in your process | 9 µs | 17 µs | 12 µs | never |
-| NodusDB follower, with the write's token | 10 µs | 19 µs | 13 µs | never (a check right after the write waits about 140 ms for it) |
-| NodusDB follower, without a token | 9 µs | 18 µs | 12 µs | up to 0.30 s |
-| SpiceDB `fully_consistent` | 4.5 ms | 16.5 ms | 5.5 s | never |
-| SpiceDB `at_least_as_fresh` | 4.3 ms | 16.2 ms | 5.6 s | never |
-| SpiceDB `minimize_latency` (its default) | 4.3 ms | 15.5 ms | 5.4 s | up to 3.5 s |
-| OpenFGA `HIGHER_CONSISTENCY` | 3.6 ms | 22.7 ms | 6.6 s | never |
-| OpenFGA `MINIMIZE_LATENCY` (check cache on) | 3.2 ms | 21.6 ms | 6.3 s | 10.0 s, every time |
+| Engine and consistency mode | At 100 checks/s, p50 | At 1,000 checks/s, p50 | One at a time, p50 | One at a time, p99 | A revoked permission still granted for |
+|---|---:|---:|---:|---:|---|
+| NodusDB, in your process | 14 µs | 12 µs | 9 µs | 17 µs | never |
+| NodusDB follower, with the write's token | 27 µs | 13 µs | 10 µs | 19 µs | never (a check right after the write waits about 140 ms for it) |
+| NodusDB follower, without a token | 16 µs | 12 µs | 9 µs | 18 µs | up to 0.30 s |
+| SpiceDB `fully_consistent` | 4.6 ms | 5.5 s | 4.5 ms | 16.5 ms | never |
+| SpiceDB `at_least_as_fresh` | 4.3 ms | 5.6 s | 4.3 ms | 16.2 ms | never |
+| SpiceDB `minimize_latency` (its default) | 4.2 ms | 5.4 s | 4.3 ms | 15.5 ms | up to 3.5 s |
+| OpenFGA `HIGHER_CONSISTENCY` | 3.7 ms | 6.6 s | 3.6 ms | 22.7 ms | never |
+| OpenFGA `MINIMIZE_LATENCY` (check cache on) | 0.62 ms | 6.3 s | 3.2 ms | 21.6 ms | 10.0 s, every time |
 
 The last column is the longest time a check still said "allowed" after the revoke was acknowledged, over 90 races
-per mode (30 at each of three dataset sizes). The 1,000 checks/s column is an open loop, where each check is timed
-from when it was due, so a queue shows up as latency. At that rate SpiceDB and OpenFGA used 93 to 100% of the 8-vCPU
+per mode (30 at each of three dataset sizes). The two checks/s columns are an open loop, where each check is timed
+from when it was due, so a queue shows up as latency; the "one at a time" columns time checks back to back. At that rate SpiceDB and OpenFGA used 93 to 100% of the 8-vCPU
 machine they shared with their Postgres, and their checks queued for seconds. NodusDB stayed flat.
 
 ![Each engine and mode by check latency and by how long a revoked permission survived](docs/diagrams/freshness-and-latency.svg)
 
-The size of the graph barely moves NodusDB. Check p50 at the three dataset sizes:
+The size of the graph barely moves NodusDB. One check at a time, p50, at the three dataset sizes:
 
 | Relationships | NodusDB, in process | SpiceDB `fully_consistent` | OpenFGA `HIGHER_CONSISTENCY` |
 |---|---:|---:|---:|
