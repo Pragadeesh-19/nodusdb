@@ -15,9 +15,8 @@ Useful things to include:
   configuration, or nothing.
 - A script or a sequence of steps that shows it, as short as you can make it.
 
-We will acknowledge the report within three working days, tell you what we found within ten, and agree a disclosure
-date with you before anything is published. We credit reporters in the release notes unless you would rather we did
-not.
+We will acknowledge the report, tell you what we found, and agree a disclosure date with you before anything is
+published.
 
 ## What counts
 
