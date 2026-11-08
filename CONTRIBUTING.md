@@ -136,7 +136,7 @@ Open an issue with:
 - A script that reproduces it, as short as you can make it. For a durable graph, say whether `sync_mode` was `sync` or `async`.
 - What you expected and what happened, with the full traceback.
 
-If you think you have found a way to read or corrupt another user's data, or a bypass of the signed chain, do not put the details in a public issue. Open an issue that says you have a security report and nothing else, and a maintainer will arrange a private channel.
+If you think you have found a way to read or corrupt another user's data, a bypass of the signed chain, or a name that survives erasure, do not put the details in a public issue. Report it privately as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 

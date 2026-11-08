@@ -1,0 +1,25 @@
+name: Feature request
+description: Something you need NodusDB to do.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check TODOS.md first: many planned items are listed there with their reason, size and dependencies, and a comment on an existing item helps us order the work.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it
+      description: An API sketch, a schema or a workload is enough. Say if it would change a storage format or an existing call.
+  - type: input
+    id: scale
+    attributes:
+      label: Your scale
+      description: Roughly how many relationships, checks per second and writes per second.

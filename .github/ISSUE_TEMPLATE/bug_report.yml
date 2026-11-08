@@ -1,0 +1,40 @@
+name: Bug report
+description: Something NodusDB does that it should not, or does not do that it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A short script that reproduces the problem is the most useful thing you can give us.
+        If this could let someone read data they should not, or keep data that should be erased, please report it privately instead: see SECURITY.md.
+  - type: input
+    id: version
+    attributes:
+      label: nodusdb version
+      description: The output of `python -c "import nodusdb; print(nodusdb.__version__)"`.
+      placeholder: 0.1.1
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system, CPU architecture and Python version.
+      placeholder: Ubuntu 24.04, x86_64, Python 3.12
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: A script that reproduces it
+      description: As short as you can make it. For a durable graph, say whether `sync_mode` was `sync` or `async`.
+      render: python
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened
+      description: Include the full traceback or error code.
+    validations:
+      required: true

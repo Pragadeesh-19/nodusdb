@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Pragadeesh-19/nodusdb/security/advisories/new
+    about: Report privately. Please do not open a public issue for a vulnerability.
+  - name: Question a benchmark number
+    url: https://github.com/Pragadeesh-19/authzbench/issues
+    about: The comparison with SpiceDB and OpenFGA lives in AuthzBench, with its raw results and configuration.
