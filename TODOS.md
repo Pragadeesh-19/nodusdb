@@ -354,6 +354,26 @@
 **Priority:** P2
 **Depends on:** Act 2's scanner
 
+### A DESIGN.md for the project's visual system
+
+**What:** Write `DESIGN.md` with `/design-consultation`, starting from the tokens the README diagrams and the social
+preview card already share.
+
+**Why:** The diagrams in `docs/diagrams/` and the GitHub social preview card were made to one small system, but it is
+written down nowhere except their `.excalidraw` sources. The next visual (the AuthzBench leaderboard, a replay page, a
+docs site) will drift from it unless the system is recorded.
+
+**Context:** Agreed in the social preview design review of 2026-11-08. The tokens: Excalifont (Excalidraw font family
+5) for text and Excalidraw's monospace (family 3) for code; ink `#1e1e1e`, muted `#5c5c5c`; fills `#ffd8a8` for a
+service, `#a5d8ff` for NodusDB, `#c3fae8` for storage, `#d0bfff` for readers of the log; the in-process zone `#e7f5ff`
+with a dashed `#4a9eed` stroke and a `#1971c2` label; Okabe-Ito engine colors in charts (NodusDB `#0072B2`, SpiceDB
+`#D55E00`, OpenFGA `#009E73`); stroke width 2, roughness 1, white background. For an image seen as a thumbnail, no
+text under 28 px at 1280 px wide. Diagrams are exported with Excalidraw's own `exportToSvg`, which embeds the fonts.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** Nothing
+
 ## Release and packaging
 
 ### Go binding over the C interface
