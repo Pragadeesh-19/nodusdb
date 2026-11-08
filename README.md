@@ -63,6 +63,8 @@ The size of the graph barely moves NodusDB. Check p50 at the three dataset sizes
   report it within 1 ms at the median and within 2 ms on every trial.
 - CPU was sampled every second on both machines and is published with the results, as are the configs, seeds,
   container digests and every revocation trial.
+- We wrote AuthzBench, so it is public, and its README invites SpiceDB's and OpenFGA's maintainers to change any
+  setting, adapter or method by pull request. An accepted change means a new run, never an edited number.
 
 [AuthzBench](https://github.com/Pragadeesh-19/authzbench) has the raw JSON for all three sizes, the CPU traces, the
 machine records and the commands that rerun it. [docs/benchmarks.md](docs/benchmarks.md) has the longer

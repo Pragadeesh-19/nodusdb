@@ -165,6 +165,10 @@ How it was run:
   Each mode ran 30 races at each size; none hit the 30 s cap.
 - A calibration engine with a known staleness of 500 ms was measured the same way, in process and across the
   network. Both drivers reported it within 1 ms at the median and within 2 ms on every race.
+- Checks through nested groups are part of every dataset and of the conformance check, but this run did not time
+  them with NodusDB's reachability index turned off; the index-off cost is in the permissions section below (D265).
+- AuthzBench is ours, and it is public with an open invitation to the vendors to change its tuning by pull request
+  (D264).
 - The in-process NodusDB engine is an in-memory graph, so its write column is not comparable to the others. The
   follower rows write through a durable writer on machine 1 (`sync_mode="sync"`, shipping to S3), which is the fair
   comparison.
