@@ -1,14 +1,20 @@
 # nodusdb
 
-An embedded relationship graph engine for Python. It runs inside your process: a native library holds the graph in
-memory, so there is no server to run and no Java to install.
+Zanzibar-style permissions that run inside your Python process, on a log that is also your lake.
 
-- A graph with fast edge inserts and deletes, k-hop traversal and set intersection.
+NodusDB keeps the relationship graph in your process's memory, so a permission check that must reflect every write so
+far is a function call: 9 microseconds at the median over 560,497 relationships, where SpiceDB and OpenFGA take 4.5 ms
+and 3.6 ms over the network ([the benchmark](https://github.com/Pragadeesh-19/nodusdb#the-numbers)). Every write also
+goes into one signed log in your own bucket, which followers replicate from, which projects into an Iceberg table you
+can query with SQL, and which `as_of` and `erase` read.
+
+- Typed relationship tuples, a schema language and permission checks through nested groups and parent links.
+- Tokens, so a check can refuse to answer from a state older than a given write.
 - Durability with a write-ahead log and snapshots.
-- Typed relationship tuples, schemas and permission checks, including checks through nested groups.
-- A signed log shipped to object storage, with followers, restore and takeover.
-- Erasure, change watching and time travel (`as_of`).
-- A lakehouse write path that batches upserts and deletes into Parquet.
+- A signed, hash-linked log shipped to S3, with followers, restore and takeover.
+- An Iceberg v2 table of every change, readable by DuckDB, Spark and pyiceberg.
+- Time travel (`as_of`), erasure across every copy, and a change feed.
+- A general graph engine and a Parquet write buffer (`LakeTable`) on the same native-memory core.
 
 ## Install
 
@@ -26,29 +32,37 @@ The wheel carries its own native library. It needs Python 3.10 or newer and one 
 
 Alpine (musl) and older Linux distributions are not supported yet; pip reports "no matching distribution" there.
 
-## A first graph
+## A first check
 
 ```python
 import nodusdb
 
+SCHEMA = """
+schema 1
+type user
+type group { relation member: user | group#member }
+type document {
+  relation viewer: user | group#member
+  permission view = viewer
+}
+"""
+
 with nodusdb.Graph() as g:
-    g.add_edges_from([(1, 2), (2, 3), (3, 4), (1, 5), (5, 4)])
+    g.apply_schema(SCHEMA)
+    g.add_tuple("document:readme", "viewer", "group:staff", "member")
+    token = g.add_tuple("group:staff", "member", "user:alice")
 
-    print("Reachable nodes:", g.khop(start=1, max_depth=3))
-    print("Common neighbors:", g.common_neighbors(3, 5))
-```
-
-```
-Reachable nodes: [2, 5, 3, 4]
-Common neighbors: [4]
+    print(g.check("document:readme", "view", "user:alice", at_least=token))   # True
+    print(g.check("document:readme", "view", "user:bob"))                     # False
 ```
 
 `nodusdb.__version__` reports the installed version.
 
 ## Status
 
-This is a beta release. One writer and many readers share a graph: reads run in parallel and writes on one handle run one at a time.
-The [README](https://github.com/Pragadeesh-19/nodusdb#readme) covers each feature, the
+This is a beta release. One writer and many readers share a graph: reads run in parallel and writes on one handle run
+one at a time. The [README](https://github.com/Pragadeesh-19/nodusdb#readme) covers each feature, the
+[benchmarks](https://github.com/Pragadeesh-19/nodusdb#the-numbers), the
 [limits](https://github.com/Pragadeesh-19/nodusdb#limits) and the
 [compatibility promise](https://github.com/Pragadeesh-19/nodusdb#compatibility) for 0.1.x. Changes are listed in the
 [changelog](https://github.com/Pragadeesh-19/nodusdb/blob/main/CHANGELOG.md).
