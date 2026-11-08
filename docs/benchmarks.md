@@ -4,7 +4,7 @@ Every number in this project's documentation comes from a measurement that is re
 
 ## Read this first
 
-- **Everything ran on one laptop.** An AMD Ryzen 7 5700U with 8 cores and 16 threads, 7.3 GB of memory, Windows 11, with the clock boost left on. The machine and the commands are in [`bench/baseline/MACHINE.md`](../bench/baseline/MACHINE.md). Numbers from other hardware are not comparable. CI builds and tests the code on Ubuntu, macOS and Windows but does not measure speed, except for a ratio gate (see below).
+- **The engine suites ran on one laptop; the launch benchmarks ran on AWS.** Act 1 (against SpiceDB and OpenFGA) ran on two c5.2xlarge machines and Act 2 on one c5.xlarge, both in eu-north-1; their sections name the machines. Everything else ran on an AMD Ryzen 7 5700U with 8 cores and 16 threads, 7.3 GB of memory, Windows 11, with the clock boost left on. The machine and the commands are in [`bench/baseline/MACHINE.md`](../bench/baseline/MACHINE.md). Numbers from other hardware are not comparable. CI builds and tests the code on Ubuntu, macOS and Windows but does not measure speed, except for a ratio gate (see below).
 - **Most results are single runs.** Where several runs exist, the text says how far they agreed.
 - **Different suites ran at different times with different builds of the library.** Each table says when it was taken. The newest, the 1-million-edge comparison and the lake suite, use the code in this repository built with the toolchain of the release wheels (GraalVM Community Edition 25.0.2). The Pokec graph suite and the durability run used an earlier build (GraalVM CE 22.0.2) and were not re-run.
 - **0.1.0 was slower.** Its native library read memory through an API that costs about 300 ns per access when compiled ahead of time. 0.1.1 fixes it, as [the native memory review](designs/engineering-review-native-memory.md) describes. Both sets of numbers are below.
@@ -140,6 +140,95 @@ See [Operations](operations.md#real-data-numbers) for the table. In short: 1.25 
 
 A recovery timed inside the process that still holds the original graph measured garbage collection, not recovery (185 s and 131 s runs). Recovery is measured only in a fresh process.
 
+## Authorization: NodusDB against SpiceDB and OpenFGA (Act 1)
+
+[AuthzBench](https://github.com/Pragadeesh-19/authzbench) is a separate repository with one adapter per engine, a seeded
+dataset generator, a reference evaluator and two drivers. Its raw results for this run, with CPU traces and machine
+records, are in its `results/2026-11-07` folder. The run on 2026-11-07 used AuthzBench `2ac787c`, nodusdb 0.1.1,
+SpiceDB v1.57.0 and OpenFGA v1.22.1, each image pinned by digest.
+
+How it was run:
+
+- Two c5.2xlarge machines (8 vCPU, Intel Xeon Platinum 8124M, 15 GiB) in eu-north-1c. Machine 1 ran SpiceDB or
+  OpenFGA, each on its own Postgres 17, and the NodusDB writer. Machine 2 ran the drivers and the NodusDB follower,
+  so every remote number crosses a real network and is timed on one clock.
+- SpiceDB and OpenFGA used the pool sizes their production guides prescribe, and OpenFGA had its check query cache
+  on, as its guide recommends (AuthzBench decision A15). Each engine had machine 1 to itself, on a fresh database.
+- SpiceDB and OpenFGA were driven by a Go program on their official clients, with up to 256 checks in flight.
+  NodusDB was driven through its Python API, one check at a time.
+- Every engine first answered every check of the dataset, 2,001, 10,001 or 50,001, and had to agree with a reference
+  evaluator on each. All did, with no mismatches.
+- "Check" is a closed loop, one check after another. "Open loop" issues checks on a fixed schedule and times each
+  from when it was due, so a queue counts as latency.
+- The revocation race revokes a grant, then checks it back to back until it is denied. "Still granted" runs from the
+  acknowledgement of the revoke to the start of the first check that denied; "denied by" runs to that check's end.
+  Each mode ran 30 races at each size; none hit the 30 s cap.
+- A calibration engine with a known staleness of 500 ms was measured the same way, in process and across the
+  network. Both drivers reported it within 1 ms at the median and within 2 ms on every race.
+- The in-process NodusDB engine is an in-memory graph, so its write column is not comparable to the others. The
+  follower rows write through a durable writer on machine 1 (`sync_mode="sync"`, shipping to S3), which is the fair
+  comparison.
+
+#### 5,487 relationships (S)
+
+| Engine and mode | Check p50 | p99 | p99.9 | Open loop p99 at 100/s | 500/s | 1,000/s | 10,000/s | Still granted after a revoke, p50 / max | Denied by, p50 | Write, p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| NodusDB, in process | 7.3 µs | 13 µs | 19 µs | 18 µs | 16 µs | 14 µs | 14 µs | never | 7.6 µs | 15 µs |
+| NodusDB follower, with the write's token | 7.9 µs | 14 µs | 20 µs | 23 µs | 17 µs | 15 µs | 13 µs | never | 134.6 ms | 4.5 ms |
+| NodusDB follower, without a token | 7.6 µs | 13 µs | 19 µs | 37 µs | 23 µs | 15 µs | 12 µs | 139.4 ms / 295.8 ms | 139.4 ms | 4.5 ms |
+| SpiceDB `fully_consistent` | 3.4 ms | 9.1 ms | 11.3 ms | 8.2 ms | 13.3 ms | 687.9 ms | 2.00 s | never | 2.9 ms | 2.3 ms |
+| SpiceDB `minimize_latency` | 2.5 ms | 7.3 ms | 11.6 ms | 8.2 ms | 14.1 ms | 516.2 ms | 1.93 s | 1.0 ms / 2.40 s | 1.4 ms | 2.3 ms |
+| SpiceDB `at_least_as_fresh` | 3.3 ms | 9.3 ms | 11.0 ms | 7.3 ms | 13.8 ms | 563.6 ms | 1.92 s | never | 2.8 ms | 2.5 ms |
+| OpenFGA `HIGHER_CONSISTENCY` | 2.4 ms | 5.5 ms | 6.5 ms | 5.9 ms | 7.5 ms | 1.12 s | 96.37 s | never | 1.4 ms | 1.9 ms |
+| OpenFGA `MINIMIZE_LATENCY` | 456 µs | 688 µs | 1.9 ms | 4.5 ms | 5.2 ms | 6.4 ms | 355.2 ms | 10.00 s / 10.00 s | 10.00 s | 2.3 ms |
+
+#### 55,756 relationships (M)
+
+| Engine and mode | Check p50 | p99 | p99.9 | Open loop p99 at 100/s | 500/s | 1,000/s | 10,000/s | Still granted after a revoke, p50 / max | Denied by, p50 | Write, p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| NodusDB, in process | 7.7 µs | 14 µs | 21 µs | 24 µs | 17 µs | 16 µs | 21 µs | never | 7.8 µs | 15 µs |
+| NodusDB follower, with the write's token | 8.1 µs | 15 µs | 21 µs | 23 µs | 19 µs | 17 µs | 15 µs | never | 138.2 ms | 4.4 ms |
+| NodusDB follower, without a token | 7.8 µs | 14 µs | 21 µs | 23 µs | 18 µs | 17 µs | 15 µs | 135.3 ms / 246.2 ms | 135.3 ms | 4.4 ms |
+| SpiceDB `fully_consistent` | 2.8 ms | 9.2 ms | 11.5 ms | 8.9 ms | 24.6 ms | 4.97 s | 135.63 s | never | 2.9 ms | 2.2 ms |
+| SpiceDB `minimize_latency` | 2.5 ms | 9.5 ms | 18.7 ms | 9.0 ms | 23.6 ms | 4.98 s | 135.69 s | 2.5 ms / 3.46 s | 2.8 ms | 2.2 ms |
+| SpiceDB `at_least_as_fresh` | 2.5 ms | 9.0 ms | 12.3 ms | 9.0 ms | 22.0 ms | 5.11 s | 136.37 s | never | 2.8 ms | 2.3 ms |
+| OpenFGA `HIGHER_CONSISTENCY` | 1.9 ms | 7.2 ms | 8.8 ms | 7.5 ms | 11.0 ms | 1.53 s | 100.19 s | never | 1.4 ms | 2.0 ms |
+| OpenFGA `MINIMIZE_LATENCY` | 1.8 ms | 7.4 ms | 11.4 ms | 7.2 ms | 12.1 ms | 521.4 ms | 73.08 s | 10.00 s / 10.00 s | 10.00 s | 2.4 ms |
+
+#### 560,497 relationships (L)
+
+| Engine and mode | Check p50 | p99 | p99.9 | Open loop p99 at 100/s | 500/s | 1,000/s | 10,000/s | Still granted after a revoke, p50 / max | Denied by, p50 | Write, p50 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|
+| NodusDB, in process | 9.1 µs | 17 µs | 23 µs | 24 µs | 21 µs | 19 µs | 17 µs | never | 7.5 µs | 14 µs |
+| NodusDB follower, with the write's token | 9.8 µs | 19 µs | 25 µs | 58 µs | 24 µs | 22 µs | 18 µs | never | 143.3 ms | 4.4 ms |
+| NodusDB follower, without a token | 9.4 µs | 18 µs | 24 µs | 44 µs | 21 µs | 20 µs | 17 µs | 137.7 ms / 261.5 ms | 137.7 ms | 4.5 ms |
+| SpiceDB `fully_consistent` | 4.5 ms | 16.5 ms | 18.8 ms | 17.8 ms | 516.9 ms | 10.79 s | 197.17 s | never | 2.9 ms | 2.3 ms |
+| SpiceDB `minimize_latency` | 4.3 ms | 15.5 ms | 22.4 ms | 17.7 ms | 686.3 ms | 10.75 s | 197.43 s | 411 µs / 3.7 ms | 1.0 ms | 2.4 ms |
+| SpiceDB `at_least_as_fresh` | 4.3 ms | 16.2 ms | 18.4 ms | 17.2 ms | 504.4 ms | 10.94 s | 198.24 s | never | 2.8 ms | 2.4 ms |
+| OpenFGA `HIGHER_CONSISTENCY` | 3.6 ms | 22.7 ms | 25.8 ms | 24.7 ms | 2.28 s | 13.17 s | 221.33 s | never | 1.4 ms | 2.0 ms |
+| OpenFGA `MINIMIZE_LATENCY` | 3.2 ms | 21.6 ms | 25.6 ms | 21.9 ms | 1.67 s | 12.57 s | 214.21 s | 10.00 s / 10.00 s | 10.00 s | 2.4 ms |
+
+What the tables show:
+
+- A NodusDB check costs 7 to 10 µs at every size, with no queue at any rate. A fully fresh SpiceDB or OpenFGA check
+  costs 1.9 to 4.5 ms at the median.
+- SpiceDB's `at_least_as_fresh`, which its guide recommends over `fully_consistent`, costs about the same here.
+- At 1,000 checks a second, machine 1 was 93 to 100% busy in every SpiceDB and OpenFGA phase: about 10 ms of CPU per
+  fully fresh check, split between the service and Postgres. At 5,487 relationships that rate is right at SpiceDB's
+  limit, so read its p99 rather than its p50 there. Above it, checks queue for seconds.
+- The fast modes trade freshness. OpenFGA's cached mode kept a revoked grant for 10 s in every race, and SpiceDB's
+  default kept it for up to 2.4 s at 5,487 relationships and 3.5 s at 55,756. At 560,497 the longest was 3.7 ms. SpiceDB
+  rounds the revision it reads to a 5 s window by default, so how long a stale answer lasts varies from race to race.
+
+Where NodusDB loses:
+
+- A follower learns about writes through the bucket: about 140 ms at the median and 0.3 s at worst. A check that
+  carries the write's token waits that long rather than answering stale.
+- A durable write through the writer took 4.4 ms at the median, against 1.9 to 2.5 ms for SpiceDB and OpenFGA.
+- At 5,487 relationships OpenFGA's cached mode answered in 456 µs at the median. NodusDB is still faster, but that is
+  OpenFGA's best row, bought with 10 s of staleness.
+- No lookup APIs, union-only schemas, one writer, and Python only. Each process that answers checks holds the graph.
+
 ## Permissions and nested groups
 
 `bench/baseline/reachability-windows-dev.json`, JMH on the development laptop:
@@ -189,8 +278,21 @@ cd python/benchmarks
 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... python -m act2 --endpoint https://s3.eu-west-1.amazonaws.com     --region eu-west-1 --bucket my-bucket --out act2.json
 ```
 
-CI runs it on SeaweedFS in the `act2` job. Published numbers wait for the cloud run of the launch plan; the results
-document names the library's SHA-256 and the DuckDB versions that produced it. Decisions D256 to D263.
+CI runs it on SeaweedFS in the `act2` job. Decisions D256 to D263.
+
+The cloud run on 2026-11-07 used a c5.xlarge (4 vCPU) in eu-north-1a against S3, nodusdb 0.1.1 (library SHA-256
+`952eb9b9a4e4f7904b55a730e8d938ccec399ff188df5f9a868e9a6599d319d4`), DuckDB 1.4.1 and Python 3.12.12, with bucket
+versioning off. Every gate passed.
+
+| Measure | Result |
+|---|---|
+| Write to Iceberg table, 5,487 writes at 10 per second | p50 30.9 s, p99 60.0 s, max 60.7 s (commit interval 60 s) |
+| Checkpoint after the load | 4.0 ms, referenced by the bucket 206 ms later |
+| "Who could view the document", through `as_of` | view built in 214 ms and 248 ms (before and after the revoke), 1,002 checks in 6.0 and 6.2 ms |
+| The same question, recursive SQL in DuckDB over the table | 245 ms and 122 ms; same viewers as `as_of` (1, then 0) |
+| `erase` of `user:u662` (10 grants) | 0.22 ms in memory |
+| `wait_erased` | 6.94 s: local directory 0.14 s, Iceberg files 2.2 s, bucket 6.9 s |
+| Byte scan for the name | found in 7 places before (graph directory 1, chain 1, bucket snapshots 2, Iceberg data files 3), in none after; no noncurrent versions or delete markers |
 
 ## Lake
 
