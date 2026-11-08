@@ -250,7 +250,7 @@ record           len u32 | type u8 | flags u8 | reserved u16 | lsn u64 | payload
 | 0x30 | SCHEMA | the canonical document, its digest and the relation id table |
 | 0x40 | TXN_COMMIT | closes a transaction: its first LSN, record count and commit time |
 | 0x50 | EPOCH | starts a writer tenure and names the last LSN of the one before |
-| 0x60 | ERASE | reserved; replay refuses it until erasure exists |
+| 0x60 | ERASE | replaces a symbol's name with its pseudonym; written by `erase` after its tuples are removed |
 
 A transaction is its records followed by a `TXN_COMMIT`; a reader changes state only at commit points.
 LSNs start at 1 and rise by one per record. Every open of a durable graph starts a tenure with an

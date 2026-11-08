@@ -69,7 +69,7 @@ On the development laptop (Windows, JDK 22, a native library built by GraalVM CE
 - **Concurrency.** Readers run against a busy writer on one kernel, one handle and one Python object, and a reader is not blocked while a write waits for its fsync.
 - **Shipping, followers, erasure, watch and time travel.** A deterministic simulation harness drives the shipper, the verifier and the projector with a faulty store and a manual clock. Erasure tests check byte for byte that no file in the directory, the bucket or the Iceberg table still holds the erased name.
 - **Lake.** The Parquet output is checked against PyArrow bit for bit on 100,000 mixed rows, and the Snappy codec, dictionary encoding, row groups and statistics have Java tests that need no PyArrow.
-- **The native performance gate.** It compares the same Java code on the JVM and in the native library (`python/benchmarks/native_ratio.py`). In CI the ratio is 5.8 to 7.7 for `add_edge` and 12.5 to 14.2 for `has_edge`, and the gate fails above 30.
+- **The native performance gate.** It compares the same Java code on the JVM and in the native library (`python/benchmarks/native_ratio.py`). Since the native-memory fix of 0.1.1, CI measures 1.0 to 2.0 for `add_edge`, 1.4 to 1.5 for `has_edge` and 0.3 to 1.9 for the lake probes, and the gate fails above 10 for the graph and for the lake.
 - **The examples.** `python/tests/test_examples.py` runs every script in `examples/`.
 
 ## Benchmarks
