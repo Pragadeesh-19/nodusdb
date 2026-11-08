@@ -68,7 +68,7 @@
 
 **Why:** It is the second market the CEO plan names, and no build step schedules it, so it would drop after Build Step 6.
 
-**Context:** Needs a short product review of the API shape and a typed memory schema before code. It uses tuples for memories, the change feed for updates and `as_of` for provenance. See `docs/designs/relationship-lakehouse.md`. The CEO review of 2026-11-06 (E6) kept it out of the authorization launch: it gets its own product review and its own launch, with a comparison designed for memory tools whose retrieval includes embeddings and LLM calls.
+**Context:** Needs a short product review of the API shape and a typed memory schema before code. It uses tuples for memories, the change feed for updates and `as_of` for provenance. See `docs/vision.md`. The CEO review of 2026-11-06 (E6) kept it out of the authorization launch: it gets its own product review and its own launch, with a comparison designed for memory tools whose retrieval includes embeddings and LLM calls.
 
 **Effort:** M
 **Priority:** P2
@@ -348,7 +348,7 @@
 
 **Why:** `docs/operations.md` says the tests check byte for byte that no file in the graph directory, the bucket or the Iceberg table holds an erased name. `files_holding` in `python/tests/test_erasure.py` matches raw bytes, the Iceberg data pages are Snappy-compressed, and the positive control covers the bucket as a whole, so a name inside a compressed page could pass unseen. No miss is known; the guarantee is stronger than its proof.
 
-**Context:** Found in the Act 2 engineering review of 2026-11-07 (`docs/designs/authz-race-launch.md`, R4 and R7). Act 2's scanner (`python/benchmarks/act2/scan.py`) does the decoding with a per-layer control; the tests can reuse it once Act 2 has proven it on a real bucket. Manifests and metadata hold a name only when it is a column bound, so the per-layer control covers the graph directory, chain objects, bucket snapshots and Iceberg data files.
+**Context:** Found in the Act 2 engineering review of 2026-11-07 (decision D259). Act 2's scanner (`python/benchmarks/act2/scan.py`) does the decoding with a per-layer control; the tests can reuse it once Act 2 has proven it on a real bucket. Manifests and metadata hold a name only when it is a column bound, so the per-layer control covers the graph directory, chain objects, bucket snapshots and Iceberg data files.
 
 **Effort:** S
 **Priority:** P2

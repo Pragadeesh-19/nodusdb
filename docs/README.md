@@ -1,6 +1,7 @@
 # Documentation
 
-Start with the [README](../README.md) for what NodusDB is and a five-minute tour. This folder holds the rest.
+Start with the [README](../README.md) for what NodusDB is and a five-minute tour, and [the vision](vision.md) for why it
+is built the way it is. This folder holds the rest.
 
 ## Using it
 
@@ -18,6 +19,7 @@ Runnable versions of the guides are in [`examples/`](../examples).
 
 | Page | What it covers |
 |---|---|
+| [Vision](vision.md) | Why the relationship index and its history are one log, what that costs, and where it goes next |
 | [How it works](how-it-works.md) | The engine from first principles: sets, hash tables, tiers, the seqlock, the log, columns |
 | [Architecture](architecture.md) | Packages and byte layouts: native memory, the log and snapshot formats, the signed chain, the lake buffer |
 | [The lake design](lake.md) | The lake write path in detail: lifecycle, tombstones, Parquet layout, the C interface |

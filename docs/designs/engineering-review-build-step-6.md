@@ -5,7 +5,7 @@ branch feat/authz-step6 in three milestones. Choices made while building are D20
 [`docs/decisions.md`](../decisions.md); where they differ from this document they win, and sections 6 and 9 below
 already follow them.
 Contracts: [`engineering-review-authz-wedge.md`](engineering-review-authz-wedge.md) sections 4.5, 8, 9 and 13, and
-the CEO plan [`relationship-lakehouse.md`](relationship-lakehouse.md) decisions 5A and 6A. Where this document and
+decisions 5A and 6A of the relationship-lakehouse plan ([`docs/vision.md`](../vision.md) summarizes it). Where this document and
 those disagree about Build Step 6, this document wins (section 2 lists every amendment).
 
 A watch lets an application learn what changed after a token it holds: every tuple added or removed, every schema,

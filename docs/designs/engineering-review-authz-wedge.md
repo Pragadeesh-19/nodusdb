@@ -1,8 +1,8 @@
 # Engineering review: the authorization wedge
 
 Status: decisions D58 to D87 accepted on 2026-10-06. Implementation scope is Build Step 1 (section 14).
-Source plan: [`relationship-lakehouse.md`](relationship-lakehouse.md). Where this document and the
-source plan disagree, this document wins (see its amendments section).
+Source plan: the relationship-lakehouse plan, summarized in [`docs/vision.md`](../vision.md). Where this document
+and the source plan disagree, this document wins (see its amendments section).
 
 This document freezes every contract that becomes permanent once a customer writes data: the
 tuple shape, the log and snapshot formats, the schema record, the object-storage layout, the

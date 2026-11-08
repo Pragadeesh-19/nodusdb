@@ -35,3 +35,7 @@ Thumbs.db
 python/LICENSE
 python/NOTICE
 python/licenses/
+
+# Strategy plans kept out of the public repository; docs/vision.md is the public summary
+docs/designs/relationship-lakehouse.md
+docs/designs/authz-race-launch.md
