@@ -144,7 +144,7 @@ A recovery timed inside the process that still holds the original graph measured
 
 [AuthzBench](https://github.com/Pragadeesh-19/authzbench) is a separate repository with one adapter per engine, a seeded
 dataset generator, a reference evaluator and two drivers. Its raw results for this run, with CPU traces and machine
-records, are in its `results/2026-11-07` folder. The run on 2026-11-07 used AuthzBench `2ac787c`, nodusdb 0.1.1,
+records, are in its [`runs/2026-11-07`](https://github.com/Pragadeesh-19/authzbench/tree/main/runs/2026-11-07) folder. The run on 2026-11-07 used AuthzBench `2ac787c`, nodusdb 0.1.1,
 SpiceDB v1.57.0 and OpenFGA v1.22.1, each image pinned by digest.
 
 How it was run:
