@@ -4,15 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodusdb"
-version = "0.1.1"
-description = "Embedded high-churn dynamic graph kernel with a GraalVM native C-ABI"
+version = "0.1.2"
+description = "Zanzibar-style permissions inside your Python process, on a signed log that is also an Iceberg table"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE*", "NOTICE*", "licenses/*"]
-keywords = ["graph", "embedded", "authorization", "access control", "write-ahead log", "lakehouse"]
+keywords = ["authorization", "zanzibar", "rebac", "permissions", "access control", "embedded", "graph", "iceberg", "lakehouse", "audit", "time travel", "write-ahead log"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
@@ -25,6 +26,7 @@ classifiers = [
     "Operating System :: MacOS",
     "Operating System :: Microsoft :: Windows",
     "Topic :: Database",
+    "Topic :: Security",
 ]
 
 [project.urls]

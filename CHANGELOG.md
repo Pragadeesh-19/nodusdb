@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.1.2
+
+The same native library and Python code as 0.1.1: the graph directory format, the Parquet files and the Python API are unchanged, and upgrading changes nothing at runtime. This release brings the new README to PyPI, with the first head-to-head numbers against SpiceDB and OpenFGA.
+
+### Benchmarks
+
+- Act 1 measures NodusDB against SpiceDB v1.57.0 and OpenFGA v1.22.1 with [AuthzBench](https://github.com/Pragadeesh-19/authzbench), on two c5.2xlarge machines in AWS eu-north-1, at 5,487, 55,756 and 560,497 relationships. Every engine first agreed with a reference evaluator on every check. At the largest size a fully fresh check took 14 µs at the median at 100 checks a second, against 4.6 ms for SpiceDB and 3.7 ms for OpenFGA, and NodusDB stayed flat at 1,000 checks a second where both services ran out of CPU. Their fast modes kept a revoked permission for up to 3.5 s (SpiceDB `minimize_latency`) and 10 s (OpenFGA `MINIMIZE_LATENCY`). A NodusDB follower without a token trailed the writer by up to 0.3 s. The raw results are in AuthzBench's `runs/2026-11-07`; `docs/benchmarks.md` has every table and every row where NodusDB loses.
+- Act 2 (`python/benchmarks/act2`) runs the "log is the lake" claims against S3 on a c5.xlarge. "Who could view this document" gave the same answer through `as_of` (built in 214 to 248 ms, 1,002 checks in 6 ms) and through a recursive DuckDB query over the Iceberg table (122 to 245 ms). `erase` cleaned memory in 0.22 ms and `wait_erased` returned after 6.9 s, once the local directory, the Iceberg files and the bucket were scrubbed; a byte scan then found the name in none of the 7 places it had been. CI runs Act 2 on SeaweedFS.
+
+### Documentation
+
+- The README now leads with permissions, the log as the lake and the benchmark, with three Excalidraw diagrams, and the PyPI page follows it.
+- `docs/vision.md` explains why the relationship index and its history are one log, and what that costs.
+- `SECURITY.md` explains how to report a vulnerability privately, and the repository has issue and pull request templates.
+- `docs/architecture.md` no longer calls the `ERASE` record reserved, and `docs/building.md` gives the native speed gate's current figures.
+- The package summary and keywords describe the authorization use.
+
+### Tests and build
+
+- The Java test for opening a past view after an erasure waits for the checkpoint's snapshot reference, which closes a race seen once in CI (D255).
+- The crash exploration test also runs with the forced mark moving while the workload runs.
+- The macOS arm64 wheels build on `macos-15`, since GitHub retired `macos-14` (D254). They still target macOS 11.
+
 ## 0.1.1
 
 The native library is 5 times faster on graph inserts and 40 to 50 times faster on lake writes than 0.1.0. The graph directory format, the Parquet files and the Python API are unchanged.
