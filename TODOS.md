@@ -186,6 +186,18 @@
 **Priority:** P2
 **Depends on:** Build Step 2 (S3 client and `CredentialsProvider`)
 
+### Keep request headers out of S3 client error messages
+
+**What:** Refuse credentials that hold a control character when they are loaded, with a message that names the source (variable or file and field) but never the value. Also make sure no exception raised while a request is built or sent passes a header value into a NodusDB error message.
+
+**Why:** In the Act 3 cloud run (2026-11-13), a credentials file with Windows line endings put a carriage return into the access key ID. `S3Http.exchange` passes every header to `HttpRequest.Builder.header`, and the JDK refused the `authorization` header with "invalid header value: " followed by the whole value. That error reached the operator's console and printed the access key ID. The secret was not printed: only its signature is in the header. A stray character in a session token would print the token through `x-amz-security-token` in the same way.
+
+**Context:** `Credentials` checks only for null and empty values. `EnvironmentCredentialsProvider` and `FileCredentialsProvider` both build it, so one check in the record's constructor covers both. The `IllegalArgumentException` from `builder.header` is not caught in `exchange`. It needs a test for each source with `\r` and `\n` in each field, asserting that no message contains the value.
+
+**Effort:** S
+**Priority:** P1
+**Depends on:** nothing
+
 ### Prometheus and OpenTelemetry adapter for stats
 
 **What:** An optional Python module that exports the `Graph.stats()` dict as Prometheus metrics and OpenTelemetry gauges, with no required dependency.
